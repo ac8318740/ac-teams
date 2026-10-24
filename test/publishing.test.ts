@@ -4,7 +4,6 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
 const workflow = readFileSync(new URL("../.github/workflows/publish-npm.yml", import.meta.url), "utf8");
-const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 function script(step: string): string {
   const start = workflow.indexOf(`      - name: ${step}\n`);
   assert.notEqual(start, -1);
@@ -13,13 +12,17 @@ function script(step: string): string {
   return block[1].replace(/^ {10}/gm, "");
 }
 
-test("release tags must match the package version; manual dispatch remains available", () => {
-  for (const [type, name, status] of [["tag", `v${version}`, 0], ["tag", "v9.9.9", 1], ["branch", "main", 0]] as const) {
-    const result = spawnSync("bash", ["-c", script("Check release tag")], {
-      env: { ...process.env, GITHUB_REF_TYPE: type, GITHUB_REF_NAME: name }, encoding: "utf8",
+test("only main can stage releases; dev, feature branches, tags, and missing refs fail closed", () => {
+  for (const ref of ["refs/heads/main", "refs/heads/dev", "refs/heads/docs/shorten-readme", "refs/tags/v0.0.1", ""]) {
+    const result = spawnSync("bash", ["-c", script("Check release branch")], {
+      env: { ...process.env, GITHUB_REF: ref }, encoding: "utf8",
     });
-    assert.equal(result.status, status, result.stderr + result.stdout);
+    assert.equal(result.status, ref === "refs/heads/main" ? 0 : 1, result.stderr + result.stdout);
   }
+  assert.match(workflow, /environment: npm/);
+  assert.match(workflow, /on:\n  workflow_dispatch:\n/);
+  assert.doesNotMatch(workflow, /^  (push|pull_request):/m);
+  assert.ok(workflow.indexOf("- name: Check release branch") < workflow.indexOf("uses: actions/checkout"));
 });
 
 test("publishing requires a token, skips published versions, and never hides stage failures", () => {
