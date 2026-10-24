@@ -5,7 +5,7 @@
   "type": "module",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/ac8318740/ac-teams.git" },
-  "files": ["src", "README.md", "LICENSE", "docs/implementation-plan.md"],
+  "files": ["src", "README.md", "LICENSE", "docs"],
   "os": ["linux"],
   "pi": { "extensions": ["./src/index.ts"] },
   "scripts": {
