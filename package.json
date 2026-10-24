@@ -1,0 +1,26 @@
+{
+  "name": "ac-teams",
+  "version": "0.0.1",
+  "description": "Small, persistent teams for Pi",
+  "type": "module",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/ac8318740/ac-teams.git" },
+  "files": ["src", "README.md", "LICENSE", "docs/implementation-plan.md"],
+  "os": ["linux"],
+  "pi": { "extensions": ["./src/index.ts"] },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "engines": { "node": ">=22.19.0" },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "^1.4.0",
+    "typebox": "^1.0.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@types/node": "^22.0.0",
+    "typebox": "^1.0.0",
+    "typescript": "^5.9.0"
+  }
+}
