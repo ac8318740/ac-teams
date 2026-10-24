@@ -1,0 +1,62 @@
+name: Stage npm release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-release
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+
+      - name: Install npm with staged publishing support
+        run: npm install -g npm@11.19.0
+
+      - name: Check release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p 'require("./package.json").version')"
+          if [[ "$GITHUB_REF_TYPE" == "tag" &&
+                "$GITHUB_REF_NAME" != "v${version}" ]]; then
+            echo "::error::Release tag must match package.json: v${version}"
+            exit 1
+          fi
+
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm pack --dry-run
+
+      - name: Stage release for npm approval
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${NODE_AUTH_TOKEN:-}" ]]; then
+            echo "::error::Set NPM_TOKEN with stage-publish access to ac-teams."
+            exit 1
+          fi
+          name="$(node -p 'require("./package.json").name')"
+          version="$(node -p 'require("./package.json").version')"
+          if npm view "${name}@${version}" version >/dev/null 2>&1; then
+            echo "${name}@${version} is already published; nothing to stage."
+            exit 0
+          fi
+          npm stage publish . --access public --provenance
+          echo "Approve ${name}@${version} on npmjs.com with 2FA to publish."

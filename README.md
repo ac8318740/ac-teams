@@ -175,6 +175,34 @@ Additional local checks on 2026-10-24:
 
 Not verified on macOS, Windows, or network filesystems. The package is Linux-only because safe process identity uses `/proc`. No dashboard, workflow DSL, daemon, or automatic merging is included.
 
+## Publish to npm
+
+The `publish-npm.yml` GitHub workflow follows acstack's staged-release approach: it runs typecheck, tests, and package checks, then submits the package for approval. It does not publish the release directly.
+
+Set the repository secret once using an interactive prompt, not a token pasted into a command or chat:
+
+```sh
+gh secret set NPM_TOKEN --repo ac8318740/ac-teams
+```
+
+Reuse acstack's token only if its permissions allow creating and staging `ac-teams`. GitHub cannot reveal the existing secret value. Otherwise, create a granular npm token with stage-publish access. npm requires 2FA on the publishing account.
+
+After the workflow reaches the repository's default branch, run it from GitHub Actions or dispatch it:
+
+```sh
+gh workflow run publish-npm.yml --repo ac8318740/ac-teams
+```
+
+Pushing a `v<version>` tag also triggers it; the tag must match `package.json`. An already published version is a no-op. If the version is already staged, approve the existing submission rather than staging it again.
+
+Review and approve `ac-teams@0.0.1` in npm's **Staged Packages** tab using 2FA. The first staging of a new name creates a public `0.0.0-stage` placeholder; the requested version and its contents become public only after approval. See [npm's staged publishing documentation](https://docs.npmjs.com/staged-publishing/).
+
+After approval, install the published version through Pi:
+
+```sh
+pi install npm:ac-teams@0.0.1
+```
+
 ## License
 
 [MIT](LICENSE). No third-party extension implementation was copied. Pi and TypeBox remain peer dependencies; exit-guard prior art and license findings are recorded in the implementation history.
