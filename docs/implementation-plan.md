@@ -1,6 +1,6 @@
 # ac-teams implementation history
 
-**Status:** the local v0.0.1 implementation is built and verified on Linux as of 2026-10-24. [README.md](../README.md) describes the current contract, commands, verification, and limitations. No release, global installation, or change to installed Pi has been made.
+**Status:** v0.0.1 is built and verified on Linux as of 2026-10-24. The [README](../README.md) introduces the package and links to its current guides. This file records implementation decisions and the original proposal.
 
 The user approved implementation with these refinements:
 
@@ -11,11 +11,11 @@ The user approved implementation with these refinements:
 
 The smallest complete implementation uses one atomically replaced `state.json` for messages and tasks, rather than a separate message journal. Mutations are not request-deduplicated; ambiguous retries require inspection. Notification acknowledgement records queuing, not reading, and does not guarantee at-least-once model execution across crashes. Worktree cleanup is explicit, never automatic.
 
-Deterministic subprocess/socket/storage/Git tests, native Pi busy/idle/resume checks, an actual terminal confirmation test, model-free native SIGTERM/SIGKILL probes, package checks, and independent review passed. The paid smoke used 10 calls and Pi reported an estimated $0.0861. A host dependency advisory remains documented in the README.
+Deterministic subprocess/socket/storage/Git tests, native Pi busy/idle/resume checks, an actual terminal confirmation test, model-free native SIGTERM/SIGKILL probes, package checks, and independent review passed. The paid smoke used 10 calls and Pi reported an estimated $0.0861. The [operations guide](operations.md#pi-dependency-advisory) records the host dependency advisory.
 
 ## Original proposal
 
-The sections below preserve the design investigation and its proposed acceptance checks. Where they differ from the implementation, the current README and the refinements above take precedence. Their original future-tense recommendations are not additional pending work.
+The sections below preserve the design investigation and its proposed acceptance checks. Where they differ from the implementation, the [usage guide](usage.md), [operations guide](operations.md), and the refinements above take precedence. Their original future-tense recommendations are not additional pending work.
 
 ## Architecture: the root owns transport, not everyone's work
 
@@ -194,4 +194,4 @@ The evidence below describes the installed package; the separate local Pi patch 
 
 A temporary, isolated real-Pi probe disabled all optional extensions/skills/templates/themes and sent no model prompt. It verified successful `get_state`, `get_commands`, `clear_queue`, and `abort` responses; continued availability between commands; native session ID/path reporting; and exit code 0 after stdin EOF. The first probe timed out because its Python text-buffered selector reader missed buffered lines; switching the probe to byte reads resolved that harness error.
 
-At the end of the initial investigation, extension coexistence/readiness, paid model turns, busy message delivery, concurrent claims, parent-death cleanup, native resume/rejoin, and worktree safety were still unverified. Those checks were subsequently exercised during implementation; see the current README for evidence and limits. Publishing, marketplace integration, and ACStack changes remain outside this local delivery.
+At the end of the initial investigation, extension coexistence/readiness, paid model turns, busy message delivery, concurrent claims, parent-death cleanup, native resume/rejoin, and worktree safety were still unverified. Those checks were subsequently exercised during implementation; see [recorded verification](development.md#recorded-native-pi-verification) and [operational limits](operations.md). Publishing, marketplace integration, and ACStack changes were outside the initial local delivery. Current [publishing instructions](development.md#stage-releases-for-npm-approval) are separate from that history.
