@@ -1,10 +1,10 @@
 # Operate ac-teams
 
-ac-teams runs on Linux with Node 22.19 or newer and an authenticated `pi` executable on `PATH`. Members run headlessly under the root's coordinator; they share your OS user's access, not a sandbox.
+ac-teams runs on Linux with Node 22.19 or newer and an authenticated `pi` executable on `PATH`. Interactive roots also require `tmux`: each team owns a private server and native member terminals. Headless roots retain RPC members. Both share your OS user's access, not a sandbox.
 
 ## Save project trust before launching
 
-Use Pi's `/trust` command to approve each member's cwd before launching there. RPC children cannot answer Pi's initial trust prompt. ac-teams rejects readiness if project resources were skipped; it never auto-approves a project.
+Use Pi's `/trust` command to approve each member's cwd before launching there. Children cannot complete the coordinator readiness handshake while waiting for Pi's initial trust prompt. ac-teams rejects readiness if project resources were skipped; it never auto-approves a project.
 
 A one-run approval in the root is not a saved approval for children or new worktrees. Worktree creation copies committed content, not uncommitted project configuration. Approve the new cwd through native Pi trust before retrying a launch that could not load its project resources. A failed launch retains its created worktree and member record.
 
@@ -31,13 +31,25 @@ pi --teams-limit 4 --teams-depth 1
 
 Other delegation tools remain outside these limits. See [companion tools](usage.md#companion-tools-add-guidance-or-terminal-management).
 
+## Display preferences are global
+
+`/teams config` saves task-summary and agent-selector visibility to `~/.acstack/ac-teams/display.json`:
+
+```json
+{"tasks":true,"agents":true}
+```
+
+Only these two boolean keys are accepted; omitted keys default to `true`. Saves atomically replace a private 0600 file. A malformed or unreadable preferences file produces a warning and is not overwritten; correct or remove it before saving settings again. These preferences are separate from resource policy in `config.json` and have no project override.
+
 ## Stop and resume members
 
-`stop` stops the member's descendants deepest-first, clears queued work, aborts the turn, and closes the owned RPC pipe. Hung processes escalate to SIGTERM and then SIGKILL, with a warning. Escalation requires a matching captured process-group identity; the coordinator refuses uncertain ownership.
+`stop` stops the member's descendants deepest-first, clears queued work, and aborts the turn. It closes the owned RPC pipe or terminates the owned native terminal. Hung processes escalate to SIGTERM and then SIGKILL, with a warning. Escalation requires a matching captured process-group identity; the coordinator refuses uncertain ownership.
 
 This is snapshot-based cleanup, not OS containment. Detached or uncaptured descendants and identity-check races remain outside the guarantee.
 
-`resume` needs a stopped descendant ID and a new brief. It starts a new process against the same native Pi session file. It does not reconstruct a transcript, reconnect to old stdio, or replay the previous assignment automatically. The coordinator refuses resume if the old process is live or its identity is uncertain.
+`resume` needs a stopped descendant ID and a new brief. It keeps the member's descriptive name; renaming during resume is rejected. It starts a new process against the same native Pi session file. It does not reconstruct a transcript, reconnect to old stdio, or replay the previous assignment automatically. The coordinator refuses tool-driven resume if the old process is live or its identity is uncertain.
+
+The interactive panel can instead quietly resume a saved member session without inventing a new brief. Feedback then arrives through the durable team mailbox.
 
 Root session switching, forking, and tree traversal are blocked while members are live. A member cannot switch away from its team binding. Stop members explicitly before replacing the root session.
 
@@ -49,7 +61,7 @@ With that hook, native exit asks before stopping live members; cancellation leav
 
 ### Crash recovery is best effort
 
-If the root crashes, closing its owned pipes and losing the coordinator connection makes ordinary RPC children shut down. This passed SIGTERM and SIGKILL probes with native child and grandchild processes.
+If the root crashes, closing its owned pipes and losing the coordinator connection makes ordinary RPC children shut down. Native members also monitor the authenticated coordinator connection and exit after it is lost. This passed SIGTERM and SIGKILL probes with native child and grandchild processes.
 
 It is not a guarantee against a hung event loop, machine failure, or detached shell processes. Recovery refuses duplicate work when a previous member is still live or uncertain. Tasks keep their ownership and progress after stop or crash; there is no automatic reassignment.
 
@@ -68,8 +80,13 @@ Each root session uses `~/.acstack/ac-teams/teams/<session-id>/`:
 - `state.json` contains membership, policy, tasks, messages, claims, and notification cursors
 - `sessions/` contains native Pi-managed member transcripts
 - `owner.lock` and `coordinator.sock` coordinate the running root
+- Interactive teams also own `t.sock`, the private tmux socket, and per-member terminal environment files; shutdown removes those files
 
-State schema 2 separates ownership from progress. On reopening an older team, the coordinator atomically migrates schema 1: `pending` becomes `todo`, `claimed` becomes `in_progress`, and `completed` becomes `done`. It preserves IDs, owners, dependencies, and revisions, and rejects invalid snapshots without replacement. Older ac-teams code cannot reopen the migrated schema; stop old sessions before updating.
+New members also store their descriptive names and optional model/context reports. When an existing team opens, unnamed members receive stable, collision-free names such as `teammate-1`; their IDs and sessions do not change.
+
+State schema 3 adds stable task numbers and short labels. Opening a schema 1 or 2 team assigns numbers in stored task order and initial labels from up to three title words. Full titles, descriptions, UUIDs, owners, creators, dependencies, and revisions remain unchanged.
+
+Schema 1 also migrates progress: `pending` becomes `todo`, `claimed` becomes `in_progress`, and `completed` becomes `done`. Migration writes atomically and rejects invalid snapshots without replacement. Older ac-teams code cannot reopen schema 3; stop old sessions before updating.
 
 Only the root writes state. Mutations validate a copy, flush a temporary snapshot, atomically rename it, and flush the directory before returning success. An exclusive process-identity lock prevents concurrent owners. Private team directories use 0700; state files and the authenticated Unix socket use 0600. Uncertain locks fail closed.
 

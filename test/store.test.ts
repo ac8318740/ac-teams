@@ -8,7 +8,7 @@ import { Store, processAlive, processIdentity } from "../src/store.ts";
 import type { TeamState, Task, Message } from "../src/types.ts";
 
 function initial(): TeamState {
-  return { version: 2, id: "team", root: "root", limit: 5, depth: 3, tasks: {}, messages: [], members: {
+  return { version: 3, id: "team", root: "root", limit: 5, depth: 3, tasks: {}, messages: [], members: {
     root: { id: "root", depth: 0, token: "secret", cwd: "/tmp", status: "idle", notified: 0 },
     child: { id: "child", parent: "root", depth: 1, token: "secret2", cwd: "/tmp", status: "idle", notified: 0 },
     other: { id: "other", parent: "root", depth: 1, token: "secret3", cwd: "/tmp", status: "idle", notified: 0 },
@@ -148,7 +148,7 @@ test("task and message results stay bounded", t => {
   store.update(s => {
     for (let i = 0; i < 105; i++) {
       const id = `task-${i}`;
-      s.tasks[id] = { id, revision: 1, title: "A", description: "B", dependencies: [], status: "todo" };
+      s.tasks[id] = { id, number: i + 1, label: "A", revision: 1, title: "A", description: "B", dependencies: [], status: "todo" };
       s.messages.push({ seq: i + 1, id: `message-${i}`, from: "root", recipients: ["child"], text: "text", time: new Date().toISOString() });
     }
   });
@@ -165,6 +165,66 @@ test("task and message results stay bounded", t => {
   assert.throws(() => store.task("root", { action: "create", title: "", description: "B" }));
   assert.throws(() => store.task("root", { action: "create", title: "A", description: "B", dependencies: ["missing"] }));
   assert.throws(() => store.task("root", { action: "edit", id: "task-0", dependencies: ["task-0"] }));
+});
+
+test("task numbers and concise labels survive edits, failures, pagination, and restart", t => {
+  const { home, store } = fixture(t);
+  const first = store.task("root", { action: "create", label: "Parser tests", title: "Run every parser acceptance check", description: "All cases pass" }) as Task;
+  const second = store.task("root", { action: "create", title: "Ship parser", description: "Check the final result", dependencies: [first.id] }) as Task;
+  assert.deepEqual([first.number, first.label, second.number, second.label], [1, "Parser tests", 2, "Ship parser"]);
+  const edited = store.task("root", { action: "edit", id: first.id, label: "Parser review", title: "Check the whole parser implementation" }) as Task;
+  assert.equal(edited.number, 1);
+  assert.equal(edited.label, "Parser review");
+  const page = store.task("root", { action: "list", offset: 1, limit: 1 });
+  assert.ok("tasks" in page);
+  assert.deepEqual(page.tasks.map(task => task.number), [2]);
+  const before = readFileSync(join(store.dir, "state.json"), "utf8");
+  for (const label of ["", "one two three four", "one\ntwo", "one\ttwo", "one  two", "x".repeat(61), "bad\x1b[31m"]) {
+    assert.throws(() => store.task("root", { action: "create", title: "Valid", label, description: "Do it" }), /label/i);
+    assert.throws(() => store.task("root", { action: "edit", id: first.id, label }), /label/i);
+  }
+  assert.throws(() => store.task("root", { action: "create", title: "A title with many words", description: "Needs a concise label" }), /label/i);
+  assert.throws(() => store.update(state => { state.tasks[second.id].number = first.number; }), /number/i);
+  assert.equal(readFileSync(join(store.dir, "state.json"), "utf8"), before);
+  store.close();
+  const reopened = new Store(initial(), home);
+  try {
+    assert.equal(reopened.state.tasks[first.id].number, 1);
+    assert.equal(reopened.state.tasks[first.id].label, "Parser review");
+    const third = reopened.task("root", { action: "create", title: "解析器 テスト", description: "Independent task" }) as Task;
+    assert.equal(third.number, 3);
+    assert.deepEqual(third.dependencies, [], "new tasks must not gain invented dependencies");
+    assert.equal(reopened.state.tasks[second.id].dependencies[0], first.id);
+  } finally { reopened.close(); }
+});
+
+test("v2 tasks gain durable numbers and initial labels without changing existing work", t => {
+  const { home, store } = fixture(t);
+  const first = store.task("root", { action: "create", title: "Parser tests", description: "Keep all acceptance criteria" }) as Task;
+  const second = store.task("child", { action: "create", title: "Review", description: "Existing review", dependencies: [first.id] }) as Task;
+  store.task("child", { action: "claim", id: first.id });
+  const path = join(store.dir, "state.json");
+  const legacy = JSON.parse(readFileSync(path, "utf8"));
+  legacy.version = 2;
+  legacy.tasks[first.id].title = "Run complete parser acceptance checks";
+  for (const task of Object.values(legacy.tasks) as Record<string, unknown>[]) { delete task.number; delete task.label; }
+  store.close();
+  writeFileSync(path, JSON.stringify(legacy));
+  const reopened = new Store(initial(), home);
+  assert.deepEqual(reopened.state.tasks[first.id], { ...legacy.tasks[first.id], number: 1, label: "Run complete parser" });
+  assert.deepEqual(reopened.state.tasks[second.id], { ...legacy.tasks[second.id], number: 2, label: "Review" });
+  assert.equal(reopened.state.version, 3);
+  const migrated = readFileSync(path, "utf8");
+  reopened.close();
+  const again = new Store(initial(), home);
+  again.close();
+  assert.equal(readFileSync(path, "utf8"), migrated, "migration must not renumber tasks on another restart");
+  const invalid = JSON.parse(migrated);
+  invalid.tasks[second.id].number = 1;
+  writeFileSync(path, JSON.stringify(invalid));
+  const before = readFileSync(path, "utf8");
+  assert.throws(() => new Store(initial(), home), /number/i);
+  assert.equal(readFileSync(path, "utf8"), before, "malformed v3 data must not be silently repaired");
 });
 
 test("optional revision checks reject stale task mutations and completion requires acceptance", t => {
