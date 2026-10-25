@@ -1,6 +1,6 @@
 {
   "name": "ac-teams",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Small, persistent teams for Pi",
   "type": "module",
   "license": "MIT",
@@ -22,5 +22,8 @@
     "@types/node": "^22.0.0",
     "typebox": "^1.0.0",
     "typescript": "^5.9.0"
+  },
+  "dependencies": {
+    "grok-mermaid": "0.2.3"
   }
 }

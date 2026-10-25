@@ -9,7 +9,7 @@ import type { TaskView, TeamState } from "../src/types.ts";
 function fixture(t: test.TestContext) {
   const home = mkdtempSync(join(tmpdir(), "ac-task-state-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
-  const initial: TeamState = { version: 2, id: "team", root: "root", limit: 3, depth: 1, tasks: {}, messages: [], members: {
+  const initial: TeamState = { version: 3, id: "team", root: "root", limit: 3, depth: 1, tasks: {}, messages: [], members: {
     root: { id: "root", depth: 0, token: "r", cwd: home, status: "idle", notified: 0 },
     a: { id: "a", parent: "root", depth: 1, token: "a", cwd: home, status: "idle", notified: 0 },
     b: { id: "b", parent: "root", depth: 1, token: "b", cwd: home, status: "idle", notified: 0 },
@@ -48,6 +48,24 @@ test("checkout reserves blocked to-do work without starting it; readiness is der
   assert.throws(() => store.task("b", { action: "start", id: task.id }), /owner/i);
   store.task("a", { action: "start", id: task.id });
   assert.equal(store.state.tasks[task.id].status, "in_progress");
+});
+
+test("completion time persists for summary ordering and is cleared on reopen", t => {
+  const { store, home, initial, create } = fixture(t);
+  const task = create();
+  store.task("a", { action: "claim", id: task.id });
+  store.task("a", { action: "start", id: task.id });
+  t.mock.method(Date, "now", () => 400);
+  store.task("a", { action: "complete", id: task.id, acceptance: true });
+  assert.equal(store.state.tasks[task.id].completedAt, 400);
+  assert.throws(() => store.update(state => { state.tasks[task.id].completedAt = NaN; }), /completion time/);
+  store.close();
+  const reopened = new Store(initial, home);
+  try {
+    assert.equal(reopened.state.tasks[task.id].completedAt, 400);
+    reopened.task("a", { action: "reopen", id: task.id });
+    assert.equal(reopened.state.tasks[task.id].completedAt, undefined);
+  } finally { reopened.close(); }
 });
 
 test("release clears reservations, resets active work, and never reopens done work", t => {
@@ -142,7 +160,7 @@ test("legacy progress migrates durably without losing owners, dependencies, or r
   } };
   writeFileSync(path, JSON.stringify(legacy));
   const reopened = new Store(initial, home);
-  assert.equal(reopened.state.version, 2);
+  assert.equal(reopened.state.version, 3);
   assert.deepEqual(Object.values(reopened.state.tasks).map(t => [t.status, t.owner, t.revision]), [["done", "a", 4], ["in_progress", "b", 2], ["todo", undefined, 1]]);
   assert.deepEqual(reopened.state.tasks.next.dependencies, ["first"]);
   assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), reopened.state);

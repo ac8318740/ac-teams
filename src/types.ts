@@ -5,8 +5,20 @@ export interface Worktree {
   base: string;
   target?: string;
 }
+export interface ContextUsage {
+  tokens: number | null;
+  contextWindow: number;
+  percent: number | null;
+}
+export interface Telemetry {
+  type: "telemetry";
+  model?: string;
+  modelName?: string;
+  contextUsage: ContextUsage | null;
+}
 export interface Member {
   id: string;
+  name?: string;
   parent?: string;
   depth: number;
   token: string;
@@ -19,15 +31,32 @@ export interface Member {
   notified: number;
   worktree?: Worktree;
   error?: string;
+  model?: string;
+  modelName?: string;
+  contextUsage?: ContextUsage;
+  thinking?: string;
+  activity?: string;
+  summary?: string;
+  terminal?: boolean;
 }
+export const memberNameMaxLength = 40;
+export const memberNamePattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)?(?![\s\S])/;
+export function memberName(member: Pick<Member, "id" | "name">): string { return member.id === "root" ? "Main" : member.name ?? member.id; }
+export const taskLabelMaxLength = 60;
+export const taskLabelPattern = /^[^\s\x00-\x1f\x7f-\x9f]+(?: [^\s\x00-\x1f\x7f-\x9f]+){0,2}(?![\s\S])/;
+export function taskName(task: Pick<Task, "number" | "label">): string { return `#${task.number} ${task.label}`; }
 export interface Task {
   id: string;
+  number: number;
+  label: string;
   revision: number;
   title: string;
   description: string;
   dependencies: string[];
   status: "todo" | "in_progress" | "done";
+  completedAt?: number;
   owner?: string;
+  creator?: string;
 }
 export interface TaskView extends Task {
   blockedBy: string[];
@@ -41,7 +70,7 @@ export interface Message {
   time: string;
 }
 export interface TeamState {
-  version: 2;
+  version: 3;
   id: string;
   root: string;
   limit: number;
@@ -58,6 +87,7 @@ export interface TaskArgs {
   limit?: number;
   id?: string;
   title?: string;
+  label?: string;
   description?: string;
   dependencies?: string[];
 }
@@ -72,6 +102,7 @@ export interface MessageArgs {
 export interface AgentArgs {
   action: "launch" | "list" | "status" | "stop" | "resume" | "limits" | "cleanup";
   id?: string;
+  name?: string;
   brief?: string;
   cwd?: string;
   model?: string;
@@ -82,8 +113,15 @@ export interface AgentArgs {
   limit?: number;
   depth?: number;
 }
-export type Operation = "agent" | "task" | "message" | "join" | "ack";
-export function isLive(member: Member): boolean {
+export interface UserAction {
+  action: "task_request" | "feedback" | "resume";
+  id?: string;
+  text?: string;
+  model?: string;
+  thinking?: string;
+}
+export type Operation = "agent" | "task" | "message" | "join" | "ack" | "event" | "control_result" | "ui";
+export function isLive(member: Pick<Member, "status">): boolean {
   return ["starting", "busy", "idle", "stopping"].includes(member.status);
 }
 export function isDescendant(state: TeamState, id: string, ancestor: string): boolean {

@@ -4,10 +4,10 @@ Persistent agent teams for [Pi](https://github.com/earendil-works/pi): shared ta
 
 ## Install
 
-Requires Linux, Node 22.19 or newer, and an authenticated `pi` executable on `PATH`. Tested with Pi 1.4.0.
+Requires Linux, Node 22.19 or newer, and an authenticated `pi` executable on `PATH`. Interactive teams also require `tmux` on `PATH`. Tested with Pi 1.4.0.
 
 ```sh
-pi install npm:ac-teams@0.0.1
+pi install npm:ac-teams@0.0.2
 ```
 
 Restart Pi after installation. Use Pi's `/trust` command to save approval for each project directory before launching members there; headless children cannot answer the initial trust prompt.
@@ -24,7 +24,13 @@ Your Pi session is the root; its child agents are members. Ask Pi to delegate a 
 | `team_task` | Track shared work, ownership, and dependencies |
 | `team_message` | Send notifications and read or search team history |
 
-`/teams` shows status; `/teams stop` stops every descendant. Defaults allow up to **10 live members** and **two levels of delegation**. Use the fewest useful agents.
+`/teams` or `/teams panel` opens Tasks, Teammates, and Activity. `/teams teammate <name-or-id>` opens a teammate directly; subcommands and teammate names autocomplete. Use the task graph or list, send feedback, and open a member's full live Pi session.
+
+The task summary sits above the input. The agent selector below status shows descriptive names, models, and context usage. `/teams config` toggles these displays independently.
+
+From an empty editor, press Down to select the team footer, then Enter to open a member. Ctrl+Shift+Left returns to Main without stopping the member. `/teams stop` stops every descendant.
+
+Defaults allow up to **10 live members** and **two levels of delegation**. Use the fewest useful agents.
 
 ## Know the boundaries
 

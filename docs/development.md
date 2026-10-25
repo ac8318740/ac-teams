@@ -4,7 +4,7 @@ Source setup is for contributors. For normal use, [install the npm package throu
 
 ## Run from source
 
-Requirements: Linux, Node 22.19 or newer, and an authenticated `pi` executable on `PATH`. From a clone of this repository:
+Requirements: Linux, Node 22.19 or newer, and an authenticated `pi` executable on `PATH`. Interactive teams also need `tmux`. From a clone of this repository:
 
 ```sh
 npm ci
@@ -21,7 +21,13 @@ npm test
 npm pack --dry-run
 ```
 
-The deterministic suite covers task reservations, progress, dependency readiness, release/reopen rules, durable migration, real subprocesses, sockets, notification batching, shutdown escalation, worktree safety, and lifecycle races. It makes no model calls.
+The deterministic suite makes no model calls. It covers:
+
+- Task reservations, progress, dependencies, release/reopen rules, and durable migration
+- Subprocesses, sockets, notification batching, shutdown escalation, worktree safety, and lifecycle races
+- Graph navigation, task numbers and labels, UUID references, task summaries, display toggles, state colors, and narrow layouts
+- Draft retention, quiet resume, shutdown-time feedback, and maximum-length messages
+- Name validation and recovery, autocomplete, name/ID resolution, and model/context reports
 
 ### Recorded native Pi verification
 
@@ -33,7 +39,16 @@ Additional local checks on 2026-10-24, using Pi 1.4.0 unless noted:
 - Native child/grandchild cleanup after coordinator SIGTERM and SIGKILL, without model calls
 - Independent review and executable checks of stop/start, cleanup/resume, and shutdown/socket races
 
-Not verified on macOS, Windows, or network filesystems. The package is Linux-only because safe process identity uses `/proc`. No dashboard, workflow DSL, daemon, or automatic merging is included.
+Terminal UI checks used real native Pi processes in an isolated full-size Herdr tab with a local deterministic model endpoint, not a paid provider:
+
+- Private tmux transport, native child/grandchild delegation, member-to-descendant switching, and single-key return to Main
+- Same PID across switching, unsent member draft retention, and a new PID with the same session ID/path after quiet resume
+- Real UUID task graphs, green/cyan/red state borders, and creator-directed feedback without direct task mutation
+- Root exit stopping native descendants and retaining task, message, and session records
+- Task summary above the input, agent selector below status, native subcommand/name autocomplete, and same-PID/session opening by name or ID
+- Pi-reported model display names and changing context estimates in the live selector
+
+Not verified on macOS, Windows, or network filesystems. The package is Linux-only because safe process identity uses `/proc`. No web dashboard, workflow DSL, daemon, or automatic merging is included.
 
 ## Stage releases for npm approval
 
@@ -62,11 +77,11 @@ Review and approve the staged version in npm's **Staged Packages** tab using 2FA
 After approval, install through Pi, replacing the version below for later releases:
 
 ```sh
-pi install npm:ac-teams@0.0.1
+pi install npm:ac-teams@0.0.2
 ```
 
 ## License and prior art
 
-[MIT](../LICENSE). No third-party extension implementation was copied. Pi and TypeBox remain peer dependencies. The [implementation history](implementation-plan.md) records design decisions, exit-guard prior art, and license findings.
+[MIT](../LICENSE). No third-party extension implementation was copied. Pi and TypeBox remain peer dependencies; `grok-mermaid` is a runtime dependency for terminal diagrams. The [implementation history](implementation-plan.md) records design decisions, exit-guard prior art, and license findings.
 
 [Back to README](../README.md)
