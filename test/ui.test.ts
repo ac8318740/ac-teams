@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { ExtensionContext, Theme, ToolRenderers } from "@earendil-works/pi-coding-agent";
-import { foregroundAnsi, indexedColor, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { initTheme, type ExtensionContext, type Theme, type ToolRenderers } from "@earendil-works/pi-coding-agent";
+import { foregroundAnsi, indexedColor, setKeybindings, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 import { buildTaskGraph, moveTaskSelection, taskStatus } from "../src/graph.ts";
 import { cleanText, renderTeamMessage, teamToolRenderers } from "../src/render.ts";
 import { showTeamsPanel } from "../src/panel.ts";
@@ -19,8 +20,8 @@ const theme = {
   bold(text: string) { return `\x1b[1m${text}\x1b[22m`; },
   style(text: string, options: { fg: Parameters<typeof foregroundAnsi>[0] }) { return foregroundAnsi(options.fg, "256color") + text + "\x1b[39m"; },
 } as unknown as Theme;
-const renderContext = (expanded = false) => ({ expanded, isError: false }) as Parameters<NonNullable<ToolRenderers["renderCall"]>>[2];
-const plain = (component: Component, width = 60) => component.render(width).map(cleanText).join("\n");
+const renderContext = (expanded = false) => ({ expanded, isError: false, isPartial: false, args: { action: "send" }, outputPad: 0 }) as Parameters<NonNullable<ToolRenderers["renderCall"]>>[2];
+const plain = (component: Component, width = 60) => component.render(width).map(line => cleanText(line).trimEnd()).join("\n");
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 
 test("status priority and graph map match real domain values", () => {
@@ -69,7 +70,9 @@ test("graph sanitizes labels, handles wide text, and safely falls back", () => {
   for (const direction of ["up", "down", "left", "right"] as const) assert.equal(moveTaskSelection(single.bounds, "T03", direction), "T03");
 });
 
-test("tool renderers preserve native expansion and wrap labeled real payloads", () => {
+test("tool renderers expand full JSON without mutating payloads or exposing terminal controls", () => {
+  initTheme("dark", false);
+  setKeybindings(new KeybindingsManager());
   const renderers = teamToolRenderers("team_message");
   const data = { id: "M1", text: "First line\nA long second line that must wrap instead of becoming a JSON dump.\x1b[2J", recipients: ["root"] };
   const result = { content: [{ type: "text" as const, text: JSON.stringify(data) }], details: data };
@@ -79,19 +82,20 @@ test("tool renderers preserve native expansion and wrap labeled real payloads", 
   const expanded = renderers.renderResult!(result, { expanded: true, isPartial: false }, theme, renderContext(true));
   const lines = expanded.render(32);
   assert.ok(lines.every(line => visibleWidth(line) <= 32));
-  const text = lines.map(cleanText).join("\n");
-  assert.match(text, /Text:\n    First line/);
-  assert.match(text, /Recipients:\n    1: root/);
-  assert.ok(!text.includes("[2J"));
+  const text = plain(expanded, 2000);
+  assert.ok(text.includes(JSON.stringify(data, null, 2)));
+  assert.match(text, /Request/);
+  assert.match(text, /Response/);
+  assert.ok(!text.includes("\x1b[2J"));
   assert.equal(JSON.stringify(result), before);
   const fallback = renderers.renderResult!({ content: result.content, details: undefined }, { expanded: true, isPartial: false }, theme, renderContext(true));
-  assert.match(plain(fallback), /Id: M1/);
-  assert.match(plain(renderers.renderCall!({ action: "send", text: data.text }, theme, renderContext(true))), /Text:\n    First line/);
+  assert.ok(plain(fallback, 2000).includes(JSON.stringify(data)));
+  assert.equal(plain(renderers.renderCall!({ action: "send", text: data.text }, theme, renderContext(true))), "");
   const agentData = { id: "member-uuid", name: "parser-review", status: "idle" };
   const agentResult = { content: [{ type: "text" as const, text: JSON.stringify(agentData) }], details: agentData };
-  assert.match(plain(renderers.renderResult!(agentResult, { expanded: false, isPartial: false }, theme, renderContext())), /Name: parser-review/);
+  assert.match(plain(renderers.renderResult!(agentResult, { expanded: false, isPartial: false }, theme, renderContext())), /\[idle\] parser-review/);
   assert.ok(!plain(renderers.renderResult!(agentResult, { expanded: false, isPartial: false }, theme, renderContext())).includes("member-uuid"));
-  assert.match(plain(renderers.renderResult!(agentResult, { expanded: true, isPartial: false }, theme, renderContext(true))), /Id: member-uuid/);
+  assert.match(plain(renderers.renderResult!(agentResult, { expanded: true, isPartial: false }, theme, renderContext(true))), /"id": "member-uuid"/);
   const message = renderTeamMessage({ role: "custom", customType: "team", content: "hello\x1b]0;bad\x07", display: true, timestamp: 0 }, { expanded: true, outputPad: 0 }, theme)!;
   assert.match(plain(message), /Content: hello/);
   assert.equal(cleanText("x\x1b]0;title\x07\x1b[31my\x00\r\nz"), "xy\nz");

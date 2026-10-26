@@ -32,7 +32,11 @@ A task request is a proposal, not an instruction to create a task. Main receives
 
 The send receipt confirms delivery, not acceptance or task creation. This is agent guidance, not an automatic semantic duplicate detector.
 
-Team tool results and messages are compact by default. Ctrl+O expands them into labeled fields. UI state colors do not replace the underlying progress, ownership, or dependency fields.
+Each team tool call uses one line with a status dot, tool name, action, and result preview. Bold, colored badges such as `[todo]` separate statuses from titles and names.
+
+The `+N lines` hint shows the hidden detail count. Ctrl+O expands the full request and response JSON; mouse-enabled Pi views also support clicking the row.
+
+Team notification messages remain compact; Ctrl+O expands their labeled fields. UI state colors do not replace the underlying progress, ownership, or dependency fields.
 
 ## Show tasks and configure the displays
 
