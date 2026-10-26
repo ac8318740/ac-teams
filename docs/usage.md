@@ -12,11 +12,11 @@ In interactive Pi, `/teams` or `/teams panel` opens the team panel. `/teams team
 
 ## Navigate without stopping members
 
-The agent selector sits below Pi's status lines. It shows each member's name, state, model display name, and context usage. It keeps Main pinned and shows at most five rows, including an overflow indicator when needed. A finished assignment leaves its member idle and selectable.
+The agent selector sits below the input editor, above the existing footer. It shows each member's name, state, model display name, and context usage. It keeps Main pinned and shows at most five rows, including an overflow indicator when needed. A finished assignment leaves its member idle and selectable.
 
 Context shows Pi's reported token estimate, window size, and percentage, for example `Claude Opus 4.6 · 48k / 200k (24%)`. Reports refresh about once a second when they change. Unknown usage stays marked unknown, not zero. Stopped members retain their last report. These are context estimates, not billing totals.
 
-- Press Down from an empty editor to focus Main in the footer. Up/Down select members; Enter opens the selected live session; Esc returns to editing.
+- Press Down from an empty editor to focus Main in the agent selector. Up/Down select members; Enter opens the selected live session; Esc returns to editing.
 - Ctrl+Shift+Left returns from a member to Main. Switching preserves the member's process, session, and draft. Returning does not stop it.
 - `/teams` opens three tabs. Tab moves between Tasks, Teammates, and Activity; Esc closes the panel.
     - **Tasks:** Arrow keys select nodes in the dependency graph. G toggles graph/list, and Enter shows full details. Green means Done, red Blocked, cyan Working, and neutral Ready; written labels remain visible. Large or unsupported graphs fall back to the list.
@@ -32,7 +32,7 @@ Team tool results and messages are compact by default. Ctrl+O expands them into 
 
 ## Show tasks and configure the displays
 
-The task summary sits above the input editor; the agent selector stays below the status lines. It shows completed/total counts and up to five numbered task labels, ordered by:
+The task summary sits above the input editor; the agent selector sits below the editor. The task summary shows completed/total counts and up to five numbered task labels, ordered by:
 
 1. In-progress work
 2. Ready prerequisites blocking other tasks, with the most dependents first
@@ -40,6 +40,8 @@ The task summary sits above the input editor; the agent selector stays below the
 4. Recently completed work, newest first
 
 Ordinary ready tasks remain in `/teams`; the summary is not the full task list. Completion time determines recent order for newly completed tasks. Older completed tasks without timestamps fall back to task-number order.
+
+ac-teams leaves your existing footer intact and publishes a compact summary under the `ac-teams` extension-status key. Custom footers must support extension statuses to show it. In Zentui, use `/zentui extensions` to choose a placement for `ac-teams` if statuses are hidden by default. Agent navigation remains available in its own row even when the footer hides statuses.
 
 Use `/teams config` to toggle **Task summary** and **Agent selector** independently. Up/Down select a setting; Space or Enter toggles it; Esc closes. Changes save immediately for the current and future sessions. Other running sessions are not updated automatically. Both displays default to On.
 

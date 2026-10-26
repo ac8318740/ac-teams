@@ -1,7 +1,7 @@
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { CustomEditor, getSettingsListTheme, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { matchesKey, renderFakeCursor, truncateToWidth, visibleWidth, SettingsList } from "@earendil-works/pi-tui";
+import { matchesKey, renderFakeCursor, truncateToWidth, visibleWidth, SettingsList, type EditorComponent, type Focusable } from "@earendil-works/pi-tui";
 import { cleanText } from "./render.ts";
 import { isLive, taskName, memberName } from "./types.ts";
 import { saveDisplaySettings, type DisplaySettings } from "./config.ts";
@@ -68,11 +68,11 @@ export async function showDisplayConfig(ctx: ExtensionContext, settings: Display
   }, { overlay: true, overlayOptions: { width: 64, minWidth: 30, anchor: "center" } });
 }
 
-export function installTeamFooter(pi: ExtensionAPI, ctx: ExtensionContext, host: PanelHost, display: DisplaySettings): () => void {
+export function installTeamFooter(_pi: ExtensionAPI, ctx: ExtensionContext, host: PanelHost, display: DisplaySettings): () => void {
   let members: Awaited<ReturnType<PanelHost["snapshot"]>>["members"] = [];
   let tasks: Awaited<ReturnType<PanelHost["snapshot"]>>["tasks"] = [];
   let selected: string | undefined, start = 0;
-  let editor: CustomEditor | undefined;
+  let editor: (EditorComponent & Partial<Focusable> & { isShowingAutocomplete?(): boolean }) | undefined;
   let redraw = () => {};
   let disposed = false;
   let timer: NodeJS.Timeout | undefined;
@@ -87,10 +87,19 @@ export function installTeamFooter(pi: ExtensionAPI, ctx: ExtensionContext, host:
   };
   async function refresh() {
     try {
-      if (!display.tasks && !display.agents) return;
+      if (!display.tasks && !display.agents) {
+        ctx.ui.setStatus("ac-teams", undefined);
+        redraw();
+        return;
+      }
       const next = await host.snapshot();
       if (disposed) return;
       members = next.members; tasks = next.tasks;
+      const count = ids().length;
+      ctx.ui.setStatus("ac-teams", `Teams ${[
+        ...(display.agents ? [`${count} ${count === 1 ? "agent" : "agents"}`, `${members.filter(member => member.status === "busy").length} working`] : []),
+        ...(display.tasks ? [`${tasks.filter(task => task.status === "done").length}/${tasks.length} tasks done`] : []),
+      ].join(" · ")}`);
       if (selected && !ids().includes(selected)) { selected = undefined; if (editor) editor.focused = true; }
       start = Math.min(start, Math.max(0, ids().length - 1 - slots()));
       reveal(); redraw();
@@ -102,13 +111,11 @@ export function installTeamFooter(pi: ExtensionAPI, ctx: ExtensionContext, host:
     render: width => display.tasks ? renderTaskSummary(tasks, theme, width) : [],
     invalidate() {},
   }), { placement: "aboveEditor" });
-  ctx.ui.setFooter((tui, theme, data) => {
+  ctx.ui.setWidget("ac-teams-agents", (tui, theme) => {
     redraw = () => tui.requestRender();
-    const unsubscribe = data.onBranchChange(redraw);
     return {
       render(width) {
         if (!display.agents && selected !== undefined) { selected = undefined; if (editor) editor.focused = true; }
-        const branch = data.getGitBranch(), usage = ctx.getContextUsage()?.percent;
         const row = (id: string) => {
           const member = members.find(member => member.id === id);
           const assigned = tasks.find(task => task.owner === id && task.status === "in_progress") ?? tasks.find(task => task.owner === id && task.status !== "done");
@@ -122,45 +129,51 @@ export function installTeamFooter(pi: ExtensionAPI, ctx: ExtensionContext, host:
           return titleRow + attention + theme.fg(color, cleanText(description).replaceAll("\n", " "));
         };
         const peers = ids().slice(1);
-        return [theme.fg("dim", `${cleanText(ctx.cwd)}${branch ? ` (${cleanText(branch)})` : ""}`),
-          theme.fg("dim", `${usage == null ? "Unknown" : usage.toFixed(1) + "%"} context · ${ctx.model?.id ?? "no model"} · ${pi.getThinkingLevel()}`),
+        return [
           ...(host.self !== "root" ? [theme.fg("dim", "Ctrl+Shift+Left: Main (keeps questions open)")] : []),
-          ...Array.from(data.getExtensionStatuses().values(), status => theme.fg("dim", cleanText(status))),
-          ...(display.agents ? ["", row("root"), ...peers.slice(start, start + slots()).map(row),
+          ...(display.agents ? [row("root"), ...peers.slice(start, start + slots()).map(row),
             ...(peers.length > 4 ? [theme.fg("dim", `  ↑ ${start} above · ↓ ${Math.max(0, peers.length - start - slots())} below`)] : [])] : []),
         ].map(line => truncateToWidth(line, width));
       },
       invalidate() {},
-      dispose() { disposed = true; clearTimeout(timer); unsubscribe(); },
     };
-  });
-  ctx.ui.setEditorComponent((tui, theme, keys) => {
-    class TeamEditor extends CustomEditor {
-      render(width: number) {
-        const lines = super.render(width);
-        return selected === undefined ? lines : lines.map(line => line.replace(renderFakeCursor(" "), " "));
+  }, { placement: "belowEditor" });
+  const previousEditor = ctx.ui.getEditorComponent();
+  const teamEditor: NonNullable<typeof previousEditor> = (tui, theme, keys) => {
+    const current: NonNullable<typeof editor> = previousEditor?.(tui, theme, keys) ?? new CustomEditor(tui, theme, keys);
+    // Decorate the instance so custom editor methods and Pi's app-control wiring survive.
+    const render = current.render.bind(current), handleInput = current.handleInput.bind(current);
+    current.render = (width: number) => {
+      const lines = render(width);
+      return disposed || selected === undefined ? lines : lines.map(line => line.replace(renderFakeCursor(" "), " "));
+    };
+    current.handleInput = (input: string) => {
+      if (disposed) { handleInput(input); return; }
+      if (!display.agents) { selected = undefined; current.focused = true; handleInput(input); return; }
+      if (selected !== undefined) {
+        const destinations = ids(), index = destinations.indexOf(selected);
+        if (matchesKey(input, "down")) selected = destinations[Math.min(destinations.length - 1, index + 1)];
+        else if (matchesKey(input, "up")) selected = index <= 0 ? undefined : destinations[index - 1];
+        else if (matchesKey(input, "escape")) selected = undefined;
+        else if (matchesKey(input, "enter")) {
+          const id = selected; selected = undefined;
+          void host.visit(id).catch(error => ctx.ui.notify(cleanText(String(error)), "error"));
+        } else { selected = undefined; handleInput(input); }
+        current.focused = selected === undefined; reveal(); redraw(); return;
       }
-      handleInput(input: string) {
-        if (!display.agents) { selected = undefined; this.focused = true; super.handleInput(input); return; }
-        if (selected !== undefined) {
-          const destinations = ids(), index = destinations.indexOf(selected);
-          if (matchesKey(input, "down")) selected = destinations[Math.min(destinations.length - 1, index + 1)];
-          else if (matchesKey(input, "up")) selected = index <= 0 ? undefined : destinations[index - 1];
-          else if (matchesKey(input, "escape")) selected = undefined;
-          else if (matchesKey(input, "enter")) {
-            const id = selected; selected = undefined;
-            void host.visit(id).catch(error => ctx.ui.notify(cleanText(String(error)), "error"));
-          } else { selected = undefined; super.handleInput(input); }
-          this.focused = selected === undefined; reveal(); redraw(); return;
-        }
-        if (matchesKey(input, "down") && !this.getText() && !this.isShowingAutocomplete()) {
-          selected = "root"; start = 0; this.focused = false; redraw(); return;
-        }
-        super.handleInput(input);
+      if (matchesKey(input, "down") && !current.getText() && !current.isShowingAutocomplete?.()) {
+        selected = "root"; start = 0; current.focused = false; redraw(); return;
       }
-    }
-    editor = new TeamEditor(tui, theme, keys);
-    return editor;
-  });
-  return () => { disposed = true; clearTimeout(timer); ctx.ui.setWidget("ac-teams-tasks", undefined); ctx.ui.setFooter(undefined); ctx.ui.setEditorComponent(undefined); };
+      handleInput(input);
+    };
+    editor = current;
+    return current;
+  };
+  ctx.ui.setEditorComponent(teamEditor);
+  return () => {
+    disposed = true; clearTimeout(timer);
+    ctx.ui.setWidget("ac-teams-tasks", undefined); ctx.ui.setWidget("ac-teams-agents", undefined);
+    ctx.ui.setStatus("ac-teams", undefined);
+    if (ctx.ui.getEditorComponent() === teamEditor) ctx.ui.setEditorComponent(previousEditor);
+  };
 }
