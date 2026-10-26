@@ -48,4 +48,6 @@ See the [operations guide](docs/operations.md) for recovery guarantees, storage,
 - [Development](docs/development.md): source setup, verification, and publishing
 - [Implementation history](docs/implementation-plan.md): design decisions and prior art
 
+## License
+
 [MIT](LICENSE).
