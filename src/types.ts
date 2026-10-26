@@ -38,6 +38,7 @@ export interface Member {
   activity?: string;
   summary?: string;
   terminal?: boolean;
+  needsInput?: boolean;
 }
 export const memberNameMaxLength = 40;
 export const memberNamePattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)?(?![\s\S])/;

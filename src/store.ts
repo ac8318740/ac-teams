@@ -28,7 +28,9 @@ export function processIdentity(pid: number): string | undefined {
     }
     throw error;
   }
-  const start = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+  const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+  if (fields[0] === "Z" || fields[0] === "X") return undefined;
+  const start = fields[19];
   requireValue(start && /^\d+$/.test(start), "Cannot determine process identity");
   const boot = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
   requireValue(boot, "Cannot determine boot identity");
@@ -39,9 +41,8 @@ export function processAlive(pid: number, identity?: string): boolean {
   requireValue(integer(pid, 1), "Invalid PID");
   try { process.kill(pid, 0); }
   catch (error) { if (code(error) === "ESRCH") return false; throw error; }
-  if (identity === undefined) return true;
   const actual = processIdentity(pid);
-  return actual !== undefined && actual === identity;
+  return actual !== undefined && (identity === undefined || actual === identity);
 }
 
 function validateWorktree(value: unknown): value is Worktree {
@@ -90,6 +91,7 @@ function validate(state: unknown): asserts state is TeamState {
       requireValue(object(usage) && integer(usage.contextWindow, 1) && (usage.tokens === null || integer(usage.tokens)) && (usage.percent === null || typeof usage.percent === "number" && Number.isFinite(usage.percent) && usage.percent >= 0), "Invalid member context usage");
     }
     requireValue(member.terminal === undefined || typeof member.terminal === "boolean", "Invalid member terminal flag");
+    requireValue(member.needsInput === undefined || typeof member.needsInput === "boolean", "Invalid member input flag");
     requireValue(member.pid === undefined || integer(member.pid, 1), "Invalid member PID");
     requireValue(member.worktree === undefined || validateWorktree(member.worktree), "Invalid member worktree");
     const seen = new Set<string>([key]);

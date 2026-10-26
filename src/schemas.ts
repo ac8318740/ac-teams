@@ -40,13 +40,15 @@ const ContextUsageSchema = Type.Object({
   contextWindow: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
   percent: Type.Union([Type.Null(), Type.Number({ minimum: 0 })]),
 }, { additionalProperties: false });
-const EventSchema = Type.Object({
+const EventSchema = Type.Union([Type.Object({
+  type: Type.Literal("blocked"), active: Type.Boolean(),
+}, { additionalProperties: false }), Type.Object({
   type: Type.Union(["agent_start", "agent_settled", "activity", "summary", "model_error", "telemetry"].map(v => Type.Literal(v))),
   text: Type.Optional(Type.String({ maxLength: 2000 })),
   model: Type.Optional(Type.String({ maxLength: 256 })),
   modelName: Type.Optional(Type.String({ maxLength: 256 })),
   contextUsage: Type.Optional(Type.Union([Type.Null(), ContextUsageSchema])),
-}, { additionalProperties: false });
+}, { additionalProperties: false })]);
 export function validate(operation: string, value: unknown): void {
   const schema = operation === "agent" ? AgentSchema : operation === "task" ? TaskSchema : operation === "message" ? MessageSchema : operation === "ui" ? UserActionSchema : operation === "event" ? EventSchema : undefined;
   if (!schema || !Value.Check(schema, value)) throw new Error(`Invalid ${operation} request`);

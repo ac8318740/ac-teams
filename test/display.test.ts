@@ -14,7 +14,7 @@ import type { PanelHost } from "../src/ui-types.ts";
 
 const task = (number: number, extra: Partial<TaskView> = {}): TaskView => ({ id: `T${number}`, number, label: `Task ${number}`, title: `Full task ${number}`, description: "Acceptance criteria", revision: 1, status: "todo", dependencies: [], blockedBy: [], ...extra });
 // SAFETY: these bounded Pi test doubles supply exactly the UI methods used below.
-const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text } as unknown as Theme;
+const theme = { fg: (color: string, text: string) => color === "error" ? `\x1b[31m${text}\x1b[39m` : text, bold: (text: string) => text } as unknown as Theme;
 const tick = () => new Promise<void>(done => setImmediate(done));
 
 test("summary prioritizes working, ready blockers, blocked, then recent completions with stable ties", () => {
@@ -33,7 +33,7 @@ test("summary prioritizes working, ready blockers, blocked, then recent completi
 test("summary displays all-task counts, numbered labels, blocker references, and bounded terminal rows", () => {
   const tasks = [task(1, { status: "in_progress", label: "Parser tests" }), task(2, { blockedBy: ["T1"], dependencies: ["T1"] }),
     ...Array.from({ length: 8 }, (_, i) => task(i + 3, { status: "done", completedAt: i }))];
-  const rows = renderTaskSummary(tasks, theme, 100);
+  const rows = renderTaskSummary(tasks, theme, 100).map(cleanText);
   assert.equal(rows.length, 6);
   assert.equal(rows[0], "Tasks 8/10 done");
   assert.match(rows[1], /● #1 Parser tests · working/);
@@ -47,11 +47,11 @@ test("team widgets and status preserve other footers and statuses through toggle
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const widgets = new Map<string, { component: Component; placement?: string }>();
   const statuses = new Map<string, string>([["another-extension", "keep this status"]]);
-  let refreshes = 0;
+  let refreshes = 0, needsInput = true;
   const settings = { tasks: true, agents: true };
   const host: PanelHost = { self: "root", drafts: new Map(), snapshot: async () => {
     refreshes++;
-    return { members: [], tasks: [task(1, { status: "in_progress" })], messages: [], limit: 10, depth: 2 };
+    return { members: [{ id: "worker", name: "reviewer", cwd: "/trial", depth: 1, status: "busy", notified: 0, needsInput }], tasks: [task(1, { status: "in_progress" })], messages: [], limit: 10, depth: 2 };
   }, visit: async () => {}, resume: async () => {}, requestTask: async () => "", feedback: async () => "" };
   const ctx = { cwd: "/trial", model: { id: "fixture" }, getContextUsage: () => ({ tokens: 20000, contextWindow: 100000, percent: 20 }), ui: {
     setWidget(key: string, factory: Function | undefined, options?: { placement: string }) {
@@ -69,17 +69,27 @@ test("team widgets and status preserve other footers and statuses through toggle
   await tick();
   const rows = (key: string, width = 100) => widgets.get(key)!.component.render(width).map(cleanText);
   const refresh = async () => { t.mock.timers.tick(1000); await tick(); };
+  const text = () => rows("ac-teams-agents").join("\n");
   assert.equal(widgets.get("ac-teams-tasks")!.placement, "aboveEditor");
   assert.equal(widgets.get("ac-teams-agents")!.placement, "belowEditor");
   assert.match(rows("ac-teams-tasks").join("\n"), /Tasks 0\/1 done/);
-  assert.match(rows("ac-teams-agents").join("\n"), /● main/);
-  assert.ok(!rows("ac-teams-agents").join("\n").includes("20.0% context"), "do not duplicate the existing footer");
-  assert.equal(statuses.get("ac-teams"), "Teams 1 agent · 0 working · 0/1 tasks done");
+  assert.match(text(), /● main/);
+  assert.ok(!text().includes("20.0% context"), "do not duplicate the existing footer");
+  assert.equal(statuses.get("ac-teams"), "Teams 2 agents · 1 working · 0/1 tasks done");
   for (const width of [1, 15, 30]) assert.ok(rows("ac-teams-agents", width).every(row => visibleWidth(row) <= width));
+  assert.match(text(), /reviewer · Needs input/);
+  assert.ok(!text().includes("Ctrl+Shift+Left"), "Main does not need a return shortcut");
+  host.self = "worker";
+  assert.match(text(), /Ctrl\+Shift\+Left: Main \(keeps questions open\)/);
+  host.self = "root";
+  assert.ok(widgets.get("ac-teams-agents")!.component.render(100).join("\n").includes("\x1b[31m · Needs input"), "attention stays red beside the agent name");
+  needsInput = false;
+  await refresh();
+  assert.ok(!text().includes("Needs input"), "answer/cancel clears the label on the next snapshot");
   settings.tasks = false;
   await refresh();
   assert.deepEqual(rows("ac-teams-tasks"), []); assert.match(rows("ac-teams-agents").join("\n"), /● main/);
-  assert.equal(statuses.get("ac-teams"), "Teams 1 agent · 0 working");
+  assert.equal(statuses.get("ac-teams"), "Teams 2 agents · 1 working");
   settings.tasks = true; settings.agents = false;
   await refresh();
   assert.match(rows("ac-teams-tasks").join("\n"), /Tasks/); assert.deepEqual(rows("ac-teams-agents"), []);
@@ -88,6 +98,9 @@ test("team widgets and status preserve other footers and statuses through toggle
   await refresh();
   assert.deepEqual(rows("ac-teams-tasks"), []); assert.deepEqual(rows("ac-teams-agents"), []);
   assert.ok(!statuses.has("ac-teams"));
+  host.self = "worker";
+  assert.match(text(), /Ctrl\+Shift\+Left: Main/, "return hint remains when the agent list is hidden");
+  host.self = "root";
   settings.agents = true;
   await refresh();
   assert.ok(statuses.has("ac-teams"));

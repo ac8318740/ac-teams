@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { Coordinator, assistantEvent, taskRequestGuidance } from "../src/coordinator.ts";
+import { Coordinator, assistantEvent, taskRequestGuidance, type CoordinatorOptions } from "../src/coordinator.ts";
 import { Connection } from "../src/connection.ts";
 
 const fixture = fileURLToPath(new URL("./fixtures/pi-peer.mjs", import.meta.url));
@@ -16,9 +16,10 @@ chmodSync(fixture, 0o755);
 async function setup(limit = 10, depth = 2, interactive = false) {
   const home = mkdtempSync(join(tmpdir(), "at-"));
   const notices: number[] = [], warnings: string[] = [];
-  const options = { id: randomUUID(), cwd: home, limit, depth, interactive, extension: "unused", command: fixture, home, notice: (through: number) => { notices.push(through); }, warning: (message: string) => { warnings.push(message); } };
+  const states: { kind: "busy" | "blocked"; active: boolean }[] = [];
+  const options: CoordinatorOptions = { status: (kind, active) => { states.push({ kind, active }); }, id: randomUUID(), cwd: home, limit, depth, interactive, extension: "unused", command: fixture, home, notice: (through: number) => { notices.push(through); }, warning: (message: string) => { warnings.push(message); } };
   const team = await Coordinator.open(options);
-  return { team, home, options, notices, warnings, async close() { await team.close(); rmSync(home, { recursive: true, force: true }); } };
+  return { team, home, options, notices, warnings, states, async close() { await team.close(); rmSync(home, { recursive: true, force: true }); } };
 }
 async function until(check: () => boolean) {
   const end = Date.now() + 5000;
@@ -33,6 +34,53 @@ function repository(home: string) {
   writeFileSync(join(repo, "file"), "test"); git("add", "file"); git("commit", "-m", "initial");
   return repo;
 }
+
+for (const interactive of [false, true]) test(`members cannot report directly to Main's Herdr pane (${interactive ? "native" : "RPC"})`, async () => {
+  const previous = process.env.HERDR_ENV;
+  process.env.HERDR_ENV = "1";
+  const f = await setup(2, 2, interactive);
+  try {
+    const member = await f.team.handle("root", "agent", launch) as { pid: number };
+    const env = readFileSync(`/proc/${member.pid}/environ`, "utf8").split("\0");
+    assert.ok(env.includes("HERDR_ENV=0"));
+  } finally { await f.close(); if (previous === undefined) delete process.env.HERDR_ENV; else process.env.HERDR_ENV = previous; }
+});
+
+test("team attention aggregates busy members and questions, and clears on settle, stop, and exit", async () => {
+  const f = await setup();
+  try {
+    await f.team.handle("root", "agent", { ...launch, brief: "WAIT" });
+    await f.team.handle("root", "agent", { ...launch, name: "reviewer", brief: "WAIT" });
+    const [one, two] = f.team.live();
+    await until(() => f.team.live().every(member => member.activity === "Working"));
+    const blocked = (id: string, active: boolean) => f.team.recordEvent(id, { type: "blocked", active });
+    const latest = (kind: "busy" | "blocked") => f.states.filter(state => state.kind === kind).at(-1)?.active ?? false;
+    assert.equal(latest("busy"), true);
+    blocked(one.id, true); blocked(two.id, true);
+    assert.equal(latest("blocked"), true);
+    assert.equal(f.team.store.state.members[one.id].needsInput, true);
+    blocked(one.id, false);
+    assert.equal(latest("blocked"), true, "another member still needs an answer");
+    f.team.recordEvent(two.id, { type: "agent_settled" });
+    assert.equal(latest("blocked"), false, "settling clears an abandoned question");
+    assert.equal(latest("busy"), true, "one member is still running");
+    blocked(one.id, true);
+    await f.team.stopTree(one.id);
+    assert.equal(latest("blocked"), false);
+    assert.equal(latest("busy"), false);
+    assert.equal(f.team.store.state.members[one.id].needsInput, undefined);
+    f.team.recordEvent(two.id, { type: "agent_start" });
+    blocked(two.id, true);
+    process.kill(two.pid!, "SIGKILL");
+    await until(() => !f.team.live().length);
+    assert.equal(latest("blocked"), false);
+    assert.equal(latest("busy"), false);
+    blocked("root", true);
+    assert.equal(latest("blocked"), false, "Main already owns its local Herdr attention signal");
+    assert.equal(f.team.store.state.members.root.needsInput, true);
+    assert.throws(() => f.team.recordEvent("root", { type: "blocked", active: "yes" }), /Invalid/);
+  } finally { await f.close(); }
+});
 
 test("teammates require unique descriptive names; legacy fallbacks remain stable", async () => {
   const f = await setup();
