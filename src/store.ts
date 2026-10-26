@@ -2,9 +2,12 @@ import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdi
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { isDescendant, isLive } from "./types.ts";
+import { stripVTControlCharacters } from "node:util";
+import { isDescendant, isLive, memberNamePattern, memberNameMaxLength, taskLabelMaxLength, taskLabelPattern } from "./types.ts";
 import type { TeamState, TaskArgs, MessageArgs, Task, TaskView, Message, Worktree } from "./types.ts";
 
+// UI envelopes add task context after the public 16,000-character input limit.
+const maxMessageText = 17000;
 function code(error: unknown): string | undefined { return (error as NodeJS.ErrnoException)?.code; }
 function requireValue(ok: unknown, message: string): asserts ok { if (!ok) throw new Error(message); }
 function text(value: unknown, max = 16000): value is string { return typeof value === "string" && value.trim().length > 0 && value.length <= max; }
@@ -49,28 +52,44 @@ function taskView(state: TeamState, task: Task): TaskView {
 }
 
 function migrate(state: unknown): boolean {
-  if (!object(state) || state.version !== 1) return false;
+  if (!object(state) || (state.version !== 1 && state.version !== 2)) return false;
   requireValue(object(state.tasks), "Invalid legacy state tasks");
+  let number = 0;
   for (const task of Object.values(state.tasks)) {
-    requireValue(object(task) && typeof task.status === "string" && ["pending", "claimed", "completed"].includes(task.status), "Invalid legacy task status");
-    requireValue(task.status === "pending" ? task.owner === undefined : typeof task.owner === "string", "Invalid legacy task owner");
-    if (task.status === "pending") task.status = "todo";
-    else if (task.status === "claimed") task.status = "in_progress";
-    else task.status = "done";
+    requireValue(object(task) && text(task.title, 500), "Invalid legacy task");
+    if (state.version === 1) {
+      requireValue(typeof task.status === "string" && ["pending", "claimed", "completed"].includes(task.status), "Invalid legacy task status");
+      requireValue(task.status === "pending" ? task.owner === undefined : typeof task.owner === "string", "Invalid legacy task owner");
+      if (task.status === "pending") task.status = "todo";
+      else if (task.status === "claimed") task.status = "in_progress";
+      else task.status = "done";
+    }
+    task.number = ++number;
+    task.label = stripVTControlCharacters(task.title).replace(/[\x00-\x1f\x7f-\x9f]/g, " ").trim().split(/\s+/).slice(0, 3).join(" ").slice(0, taskLabelMaxLength).trim() || "Task";
   }
-  state.version = 2;
+  state.version = 3;
   return true;
 }
 
 function validate(state: unknown): asserts state is TeamState {
   requireValue(object(state), "Invalid state snapshot");
   id(state.id);
-  requireValue(state.version === 2 && text(state.root) && integer(state.limit, 1) && integer(state.depth) && object(state.members) && object(state.tasks) && Array.isArray(state.messages), "Invalid state snapshot schema");
+  requireValue(state.version === 3 && text(state.root) && integer(state.limit, 1) && integer(state.depth) && object(state.members) && object(state.tasks) && Array.isArray(state.messages), "Invalid state snapshot schema");
   const members = state.members;
+  const names = new Set<string>(["main", "root", ...Object.keys(members)]);
   for (const [key, member] of Object.entries(members)) {
     requireValue(object(member) && member.id === key && text(key) && integer(member.depth) && text(member.token) && text(member.cwd) && ["starting", "busy", "idle", "stopping", "stopped", "interrupted"].includes(String(member.status)) && integer(member.notified), "Invalid state member");
+    if (member.name !== undefined) {
+      requireValue(text(member.name, memberNameMaxLength) && memberNamePattern.test(member.name) && !names.has(member.name), "Invalid or duplicate teammate name");
+      names.add(member.name);
+    }
     requireValue(member.parent === undefined || (text(member.parent) && Object.hasOwn(members, member.parent)), "Invalid member parent");
-    for (const field of ["identity", "sessionId", "sessionFile", "error"]) requireValue(member[field] === undefined || typeof member[field] === "string", "Invalid member field");
+    for (const field of ["identity", "sessionId", "sessionFile", "error", "model", "modelName", "thinking", "activity", "summary"]) requireValue(member[field] === undefined || typeof member[field] === "string", "Invalid member field");
+    if (member.contextUsage !== undefined) {
+      const usage = member.contextUsage;
+      requireValue(object(usage) && integer(usage.contextWindow, 1) && (usage.tokens === null || integer(usage.tokens)) && (usage.percent === null || typeof usage.percent === "number" && Number.isFinite(usage.percent) && usage.percent >= 0), "Invalid member context usage");
+    }
+    requireValue(member.terminal === undefined || typeof member.terminal === "boolean", "Invalid member terminal flag");
     requireValue(member.pid === undefined || integer(member.pid, 1), "Invalid member PID");
     requireValue(member.worktree === undefined || validateWorktree(member.worktree), "Invalid member worktree");
     const seen = new Set<string>([key]);
@@ -83,10 +102,15 @@ function validate(state: unknown): asserts state is TeamState {
   requireValue(Object.hasOwn(members, state.root), "Invalid root member");
   const tasks = state.tasks;
   const edges: Record<string, string[]> = {};
+  const taskNumbers = new Set<number>();
   for (const [key, task] of Object.entries(tasks)) {
     requireValue(object(task) && task.id === key && text(key) && integer(task.revision, 1) && text(task.title, 500) && text(task.description) && typeof task.status === "string" && ["todo", "in_progress", "done"].includes(task.status) && Array.isArray(task.dependencies), "Invalid state task");
+    requireValue(integer(task.number, 1) && !taskNumbers.has(task.number) && text(task.label, taskLabelMaxLength) && taskLabelPattern.test(task.label), "Invalid task number or label");
+    taskNumbers.add(task.number);
+    requireValue(task.completedAt === undefined || integer(task.completedAt), "Invalid task completion time");
     requireValue(task.dependencies.every(dep => typeof dep === "string" && dep !== key && Object.hasOwn(tasks, dep)) && new Set(task.dependencies).size === task.dependencies.length, "Invalid task dependencies");
     requireValue(task.owner === undefined || (typeof task.owner === "string" && Object.hasOwn(members, task.owner)), "Invalid task owner");
+    requireValue(task.creator === undefined || (typeof task.creator === "string" && Object.hasOwn(members, task.creator)), "Invalid task creator");
     requireValue(task.status !== "in_progress" || task.owner !== undefined, "In-progress task requires an owner");
     requireValue(task.status === "todo" || task.dependencies.every(dep => (tasks[dep] as Record<string, unknown>).status === "done"), "Active or done task has unfinished dependencies");
     edges[key] = task.dependencies;
@@ -104,7 +128,7 @@ function validate(state: unknown): asserts state is TeamState {
   let last = 0;
   const messageIds = new Set<string>();
   for (const message of state.messages) {
-    requireValue(object(message) && integer(message.seq, last + 1) && text(message.id) && !messageIds.has(message.id) && typeof message.from === "string" && Object.hasOwn(members, message.from) && Array.isArray(message.recipients) && message.recipients.every(recipient => typeof recipient === "string" && Object.hasOwn(members, recipient)) && new Set(message.recipients).size === message.recipients.length && text(message.text) && typeof message.time === "string" && Number.isFinite(Date.parse(message.time)), "Invalid state message");
+    requireValue(object(message) && integer(message.seq, last + 1) && text(message.id) && !messageIds.has(message.id) && typeof message.from === "string" && Object.hasOwn(members, message.from) && Array.isArray(message.recipients) && message.recipients.every(recipient => typeof recipient === "string" && Object.hasOwn(members, recipient)) && new Set(message.recipients).size === message.recipients.length && text(message.text, maxMessageText) && typeof message.time === "string" && Number.isFinite(Date.parse(message.time)), "Invalid state message");
     last = message.seq; messageIds.add(message.id);
   }
 }
@@ -233,7 +257,10 @@ export class Store {
     return this.update(state => {
       if (args.action === "create") {
         requireValue(text(args.title, 500) && text(args.description), "Task requires a title (max 500) and description (max 16000)");
-        const task: Task = { id: randomUUID(), revision: 1, title: args.title, description: args.description, dependencies: args.dependencies === undefined ? [] : structuredClone(args.dependencies), status: "todo" };
+        const label = args.label ?? args.title;
+        requireValue(text(label, taskLabelMaxLength) && taskLabelPattern.test(label), "Task requires a 1–3-word label (max 60 characters); a concise title can serve as the label");
+        const number = Object.values(state.tasks).reduce((max, task) => Math.max(max, task.number), 0) + 1;
+        const task: Task = { id: randomUUID(), number, label, revision: 1, creator: actor, title: args.title, description: args.description, dependencies: args.dependencies === undefined ? [] : structuredClone(args.dependencies), status: "todo" };
         state.tasks[task.id] = task;
         return taskView(state, task);
       }
@@ -244,6 +271,7 @@ export class Store {
         requireValue(task.status === "todo", "Only to-do tasks can be edited");
         requireValue(!task.owner || task.owner === actor, "Only the owner can edit a reserved task");
         if (args.title !== undefined) task.title = args.title;
+        if (args.label !== undefined) task.label = args.label;
         if (args.description !== undefined) task.description = args.description;
         if (args.dependencies !== undefined) task.dependencies = structuredClone(args.dependencies);
       } else if (args.action === "claim") {
@@ -261,6 +289,7 @@ export class Store {
         requireValue(task.status === "in_progress", "Only in-progress tasks can be completed; start it first");
         requireValue(args.acceptance === true, "Completion requires acceptance=true after checking acceptance criteria");
         task.status = "done";
+        task.completedAt = Date.now();
       } else if (args.action === "release") {
         requireValue(task.owner, "Task has no owner to release");
         const interrupted = ["interrupted", "stopped"].includes(state.members[task.owner].status);
@@ -273,16 +302,18 @@ export class Store {
         const dependents = Object.values(state.tasks).filter(other => other.dependencies.includes(task.id) && other.status !== "todo");
         requireValue(dependents.length === 0, `Cannot reopen task with active or done dependents: ${dependents.map(t => t.id).join(", ")}`);
         task.status = "todo";
+        delete task.completedAt;
       } else throw new Error("Unknown task action");
       task.revision++;
       return taskView(state, task);
     });
   }
 
-  message(actor: string, args: MessageArgs): Message | Message[] {
+  message(actor: string, args: MessageArgs, enveloped = false): Message | Message[] {
     requireValue(!this.closed && Object.hasOwn(this.state.members, actor), "Unknown actor or closed store");
     if (args.action === "send") return this.update(state => {
-      requireValue(text(args.text), "Message text must be nonempty and at most 16000 characters");
+      const limit = enveloped ? maxMessageText : 16000;
+      requireValue(text(args.text, limit), `Message text must be nonempty and at most ${limit} characters`);
       const recipients = args.recipients === undefined ? Object.values(state.members).filter(member => member.id !== actor && isLive(member)).map(member => member.id) : args.recipients;
       requireValue(Array.isArray(recipients) && (args.recipients === undefined || recipients.length > 0) && new Set(recipients).size === recipients.length && recipients.every(recipient => typeof recipient === "string" && Object.hasOwn(state.members, recipient) && isLive(state.members[recipient])), "Recipients must be unique live member IDs");
       const message = { seq: (state.messages.at(-1)?.seq ?? 0) + 1, id: randomUUID(), from: actor, recipients: [...recipients], text: args.text, time: new Date().toISOString() };
