@@ -52,7 +52,9 @@ Not verified on macOS, Windows, or network filesystems. The package is Linux-onl
 
 ## Stage releases for npm approval
 
-[The GitHub workflow](https://github.com/ac8318740/ac-teams/actions/workflows/publish-npm.yml) runs typecheck, tests, and package checks, then stages the package for approval. It follows acstack's staged-release approach and does not publish the release directly.
+[The GitHub workflow](https://github.com/ac8318740/ac-teams/actions/workflows/publish-npm.yml) automatically stages a release when `package.json` reaches `main`. Changes to the workflow itself also trigger staging, so installing this automation stages the current version. It runs typecheck, tests, and package checks first.
+
+This follows ACStack's automatic staged-release approach. Final publication still requires approval on npm with 2FA; merging alone does not make the version public.
 
 Only `main` can stage releases. The workflow rejects other branches and tags before checkout. The GitHub environment `npm` also restricts deployments to the branch `main`, with no allowed tags.
 
@@ -64,13 +66,13 @@ gh secret set NPM_TOKEN --repo ac8318740/ac-teams --env npm
 
 Reuse acstack's token only if its permissions allow creating and staging `ac-teams`. GitHub cannot reveal the existing secret value. Otherwise, create a granular npm token with stage-publish access. npm requires 2FA on the publishing account.
 
-Run the workflow manually from `main` in GitHub Actions or dispatch it:
+For a retry without another commit, run the workflow manually from `main` in GitHub Actions or dispatch it:
 
 ```sh
 gh workflow run publish-npm.yml --repo ac8318740/ac-teams --ref main
 ```
 
-Pushes and tags do not trigger staging. An already published version is a no-op. If the version is already staged, approve the existing submission rather than staging it again.
+Pushes to other branches, tags, and pull requests do not trigger staging. An already published version is a no-op. Like ACStack, the workflow treats npm's `Version uniqueness check failed unexpectedly` response as an apparent existing staged submission and directs you to approve it. Other staging errors fail the run.
 
 Review and approve the staged version in npm's **Staged Packages** tab using 2FA. The first staging of a new name creates a public `0.0.0-stage` placeholder. The requested version and its contents become public only after approval. See [npm's staged publishing documentation](https://docs.npmjs.com/staged-publishing/).
 
