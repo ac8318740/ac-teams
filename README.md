@@ -26,9 +26,9 @@ Your Pi session is the root; its child agents are members. Ask Pi to delegate a 
 
 `/teams` or `/teams panel` opens Tasks, Teammates, and Activity. `/teams teammate <name-or-id>` opens a teammate directly; subcommands and teammate names autocomplete. Use the task graph or list, send feedback, and open a member's full live Pi session.
 
-The task summary sits above the input. The agent selector below status shows descriptive names, models, and context usage. `/teams config` toggles these displays independently.
+The task summary sits above the input. The agent selector sits below the input, above your existing footer, and shows descriptive names, models, and context usage. ac-teams publishes a compact team status without replacing the footer or editor supplied by other extensions. `/teams config` toggles these displays independently.
 
-From an empty editor, press Down to select the team footer, then Enter to open a member. Ctrl+Shift+Left returns to Main without stopping the member. `/teams stop` stops every descendant.
+From an empty editor, press Down to select the team row, then Enter to open a member. Ctrl+Shift+Left returns to Main without stopping the member. `/teams stop` stops every descendant.
 
 Defaults allow up to **10 live members** and **two levels of delegation**. Use the fewest useful agents.
 

@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { initTheme, type Theme, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { CustomEditor, initTheme, type Theme, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { visibleWidth, type Component, type EditorComponent } from "@earendil-works/pi-tui";
 import { renderTaskSummary, summaryTasks } from "../src/task-summary.ts";
 import { installTeamFooter, showDisplayConfig } from "../src/terminal-ui.ts";
 import { cleanText } from "../src/render.ts";
@@ -43,40 +43,132 @@ test("summary displays all-task counts, numbered labels, blocker references, and
   assert.deepEqual(renderTaskSummary([], theme, 60), []);
 });
 
-test("task widget is above the editor, selector stays in footer, and toggles and cleanup are independent", async t => {
-  let footer: Component | undefined, widget: Component | undefined, refreshes = 0;
-  let placement: string | undefined;
+test("team widgets and status preserve other footers and statuses through toggles and cleanup", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const widgets = new Map<string, { component: Component; placement?: string }>();
+  const statuses = new Map<string, string>([["another-extension", "keep this status"]]);
+  let refreshes = 0;
   const settings = { tasks: true, agents: true };
   const host: PanelHost = { self: "root", drafts: new Map(), snapshot: async () => {
     refreshes++;
     return { members: [], tasks: [task(1, { status: "in_progress" })], messages: [], limit: 10, depth: 2 };
   }, visit: async () => {}, resume: async () => {}, requestTask: async () => "", feedback: async () => "" };
   const ctx = { cwd: "/trial", model: { id: "fixture" }, getContextUsage: () => ({ tokens: 20000, contextWindow: 100000, percent: 20 }), ui: {
-    setWidget(_key: string, factory: Function | undefined, options?: { placement: string }) {
-      placement = options?.placement;
-      widget = factory?.({}, theme);
+    setWidget(key: string, factory: Function | undefined, options?: { placement: string }) {
+      if (factory) widgets.set(key, { component: factory({ requestRender() {} }, theme), placement: options?.placement });
+      else widgets.delete(key);
     },
-    setFooter(factory: Function | undefined) {
-      if (factory) footer = factory({ requestRender() {} }, theme, { onBranchChange: () => () => {}, getGitBranch: () => "trial", getExtensionStatuses: () => new Map() });
-    }, setEditorComponent() {},
+    setStatus(key: string, text: string | undefined) {
+      if (text === undefined) statuses.delete(key); else statuses.set(key, text);
+    },
+    setFooter() { assert.fail("never replace or clear another extension's footer"); },
+    getEditorComponent() { return undefined; }, setEditorComponent() {},
   } } as unknown as ExtensionContext;
   const dispose = installTeamFooter({ getThinkingLevel: () => "low" } as ExtensionAPI, ctx, host, settings);
   t.after(dispose);
   await tick();
-  const text = () => footer!.render(100).map(cleanText).join("\n");
-  let output = text();
-  assert.equal(placement, "aboveEditor");
-  assert.match(widget!.render(100).map(cleanText).join("\n"), /Tasks 0\/1 done/);
-  assert.ok(!output.includes("Tasks"));
-  assert.ok(output.indexOf("● main") > output.indexOf("20.0% context"));
+  const rows = (key: string, width = 100) => widgets.get(key)!.component.render(width).map(cleanText);
+  const refresh = async () => { t.mock.timers.tick(1000); await tick(); };
+  assert.equal(widgets.get("ac-teams-tasks")!.placement, "aboveEditor");
+  assert.equal(widgets.get("ac-teams-agents")!.placement, "belowEditor");
+  assert.match(rows("ac-teams-tasks").join("\n"), /Tasks 0\/1 done/);
+  assert.match(rows("ac-teams-agents").join("\n"), /● main/);
+  assert.ok(!rows("ac-teams-agents").join("\n").includes("20.0% context"), "do not duplicate the existing footer");
+  assert.equal(statuses.get("ac-teams"), "Teams 1 agent · 0 working · 0/1 tasks done");
+  for (const width of [1, 15, 30]) assert.ok(rows("ac-teams-agents", width).every(row => visibleWidth(row) <= width));
   settings.tasks = false;
-  output = text(); assert.deepEqual(widget!.render(100), []); assert.ok(output.includes("● main"));
+  await refresh();
+  assert.deepEqual(rows("ac-teams-tasks"), []); assert.match(rows("ac-teams-agents").join("\n"), /● main/);
+  assert.equal(statuses.get("ac-teams"), "Teams 1 agent · 0 working");
   settings.tasks = true; settings.agents = false;
-  output = text(); assert.match(widget!.render(100).map(cleanText).join("\n"), /Tasks/); assert.ok(!output.includes("● main"));
+  await refresh();
+  assert.match(rows("ac-teams-tasks").join("\n"), /Tasks/); assert.deepEqual(rows("ac-teams-agents"), []);
+  assert.equal(statuses.get("ac-teams"), "Teams 0/1 tasks done");
   settings.tasks = false;
-  output = text(); assert.ok(output.includes("20.0% context")); assert.ok(!output.includes("Tasks")); assert.ok(!output.includes("● main"));
-  assert.equal(refreshes, 1);
-  dispose(); assert.equal(widget, undefined);
+  await refresh();
+  assert.deepEqual(rows("ac-teams-tasks"), []); assert.deepEqual(rows("ac-teams-agents"), []);
+  assert.ok(!statuses.has("ac-teams"));
+  settings.agents = true;
+  await refresh();
+  assert.ok(statuses.has("ac-teams"));
+  dispose();
+  assert.equal(widgets.size, 0);
+  assert.deepEqual([...statuses], [["another-extension", "keep this status"]]);
+  const stoppedAt = refreshes;
+  await refresh();
+  assert.equal(refreshes, stoppedAt, "cleanup stops polling");
+});
+
+test("agent navigation composes with the active editor and cleanup respects later replacements", async t => {
+  type Factory = NonNullable<ReturnType<ExtensionContext["ui"]["getEditorComponent"]>>;
+  const inputs: string[] = [], visits: string[] = [];
+  let text = "", autocomplete = false;
+  const customEditor = {
+    focused: true,
+    getText: () => text,
+    setText(value: string) { text = value; },
+    getExpandedText: () => `expanded:${text}`,
+    isShowingAutocomplete: () => autocomplete,
+    handleInput(input: string) { inputs.push(input); },
+    render: (_width: number) => ["custom editor"],
+    invalidate() {},
+  };
+  const previous: Factory = () => customEditor;
+  let active: Factory | undefined = previous;
+  const host: PanelHost = { self: "root", drafts: new Map(), snapshot: async () => ({
+    members: [{ id: "peer", parent: "root", name: "peer", cwd: "/trial", depth: 1, status: "idle", createdAt: 0, notified: 0 }], tasks: [], messages: [], limit: 10, depth: 2,
+  }), visit: async id => { visits.push(id); }, resume: async () => {}, requestTask: async () => "", feedback: async () => "" };
+  const ctx = { cwd: "/trial", ui: {
+    getEditorComponent: () => active,
+    setEditorComponent(factory: Factory | undefined) { active = factory; },
+    setWidget() {}, setStatus() {}, setFooter() { assert.fail("leave footer ownership alone"); }, notify() {},
+  } } as unknown as ExtensionContext;
+  const settings = { tasks: true, agents: true };
+  const install = () => installTeamFooter({} as ExtensionAPI, ctx, host, settings);
+  const dispose = install();
+  t.after(dispose);
+  await tick();
+  assert.notEqual(active, previous);
+  // SAFETY: construction only reads borderColor; the custom factory ignores these host objects.
+  const args = [{ requestRender() {} }, { borderColor: (text: string) => text }, {}] as unknown as Parameters<Factory>;
+  const editor: EditorComponent = active!(...args);
+  assert.equal(editor, customEditor, "retain the editor instance and its extension-specific methods");
+  assert.equal(editor.getExpandedText!(), "expanded:");
+  assert.deepEqual(editor.render(80), ["custom editor"]);
+  editor.handleInput("/");
+  assert.deepEqual(inputs, ["/"]);
+  editor.setText("inline /skill");
+  editor.handleInput("\x1b[B");
+  editor.setText(""); autocomplete = true;
+  editor.handleInput("\x1b[B");
+  assert.equal(inputs.length, 3, "text and autocomplete keep ownership of arrow keys");
+  autocomplete = false;
+  editor.handleInput("\x1b[B");
+  assert.equal(customEditor.focused, false);
+  editor.handleInput("\x1b[B"); editor.handleInput("\r");
+  assert.deepEqual(visits, ["peer"]);
+  assert.equal(customEditor.focused, true);
+  editor.handleInput("\x1b[B"); editor.handleInput("x");
+  assert.equal(inputs.at(-1), "x", "typing exits selector and reaches the custom editor");
+  settings.agents = false;
+  editor.handleInput("\x1b[B");
+  assert.equal(inputs.at(-1), "\x1b[B");
+  dispose();
+  assert.equal(active, previous, "restore the original factory rather than the default editor");
+
+  const disposeAgain = install();
+  const later: Factory = () => customEditor;
+  active = later;
+  disposeAgain();
+  assert.equal(active, later, "do not remove another extension's later editor");
+  editor.handleInput("\x1b[B");
+  assert.equal(inputs.at(-1), "\x1b[B", "a retained editor no longer intercepts keys after disposal");
+
+  active = undefined;
+  const disposeDefault = install();
+  assert.ok(active!(...args) instanceof CustomEditor, "retain the default editor fallback");
+  disposeDefault();
+  assert.equal(active, undefined);
 });
 
 test("native settings screen toggles independently and preserves values on failed save", async () => {
