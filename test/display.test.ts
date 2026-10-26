@@ -14,7 +14,7 @@ import type { PanelHost } from "../src/ui-types.ts";
 
 const task = (number: number, extra: Partial<TaskView> = {}): TaskView => ({ id: `T${number}`, number, label: `Task ${number}`, title: `Full task ${number}`, description: "Acceptance criteria", revision: 1, status: "todo", dependencies: [], blockedBy: [], ...extra });
 // SAFETY: these bounded Pi test doubles supply exactly the UI methods used below.
-const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text } as unknown as Theme;
+const theme = { fg: (color: string, text: string) => color === "error" ? `\x1b[31m${text}\x1b[39m` : text, bold: (text: string) => text } as unknown as Theme;
 const tick = () => new Promise<void>(done => setImmediate(done));
 
 test("summary prioritizes working, ready blockers, blocked, then recent completions with stable ties", () => {
@@ -33,7 +33,7 @@ test("summary prioritizes working, ready blockers, blocked, then recent completi
 test("summary displays all-task counts, numbered labels, blocker references, and bounded terminal rows", () => {
   const tasks = [task(1, { status: "in_progress", label: "Parser tests" }), task(2, { blockedBy: ["T1"], dependencies: ["T1"] }),
     ...Array.from({ length: 8 }, (_, i) => task(i + 3, { status: "done", completedAt: i }))];
-  const rows = renderTaskSummary(tasks, theme, 100);
+  const rows = renderTaskSummary(tasks, theme, 100).map(cleanText);
   assert.equal(rows.length, 6);
   assert.equal(rows[0], "Tasks 8/10 done");
   assert.match(rows[1], /● #1 Parser tests · working/);
@@ -46,10 +46,12 @@ test("summary displays all-task counts, numbered labels, blocker references, and
 test("task widget is above the editor, selector stays in footer, and toggles and cleanup are independent", async t => {
   let footer: Component | undefined, widget: Component | undefined, refreshes = 0;
   let placement: string | undefined;
+  let needsInput = true;
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   const settings = { tasks: true, agents: true };
   const host: PanelHost = { self: "root", drafts: new Map(), snapshot: async () => {
     refreshes++;
-    return { members: [], tasks: [task(1, { status: "in_progress" })], messages: [], limit: 10, depth: 2 };
+    return { members: [{ id: "worker", name: "reviewer", cwd: "/trial", depth: 1, status: "busy", notified: 0, needsInput }], tasks: [task(1, { status: "in_progress" })], messages: [], limit: 10, depth: 2 };
   }, visit: async () => {}, resume: async () => {}, requestTask: async () => "", feedback: async () => "" };
   const ctx = { cwd: "/trial", model: { id: "fixture" }, getContextUsage: () => ({ tokens: 20000, contextWindow: 100000, percent: 20 }), ui: {
     setWidget(_key: string, factory: Function | undefined, options?: { placement: string }) {
@@ -69,13 +71,24 @@ test("task widget is above the editor, selector stays in footer, and toggles and
   assert.match(widget!.render(100).map(cleanText).join("\n"), /Tasks 0\/1 done/);
   assert.ok(!output.includes("Tasks"));
   assert.ok(output.indexOf("● main") > output.indexOf("20.0% context"));
+  assert.match(output, /reviewer · Needs input/);
+  assert.ok(!output.includes("Ctrl+Shift+Left"), "Main does not need a return shortcut");
+  host.self = "worker";
+  assert.match(text(), /Ctrl\+Shift\+Left: Main \(keeps questions open\)/);
+  host.self = "root";
+  assert.ok(footer!.render(100).join("\n").includes("\x1b[31m · Needs input"), "attention stays red beside the agent name");
+  needsInput = false;
+  t.mock.timers.tick(1000); await tick();
+  assert.ok(!text().includes("Needs input"), "answer/cancel clears the label on the next snapshot");
   settings.tasks = false;
   output = text(); assert.deepEqual(widget!.render(100), []); assert.ok(output.includes("● main"));
   settings.tasks = true; settings.agents = false;
   output = text(); assert.match(widget!.render(100).map(cleanText).join("\n"), /Tasks/); assert.ok(!output.includes("● main"));
   settings.tasks = false;
+  host.self = "worker";
   output = text(); assert.ok(output.includes("20.0% context")); assert.ok(!output.includes("Tasks")); assert.ok(!output.includes("● main"));
-  assert.equal(refreshes, 1);
+  assert.match(output, /Ctrl\+Shift\+Left: Main/, "return hint remains when the agent list is hidden");
+  assert.equal(refreshes, 2);
   dispose(); assert.equal(widget, undefined);
 });
 

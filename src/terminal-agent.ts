@@ -44,7 +44,7 @@ export class TerminalAgent extends EventEmitter {
       writeFileSync(config, "set -g status off\nset -g prefix None\nset -s extended-keys always\nbind-key -n C-S-Left detach-client\n", { flag: "wx", mode: 0o600 });
       this.files.push(config);
       const exports = Object.entries(this.options.env)
-        .filter(([key, value]) => key.startsWith("AC_TEAMS_") && value !== undefined)
+        .filter(([key, value]) => (key.startsWith("AC_TEAMS_") || key === "HERDR_ENV") && value !== undefined)
         .map(([key, value]) => `export ${key}=${quote(value!)}`);
       const command = this.options.command ?? process.env.AC_TEAMS_PI ?? "pi";
       writeFileSync(script, [...exports,

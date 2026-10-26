@@ -184,8 +184,10 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
         if (graph && !graphData && tasks.length) left[0] = fg("muted", "Graph unavailable or too large; showing list.");
       } else if (tab === 1) {
         left = [fg("muted", "  Member       Session"), "", ...memberIds().map((id, index) => {
-          const description = id === "root" ? "Main conversation" : snapshot.members.find(member => member.id === id)?.status ?? "Unavailable";
-          return fg(index === memberIndex ? "accent" : "text", `${index === memberIndex ? "●" : " "} ${name(id).padEnd(12)} ${clean(description)}`);
+          const member = snapshot.members.find(member => member.id === id);
+          const description = id === "root" ? "Main conversation" : member?.status ?? "Unavailable";
+          return fg(index === memberIndex ? "accent" : "text", `${index === memberIndex ? "●" : " "} ${name(id).padEnd(12)} `)
+            + (member?.needsInput ? fg("error", "Needs input") : fg(index === memberIndex ? "accent" : "text", clean(description)));
         })];
         selectedRow = memberIndex + 2;
         right = split ? memberDetails(rightWidth) : [];
@@ -224,7 +226,7 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
       const id = memberIds()[memberIndex];
       const member = snapshot.members.find(member => member.id === id);
       const assigned = tasks.filter(task => task.owner === id);
-      return wrap([heading(name(id)), "", label("State", clean(member?.status ?? (id === "root" ? "Main conversation" : "Unavailable"))),
+      return wrap([heading(name(id)), "", label("State", member?.needsInput ? fg("error", "Needs input") : clean(member?.status ?? (id === "root" ? "Main conversation" : "Unavailable"))),
         label("ID", id), label("Model / context", clean(modelContext(member ?? {}))),
         label("Cwd", clean(member?.cwd ?? (id === host.self ? ctx.cwd : "Unavailable"))),
         label("Session", clean(member?.sessionFile ?? member?.sessionId ?? "Unavailable")),

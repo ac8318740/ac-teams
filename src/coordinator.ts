@@ -32,6 +32,7 @@ export interface CoordinatorOptions {
   interactive?: boolean; model?: string; thinking?: string;
   notice: (through: number, messages: Message[]) => void;
   warning: (message: string) => void;
+  status?: (kind: "busy" | "blocked", active: boolean) => void;
 }
 export class Coordinator {
   readonly store: Store;
@@ -46,6 +47,7 @@ export class Coordinator {
   private notices = new Map<string, NodeJS.Timeout>();
   private operations = new Set<Promise<unknown>>();
   private closed = false;
+  private status = { busy: false, blocked: false };
   private closePromise?: Promise<void>;
 
   private options: CoordinatorOptions;
@@ -76,7 +78,10 @@ export class Coordinator {
         state.members.root.sessionFile = options.sessionFile;
         state.members.root.model = options.model;
         state.members.root.thinking = options.thinking;
-        for (const member of Object.values(state.members)) if (member.id !== "root" && isLive(member)) member.status = "interrupted";
+        for (const member of Object.values(state.members)) {
+          delete member.needsInput;
+          if (member.id !== "root" && isLive(member)) member.status = "interrupted";
+        }
       });
       try { unlinkSync(coordinator.socketPath); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       coordinator.server = createServer(socket => coordinator.accept(socket));
@@ -98,6 +103,10 @@ export class Coordinator {
       this.connections.delete(socket);
       if (bound && this.sockets.get(bound) === socket) {
         this.sockets.delete(bound);
+        if (!this.closed) {
+          this.store.update(state => { delete state.members[bound!].needsInput; });
+          this.publishStatus();
+        }
         for (const [id, pending] of this.controls) if (pending.member === bound) {
           clearTimeout(pending.timer); this.controls.delete(id); pending.reject(new Error("Native member disconnected"));
         }
@@ -157,25 +166,38 @@ export class Coordinator {
       send(socket, { type: "command", id, command, args });
     });
   }
+  private publishStatus(): void {
+    const members = this.live().filter(member => member.status !== "stopping");
+    const next = {
+      busy: members.some(member => member.status === "starting" || member.status === "busy"),
+      blocked: members.some(member => member.needsInput),
+    };
+    for (const kind of ["busy", "blocked"] as const) if (next[kind] !== this.status[kind]) {
+      this.status[kind] = next[kind];
+      this.options.status?.(kind, next[kind]);
+    }
+  }
   recordEvent(actor: string, value: unknown): void {
     validate("event", value);
     if (this.closed) return;
-    const event = value as { type: string; text?: string; model?: string; modelName?: string; contextUsage?: ContextUsage | null };
+    const event = value as { type: string; active?: boolean; text?: string; model?: string; modelName?: string; contextUsage?: ContextUsage | null };
     const member = this.store.state.members[actor];
     if (!member || !isLive(member) || (member.status === "stopping" && event.type !== "model_error")) return;
     this.store.update(next => {
       const current = next.members[actor];
-      if (event.type === "telemetry") {
+      if (event.type === "blocked") { if (event.active) current.needsInput = true; else delete current.needsInput; }
+      else if (event.type === "telemetry") {
         current.model = event.model ?? current.model;
         current.modelName = event.modelName;
         current.contextUsage = event.contextUsage ?? undefined;
       }
       else if (event.type === "agent_start") { current.status = "busy"; current.activity = "Working"; delete current.error; delete current.summary; }
-      else if (event.type === "agent_settled") { current.status = "idle"; current.activity = current.error ? "Model request failed" : current.summary || "Available for follow-up"; }
+      else if (event.type === "agent_settled") { delete current.needsInput; current.status = "idle"; current.activity = current.error ? "Model request failed" : current.summary || "Available for follow-up"; }
       else if (event.type === "activity") current.activity = event.text;
       else if (event.type === "summary") current.summary = event.text?.slice(0, 500);
       else if (event.type === "model_error") current.error = event.text || "Model request failed";
     });
+    this.publishStatus();
     if (event.type === "model_error" && actor !== "root" && member.status !== "stopping") {
       const recipient = member.parent && isLive(this.store.state.members[member.parent]) ? member.parent : "root";
       this.store.message(actor, { action: "send", recipients: [recipient], text: `Member ${actor} model error: ${event.text || "Model request failed"}` });
@@ -307,6 +329,7 @@ export class Coordinator {
     const member: Member = resumed ? { ...resumed, token: randomUUID(), status: "starting", error: undefined, contextUsage: undefined, modelName: undefined } : { id, name: args.name, parent: actor, depth, token: randomUUID(), cwd, status: "starting", notified: 0 };
     // Reserve synchronously before the first await so concurrent launches cannot oversubscribe.
     this.store.update(next => { next.members[id] = member; });
+    this.publishStatus();
     member.model = args.model; member.thinking = args.thinking ?? "off";
     member.terminal = this.options.interactive === true;
     this.store.update(next => { next.members[id] = member; });
@@ -330,7 +353,7 @@ export class Coordinator {
       chmodSync(join(this.store.dir, "sessions"), 0o700);
       const rpcArgs = [...(this.options.interactive ? [] : ["--mode", "rpc"]), "--session-dir", join(this.store.dir, "sessions"), "-e", this.options.extension, "--provider", args.model.slice(0, slash), "--model", args.model.slice(slash + 1), "--thinking", args.thinking ?? "off"];
       if (resumed?.sessionFile) rpcArgs.push("--session", resumed.sessionFile);
-      const spawnOptions = { cwd: member.cwd, args: rpcArgs, command: this.options.command, env: { ...process.env, AC_TEAMS_SOCKET: this.socketPath, AC_TEAMS_MEMBER: id, AC_TEAMS_TOKEN: member.token, AC_TEAMS_TERMINAL_SOCKET: join(this.store.dir, "t.sock") } };
+      const spawnOptions = { cwd: member.cwd, args: rpcArgs, command: this.options.command, env: { ...process.env, HERDR_ENV: "0", AC_TEAMS_SOCKET: this.socketPath, AC_TEAMS_MEMBER: id, AC_TEAMS_TOKEN: member.token, AC_TEAMS_TERMINAL_SOCKET: join(this.store.dir, "t.sock") } };
       agent = this.options.interactive
         ? new TerminalAgent({ ...spawnOptions, id, dir: this.store.dir, request: (type, fields, timeout) => this.control(id, type, fields, timeout) })
         : new RpcAgent(spawnOptions);
@@ -349,7 +372,8 @@ export class Coordinator {
       agent.once("exit", () => {
         this.agents.delete(id);
         if (this.closed) return;
-        this.store.update(next => { next.members[id].status = next.members[id].status === "stopping" ? "stopped" : "interrupted"; });
+        this.store.update(next => { next.members[id].status = next.members[id].status === "stopping" ? "stopped" : "interrupted"; delete next.members[id].needsInput; });
+        this.publishStatus();
         void this.stopDescendants(id).catch(error => this.options.warning(String(error)));
       });
       if (agent instanceof TerminalAgent) await agent.start();
@@ -363,12 +387,14 @@ export class Coordinator {
       if (!isRecord(rpcState) || !isRecord(rpcState.model) || rpcState.model.provider !== args.model.slice(0, slash) || rpcState.model.id !== args.model.slice(slash + 1)) throw new Error("Pi did not select the requested model");
       if (rpcState.model.name !== undefined || rpcState.contextUsage !== undefined) this.recordEvent(id, { type: "telemetry", model: args.model, modelName: rpcState.model.name, contextUsage: rpcState.contextUsage ?? null });
       this.store.update(next => { if (next.members[id].status === "starting") next.members[id].status = prompt ? "busy" : "idle"; });
+      this.publishStatus();
       if (prompt) await agent.request("prompt", { message: args.brief, streamingBehavior: "followUp" });
       return this.publicMember(this.store.state.members[id]);
     } catch (error) {
       clearTimeout(timer); this.ready.delete(id);
       if (agent) await agent.stop();
-      this.store.update(next => { next.members[id].status = "interrupted"; next.members[id].error = error instanceof Error ? error.message : "Startup failed"; });
+      this.store.update(next => { next.members[id].status = "interrupted"; delete next.members[id].needsInput; next.members[id].error = error instanceof Error ? error.message : "Startup failed"; });
+      this.publishStatus();
       throw error;
     }
   }
@@ -379,7 +405,8 @@ export class Coordinator {
   private async stopOne(id: string): Promise<void> {
     const member = this.store.state.members[id];
     if (!isLive(member)) return;
-    this.store.update(next => { next.members[id].status = "stopping"; });
+    this.store.update(next => { next.members[id].status = "stopping"; delete next.members[id].needsInput; });
+    this.publishStatus();
     const agent = this.agents.get(id);
     if (agent) await agent.stop();
     else if (member.pid && processAlive(member.pid, member.identity)) throw new Error("No owned transport for live process; refusing to kill by PID");
