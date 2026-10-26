@@ -15,10 +15,12 @@
   "engines": { "node": ">=22.19.0" },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "^1.4.0",
+    "@earendil-works/pi-tui": "^1.4.0",
     "typebox": "^1.0.0"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-tui": "1.4.0",
     "@types/node": "^22.0.0",
     "typebox": "^1.0.0",
     "typescript": "^5.9.0"
