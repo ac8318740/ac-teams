@@ -1,6 +1,11 @@
 name: Stage npm release
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - package.json
+      - .github/workflows/publish-npm.yml
   workflow_dispatch:
 
 permissions:
@@ -55,5 +60,18 @@ jobs:
             echo "${name}@${version} is already published; nothing to stage."
             exit 0
           fi
-          npm stage publish . --access public --provenance
-          echo "Approve ${name}@${version} on npmjs.com with 2FA to publish."
+          log="$(mktemp)"
+          trap 'rm -f "$log"' EXIT
+          if npm stage publish . --access public --provenance \
+            2>&1 | tee "$log"; then
+            echo "Approve ${name}@${version} on npmjs.com with 2FA to publish."
+            exit 0
+          else
+            status=$?
+          fi
+          if grep -q "Version uniqueness check failed unexpectedly" "$log"; then
+            echo "${name}@${version} appears to be staged already."
+            echo "Approve it on npmjs.com with 2FA to publish."
+            exit 0
+          fi
+          exit "$status"
