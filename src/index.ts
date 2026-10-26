@@ -10,7 +10,7 @@ import { showTeamsPanel } from "./panel.ts";
 import { teamToolRenderers, renderTeamMessage, cleanText } from "./render.ts";
 import { join } from "node:path";
 import { Coordinator, assistantEvent, taskRequestGuidance } from "./coordinator.ts";
-import { Connection } from "./connection.ts";
+import { Connection, isRecord } from "./connection.ts";
 import { policy, readDisplaySettings, defaultDisplaySettings } from "./config.ts";
 
 export default function teams(pi: ExtensionAPI) {
@@ -27,6 +27,7 @@ export default function teams(pi: ExtensionAPI) {
   let exiting = false;
   let disposeUI: (() => void) | undefined;
   let telemetryTimer: NodeJS.Timeout | undefined;
+  let inputCount = 0;
   const drafts = new Map<string, string>();
   const display = { ...defaultDisplaySettings };
   const self = environment[1] ?? "root";
@@ -44,8 +45,14 @@ export default function teams(pi: ExtensionAPI) {
       id: ctx.sessionManager.getSessionId(), cwd: ctx.cwd, sessionFile: ctx.sessionManager.getSessionFile(),
       ...policy(ctx.cwd, pi.getFlag("teams-project-config") === true, { limit: pi.getFlag("teams-limit") as string | undefined, depth: pi.getFlag("teams-depth") as string | undefined }),
       extension: fileURLToPath(import.meta.url), notice: notify, warning: warn,
+      status: (kind, active) => pi.events.emit(`herdr:${kind}`, { active, source: "ac-teams" }),
       interactive: ctx.mode === "tui", model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined, thinking: pi.getThinkingLevel(),
-    }).then(value => { coordinator = value; return value; }, error => { opening = undefined; throw error; });
+    }).then(value => {
+      coordinator = value;
+      if (ctx.isIdle?.() === false) value.recordEvent("root", { type: "agent_start" });
+      if (inputCount > 0) value.recordEvent("root", { type: "blocked", active: true });
+      return value;
+    }, error => { opening = undefined; throw error; });
     return opening;
   }
   async function handle(operation: "agent" | "task" | "message", value: unknown, ctx: ExtensionContext): Promise<unknown> {
@@ -71,7 +78,7 @@ export default function teams(pi: ExtensionAPI) {
     return (await root(ctx)).handle("root", operation, args, authorized);
   }
   async function snapshot(ctx: ExtensionContext): Promise<TeamSnapshot> {
-    if (!child && !opening) return { members: [{ id: "root", cwd: ctx.cwd, depth: 0, status: ctx.isIdle() ? "idle" : "busy", notified: 0 }], tasks: [], messages: [], limit: 10, depth: 2 };
+    if (!child && !opening) return { members: [{ id: "root", cwd: ctx.cwd, depth: 0, status: ctx.isIdle() ? "idle" : "busy", notified: 0, needsInput: inputCount > 0 }], tasks: [], messages: [], limit: 10, depth: 2 };
     const status = await handle("agent", { action: "list" }, ctx) as Pick<TeamSnapshot, "members" | "limit" | "depth"> & { lastMessage: number };
     const tasks: TaskView[] = [];
     let total = 0;
@@ -106,7 +113,7 @@ export default function teams(pi: ExtensionAPI) {
     };
     return api;
   }
-  function report(ctx: ExtensionContext, event: { type: string; text?: string }) {
+  function report(ctx: ExtensionContext, event: { type: string; text?: string; active?: boolean }) {
     if (exiting) return;
     if (child && ctx.mode === "tui") void connection?.request("event", event).catch(error => warn(cleanText(String(error))));
     else if (!child) coordinator?.recordEvent("root", event);
@@ -130,8 +137,18 @@ export default function teams(pi: ExtensionAPI) {
     telemetryTimer.unref();
     void publish();
   }
+  pi.events.on("herdr:blocked", (data: unknown) => {
+    // Main already receives this signal locally; relay only across the team socket.
+    if (!isRecord(data) || typeof data.active !== "boolean" || data.source === "ac-teams") return;
+    inputCount = Math.max(0, inputCount + (data.active ? 1 : -1));
+    if (context) {
+      const event = { type: "blocked", active: inputCount > 0 };
+      if (child) void connection?.request("event", event).catch(error => warn(cleanText(String(error))));
+      else coordinator?.recordEvent("root", event);
+    }
+  });
   pi.on("agent_start", (_event, ctx) => report(ctx, { type: "agent_start" }));
-  pi.on("agent_settled", (_event, ctx) => report(ctx, { type: "agent_settled" }));
+  pi.on("agent_settled", (_event, ctx) => { inputCount = 0; report(ctx, { type: "agent_settled" }); });
   pi.on("tool_execution_start", (event, ctx) => report(ctx, { type: "activity", text: `Running ${event.toolName}`.slice(0, 500) }));
   pi.on("message_end", (event, ctx) => {
     const change = assistantEvent(event.message);
@@ -169,7 +186,7 @@ export default function teams(pi: ExtensionAPI) {
   }
   pi.on("session_start", async (_event, ctx) => {
     if (!child && coordinator && coordinator.store.state.id !== ctx.sessionManager.getSessionId()) { await close(); drafts.clear(); }
-    context = ctx; exiting = false;
+    context = ctx; exiting = false; inputCount = 0;
     if (child) {
       if (environment.some(value => !value)) throw new Error("Incomplete AC_TEAMS membership environment; refusing independent-root fallback");
       connection = new Connection(environment[0]!, environment[1]!, environment[2]!);

@@ -14,6 +14,10 @@ In interactive Pi, `/teams` or `/teams panel` opens the team panel. `/teams team
 
 The agent selector sits below the input editor, above the existing footer. It shows each member's name, state, model display name, and context usage. It keeps Main pinned and shows at most five rows, including an overflow indicator when needed. A finished assignment leaves its member idle and selectable.
 
+A red **Needs input** label beside a member's name marks an open question. Open that member's Pi session to answer it. Ctrl+Shift+Left returns to Main without dismissing the question.
+
+With Herdr's Pi integration and the question adapter installed, Main reports the team's status through the shared event bus. Any open question keeps Herdr blocked; otherwise, active work keeps it working. When all members settle, it becomes idle. Members do not report directly to the shared Herdr pane.
+
 Context shows Pi's reported token estimate, window size, and percentage, for example `Claude Opus 4.6 · 48k / 200k (24%)`. Reports refresh about once a second when they change. Unknown usage stays marked unknown, not zero. Stopped members retain their last report. These are context estimates, not billing totals.
 
 - Press Down from an empty editor to focus Main in the agent selector. Up/Down select members; Enter opens the selected live session; Esc returns to editing.

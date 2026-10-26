@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { once } from "node:events";
 import { Store, processAlive, processIdentity } from "../src/store.ts";
 import type { TeamState, Task, Message } from "../src/types.ts";
 
@@ -108,6 +109,43 @@ test("paths and process locks fail closed", t => {
   writeFileSync(join(store.dir, "owner.lock"), "uncertain", { mode: 0o600 });
   assert.throws(() => new Store(initial(), home));
   assert.equal(readFileSync(join(store.dir, "owner.lock"), "utf8"), "uncertain");
+});
+
+test("an exited but unreaped process is not alive or an owned signal target", { timeout: 10000 }, async () => {
+  const parent = spawn(process.execPath, ["-e", `
+    const child = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
+    child.once('exit', () => process.exit(0));
+    console.log(child.pid);
+  `], { stdio: ["ignore", "pipe", "inherit"] });
+  const exited = once(parent, "exit");
+  let pid: number | undefined;
+  try {
+    const [output] = await once(parent.stdout!, "data");
+    pid = Number(String(output).trim());
+    const identity = processIdentity(pid);
+    assert.ok(identity);
+    assert.equal(processAlive(pid, identity), true);
+    parent.kill("SIGSTOP");
+    // Wait until the parent cannot reap its child, reproducing tmux's zombie leader.
+    for (let i = 0; i < 200; i++) {
+      if (readFileSync(`/proc/${parent.pid}/stat`, "utf8").split(") ")[1].startsWith("T ")) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.match(readFileSync(`/proc/${parent.pid}/stat`, "utf8").split(") ")[1], /^T /);
+    process.kill(pid, "SIGKILL");
+    for (let i = 0; i < 200; i++) {
+      if (readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1].startsWith("Z ")) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.match(readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1], /^Z /);
+    assert.equal(processAlive(pid), false);
+    assert.equal(processAlive(pid, identity), false);
+    assert.equal(processIdentity(pid), undefined);
+  } finally {
+    if (pid && processAlive(pid)) process.kill(pid, "SIGKILL");
+    parent.kill("SIGCONT");
+    await exited;
+  }
 });
 
 test("a dead owner is recovered without losing its task claims", t => {

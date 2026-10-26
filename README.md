@@ -7,7 +7,7 @@ Persistent agent teams for [Pi](https://github.com/earendil-works/pi): shared ta
 Requires Linux, Node 22.19 or newer, and an authenticated `pi` executable on `PATH`. Interactive teams also require `tmux` on `PATH`. Tested with Pi 1.4.0.
 
 ```sh
-pi install npm:ac-teams@0.0.2
+pi install npm:ac-teams@0.0.4
 ```
 
 Restart Pi after installation. Use Pi's `/trust` command to save approval for each project directory before launching members there; headless children cannot answer the initial trust prompt.
@@ -28,7 +28,7 @@ Your Pi session is the root; its child agents are members. Ask Pi to delegate a 
 
 The task summary sits above the input. The agent selector sits below the input, above your existing footer, and shows descriptive names, models, and context usage. ac-teams publishes a compact team status without replacing the footer or editor supplied by other extensions. `/teams config` toggles these displays independently.
 
-From an empty editor, press Down to select the team row, then Enter to open a member. Ctrl+Shift+Left returns to Main without stopping the member. `/teams stop` stops every descendant.
+From an empty editor, press Down to select the team row, then Enter to open a member. A red **Needs input** label marks a member with an open question. Ctrl+Shift+Left returns to Main without stopping the member or dismissing its question. `/teams stop` stops every descendant.
 
 Defaults allow up to **10 live members** and **two levels of delegation**. Use the fewest useful agents.
 

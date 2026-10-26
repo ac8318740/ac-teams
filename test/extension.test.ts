@@ -5,6 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import teams from "../src/index.ts";
@@ -22,7 +23,9 @@ function fixture() {
   const flags = new Map<string, unknown>();
   const warnings: string[] = [], messages: unknown[] = [];
   let approval = false, confirmations = 0;
+  const events = new EventEmitter();
   const api = {
+    events,
     registerFlag() {}, registerCommand(name: string, command: { handler(args: string, ctx: ExtensionToolContext): Promise<void> }) { commands.set(name, command); }, registerMessageRenderer() {},
     registerTool(tool: ToolDefinition) { tools.set(tool.name, tool); },
     on(name: string, handler: (...args: unknown[]) => unknown) { handlers.set(name, handler); },
@@ -43,7 +46,7 @@ function fixture() {
   async function execute(name: string, args: unknown) {
     return (await tools.get(name)!.execute(randomUUID(), args, new AbortController().signal, undefined, ctx)).details;
   }
-  return { ctx, flags, warnings, messages, tools, commands, execute, approve(value: boolean) { approval = value; }, get confirmations() { return confirmations; },
+  return { ctx, flags, warnings, messages, tools, commands, execute, events, approve(value: boolean) { approval = value; }, get confirmations() { return confirmations; },
     async event(name: string) { return handlers.get(name)?.({ type: name }, ctx); },
     async close() {
       try { await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, ctx); }
@@ -51,6 +54,25 @@ function fixture() {
     },
   };
 }
+
+test("Main's question marker follows balanced attention signals without counting teammate relays twice", async () => {
+  const f = fixture();
+  const root = async () => (await f.execute("team_agent", { action: "list" }) as { members: { id: string; needsInput?: boolean }[] }).members.find(member => member.id === "root")!;
+  try {
+    await f.event("session_start");
+    f.events.emit("herdr:blocked", { active: true });
+    assert.equal((await root()).needsInput, true, "question opened before the team coordinator");
+    f.events.emit("herdr:blocked", { active: true });
+    f.events.emit("herdr:blocked", { active: false });
+    assert.equal((await root()).needsInput, true);
+    f.events.emit("herdr:blocked", { active: true, source: "ac-teams" });
+    f.events.emit("herdr:blocked", { active: false });
+    assert.equal((await root()).needsInput, undefined, "answer/cancel clears Main's marker despite a teammate relay");
+    f.events.emit("herdr:blocked", { active: true });
+    await f.event("agent_settled");
+    assert.equal((await root()).needsInput, undefined);
+  } finally { await f.close(); }
+});
 
 test("extension coexistence warns, tools inherit model, and native pre-exit cancellation preserves live members", async () => {
   const f = fixture();

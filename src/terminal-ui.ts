@@ -122,13 +122,18 @@ export function installTeamFooter(_pi: ExtensionAPI, ctx: ExtensionContext, host
           const status = member?.status === "busy" ? "working" : member?.status ?? "idle";
           const metrics = id === host.self ? readTelemetry(ctx) : member ?? {};
           const title = id === "root" ? "main" : memberName(member ?? { id });
-          const description = `${title}  ${id === "root" ? "" : status + " · "}${modelContext(metrics)}${assigned ? ` · ${taskName(assigned)}` : ""}${member?.error || member?.activity ? ` · ${member.error || member.activity}` : ""}`;
-          return theme.fg(selected === id || host.self === id ? "accent" : "muted", `${selected === id ? ">" : " "} ${host.self === id ? "●" : "○"} ${cleanText(description).replaceAll("\n", " ")}`);
+          const color = selected === id || host.self === id ? "accent" : "muted";
+          const titleRow = theme.fg(color, `${selected === id ? ">" : " "} ${host.self === id ? "●" : "○"} ${cleanText(title).replaceAll("\n", " ")}`);
+          const attention = member?.needsInput ? theme.fg("error", " · Needs input") : "";
+          const description = `  ${id === "root" ? "" : status + " · "}${modelContext(metrics)}${assigned ? ` · ${taskName(assigned)}` : ""}${member?.error || member?.activity ? ` · ${member.error || member.activity}` : ""}`;
+          return titleRow + attention + theme.fg(color, cleanText(description).replaceAll("\n", " "));
         };
         const peers = ids().slice(1);
-        return (display.agents ? [row("root"), ...peers.slice(start, start + slots()).map(row),
-          ...(peers.length > 4 ? [theme.fg("dim", `  ↑ ${start} above · ↓ ${Math.max(0, peers.length - start - slots())} below`)] : [])] : []
-        ).map(line => truncateToWidth(line, width));
+        return [
+          ...(host.self !== "root" ? [theme.fg("dim", "Ctrl+Shift+Left: Main (keeps questions open)")] : []),
+          ...(display.agents ? [row("root"), ...peers.slice(start, start + slots()).map(row),
+            ...(peers.length > 4 ? [theme.fg("dim", `  ↑ ${start} above · ↓ ${Math.max(0, peers.length - start - slots())} below`)] : [])] : []),
+        ].map(line => truncateToWidth(line, width));
       },
       invalidate() {},
     };
