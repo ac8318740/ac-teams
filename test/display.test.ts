@@ -51,7 +51,9 @@ test("team widgets and status preserve other footers and statuses through toggle
   const settings = { tasks: true, agents: true };
   const host: PanelHost = { self: "root", drafts: new Map(), snapshot: async () => {
     refreshes++;
-    return { members: [{ id: "worker", name: "reviewer", cwd: "/trial", depth: 1, status: "busy", notified: 0, needsInput }], tasks: [task(1, { status: "in_progress" })], messages: [], limit: 10, depth: 2 };
+    return { members: [{ id: "worker", name: "reviewer", cwd: "/trial", depth: 1, status: "busy", notified: 0, needsInput },
+      ...Array.from({ length: 5 }, (_, i) => ({ id: `stopped-${i}`, cwd: "/trial", depth: 1, status: "stopped" as const, notified: 0 })),
+      { id: "interrupted", cwd: "/trial", depth: 1, status: "interrupted", notified: 0 }], tasks: [task(1, { status: "in_progress" })], messages: [], limit: 10, depth: 2 };
   }, visit: async () => {}, resume: async () => {}, requestTask: async () => "", feedback: async () => "" };
   const ctx = { cwd: "/trial", model: { id: "fixture" }, getContextUsage: () => ({ tokens: 20000, contextWindow: 100000, percent: 20 }), ui: {
     setWidget(key: string, factory: Function | undefined, options?: { placement: string }) {
@@ -74,13 +76,19 @@ test("team widgets and status preserve other footers and statuses through toggle
   assert.equal(widgets.get("ac-teams-agents")!.placement, "belowEditor");
   assert.match(rows("ac-teams-tasks").join("\n"), /Tasks 0\/1 done/);
   assert.match(text(), /● main/);
+  assert.equal(rows("ac-teams-agents").length, 2, "stopped and interrupted agents do not occupy rows or scroll slots");
+  assert.doesNotMatch(text(), /stopped|interrupted|above|below/);
   assert.ok(!text().includes("20.0% context"), "do not duplicate the existing footer");
   assert.equal(statuses.get("ac-teams"), "Teams 2 agents · 1 working · 0/1 tasks done");
   for (const width of [1, 15, 30]) assert.ok(rows("ac-teams-agents", width).every(row => visibleWidth(row) <= width));
   assert.match(text(), /reviewer · Needs input/);
   assert.ok(!text().includes("Ctrl+Shift+Left"), "Main does not need a return shortcut");
   host.self = "worker";
-  assert.match(text(), /Ctrl\+Shift\+Left: Main \(keeps questions open\)/);
+  assert.match(rows("ac-teams-agents")[0], /○ main \[Ctrl\+Shift\+Left\]/);
+  assert.equal(rows("ac-teams-agents").length, 2, "shortcut shares Main's row rather than adding a line");
+  const narrowMain = rows("ac-teams-agents", 32)[0];
+  assert.match(narrowMain, /main \[Ctrl\+Shift\+Left\].*\.\.\.$/, "truncate details after the shortcut");
+  assert.ok(visibleWidth(narrowMain) <= 32);
   host.self = "root";
   assert.ok(widgets.get("ac-teams-agents")!.component.render(100).join("\n").includes("\x1b[31m · Needs input"), "attention stays red beside the agent name");
   needsInput = false;
@@ -99,7 +107,8 @@ test("team widgets and status preserve other footers and statuses through toggle
   assert.deepEqual(rows("ac-teams-tasks"), []); assert.deepEqual(rows("ac-teams-agents"), []);
   assert.ok(!statuses.has("ac-teams"));
   host.self = "worker";
-  assert.match(text(), /Ctrl\+Shift\+Left: Main/, "return hint remains when the agent list is hidden");
+  assert.match(text(), /main \[Ctrl\+Shift\+Left\]/, "return hint remains when the agent list is hidden");
+  assert.equal(rows("ac-teams-agents").length, 1);
   host.self = "root";
   settings.agents = true;
   await refresh();
@@ -113,6 +122,8 @@ test("team widgets and status preserve other footers and statuses through toggle
 });
 
 test("agent navigation composes with the active editor and cleanup respects later replacements", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let stopped = false;
   type Factory = NonNullable<ReturnType<ExtensionContext["ui"]["getEditorComponent"]>>;
   const inputs: string[] = [], visits: string[] = [];
   let text = "", autocomplete = false;
@@ -129,7 +140,9 @@ test("agent navigation composes with the active editor and cleanup respects late
   const previous: Factory = () => customEditor;
   let active: Factory | undefined = previous;
   const host: PanelHost = { self: "root", drafts: new Map(), snapshot: async () => ({
-    members: [{ id: "peer", parent: "root", name: "peer", cwd: "/trial", depth: 1, status: "idle", createdAt: 0, notified: 0 }], tasks: [], messages: [], limit: 10, depth: 2,
+    members: [{ id: "old", cwd: "/trial", depth: 1, status: "stopped", notified: 0 },
+      { id: "peer", parent: "root", name: "peer", cwd: "/trial", depth: 1, status: stopped ? "stopped" : "idle", createdAt: 0, notified: 0 },
+      { id: "interrupted", cwd: "/trial", depth: 1, status: "interrupted", notified: 0 }], tasks: [], messages: [], limit: 10, depth: 2,
   }), visit: async id => { visits.push(id); }, resume: async () => {}, requestTask: async () => "", feedback: async () => "" };
   const ctx = { cwd: "/trial", ui: {
     getEditorComponent: () => active,
@@ -161,8 +174,22 @@ test("agent navigation composes with the active editor and cleanup respects late
   editor.handleInput("\x1b[B"); editor.handleInput("\r");
   assert.deepEqual(visits, ["peer"]);
   assert.equal(customEditor.focused, true);
+  host.self = "peer";
+  editor.handleInput("\x1bOB"); editor.handleInput("\r");
+  assert.deepEqual(visits, ["peer", "root"], "teammate prompt can select Main with tmux's application-cursor Down");
+  editor.handleInput("\x1b[B"); editor.handleInput("\x1b[B"); editor.handleInput("\r");
+  assert.equal(visits.at(-1), "peer", "the full list remains navigable from a teammate");
   editor.handleInput("\x1b[B"); editor.handleInput("x");
   assert.equal(inputs.at(-1), "x", "typing exits selector and reaches the custom editor");
+  editor.handleInput("\x1b[B"); editor.handleInput("\x1b[B");
+  assert.equal(customEditor.focused, false);
+  stopped = true;
+  t.mock.timers.tick(1000); await tick();
+  assert.equal(customEditor.focused, true, "stopping the selected agent restores prompt focus");
+  stopped = false;
+  t.mock.timers.tick(1000); await tick();
+  editor.handleInput("\x1b[B"); editor.handleInput("\x1b[B"); editor.handleInput("\r");
+  assert.equal(visits.at(-1), "peer", "resumed agents return to navigation");
   settings.agents = false;
   editor.handleInput("\x1b[B");
   assert.equal(inputs.at(-1), "\x1b[B");

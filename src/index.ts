@@ -211,17 +211,19 @@ export default function teams(pi: ExtensionAPI) {
       await connection.open();
       await connection.request("join", { sessionId: ctx.sessionManager.getSessionId(), sessionFile: ctx.sessionManager.getSessionFile(), tools: pi.getAllTools().map(tool => tool.name), trusted: ctx.isProjectTrusted() });
     }
-    if (ctx.mode === "tui") {
-      try { Object.assign(display, readDisplaySettings()); }
-      catch (error) { Object.assign(display, defaultDisplaySettings); warn(String(error)); }
-      disposeUI?.(); disposeUI = installTeamFooter(pi, ctx, host(ctx), display);
-    }
     startTelemetry(ctx);
     if (!warned) {
       warned = true;
       const competitors = pi.getAllTools().filter(tool => ["Agent", "SubagentWorkflow", "subagent"].includes(tool.name));
       if (competitors.length) warn(`Other delegation tools are active (${competitors.map(tool => tool.name).join(", ")}). ac-teams limits do not cover them; disable competing launchers for a single team authority.`);
     }
+  });
+  // CLI-loaded teammates run session_start before other extensions install their editors.
+  pi.on("resources_discover", (_event, ctx) => {
+    if (ctx.mode !== "tui") return;
+    try { Object.assign(display, readDisplaySettings()); }
+    catch (error) { Object.assign(display, defaultDisplaySettings); warn(String(error)); }
+    disposeUI?.(); disposeUI = installTeamFooter(pi, ctx, host(ctx), display);
   });
   pi.on("session_shutdown", close);
   const switchGuard = () => {
