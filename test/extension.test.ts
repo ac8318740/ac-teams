@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI, ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import teams from "../src/index.ts";
 import { taskRequestGuidance } from "../src/coordinator.ts";
 
@@ -54,6 +54,44 @@ function fixture() {
     },
   };
 }
+
+test("team navigation wraps editors installed by later session_start handlers", async () => {
+  const f = fixture();
+  type Factory = NonNullable<ReturnType<ExtensionContext["ui"]["getEditorComponent"]>>;
+  const inputs: string[] = [];
+  const editor = {
+    focused: true, getText: () => "", setText() {},
+    handleInput(input: string) { inputs.push(input); },
+    render: () => ["inline slash editor"], invalidate() {},
+  };
+  const previous: Factory = () => editor;
+  let active: Factory | undefined;
+  Object.assign(f.ctx, { mode: "tui" });
+  Object.assign(f.ctx.ui, {
+    getEditorComponent: () => active,
+    setEditorComponent(factory: Factory | undefined) { active = factory; },
+    setWidget() {}, setStatus() {},
+  });
+  try {
+    await f.event("session_start");
+    // CLI-loaded ac-teams runs before the installed inline slash editor in teammates.
+    active = previous;
+    await f.event("resources_discover");
+    assert.notEqual(active, previous, "install navigation after all startup editors");
+    // SAFETY: the predecessor factory ignores the TUI, theme, and keybindings arguments.
+    const args = [{ requestRender() {} }, {}, {}] as unknown as Parameters<Factory>;
+    const current = active!(...args);
+    assert.equal(current, editor, "preserve the later editor and its input handling");
+    current.handleInput("/");
+    assert.deepEqual(inputs, ["/"]);
+    current.handleInput("\x1b[B");
+    assert.equal(editor.focused, false, "Down enters the agent selector");
+    current.handleInput("\x1b[A");
+    assert.equal(editor.focused, true, "Up returns to the prompt");
+    await f.event("session_shutdown");
+    assert.equal(active, previous, "shutdown restores the other extension's editor");
+  } finally { await f.close(); }
+});
 
 test("Main's question marker follows balanced attention signals without counting teammate relays twice", async () => {
   const f = fixture();
