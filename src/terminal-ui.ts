@@ -94,7 +94,7 @@ export function installTeamFooter(_pi: ExtensionAPI, ctx: ExtensionContext, host
       }
       const next = await host.snapshot();
       if (disposed) return;
-      members = next.members; tasks = next.tasks;
+      members = next.members.filter(isLive); tasks = next.tasks;
       const count = ids().length;
       ctx.ui.setStatus("ac-teams", `Teams ${[
         ...(display.agents ? [`${count} ${count === 1 ? "agent" : "agents"}`, `${members.filter(member => member.status === "busy").length} working`] : []),
@@ -126,14 +126,15 @@ export function installTeamFooter(_pi: ExtensionAPI, ctx: ExtensionContext, host
           const titleRow = theme.fg(color, `${selected === id ? ">" : " "} ${host.self === id ? "●" : "○"} ${cleanText(title).replaceAll("\n", " ")}`);
           const attention = member?.needsInput ? theme.fg("error", " · Needs input") : "";
           const description = `  ${id === "root" ? "" : status + " · "}${modelContext(metrics)}${assigned ? ` · ${taskName(assigned)}` : ""}${member?.error || member?.activity ? ` · ${member.error || member.activity}` : ""}`;
-          return titleRow + attention + theme.fg(color, cleanText(description).replaceAll("\n", " "));
+          const shortcut = id === "root" && host.self !== "root" ? theme.fg("dim", " [Ctrl+Shift+Left]") : "";
+          return titleRow + shortcut + attention + theme.fg(color, cleanText(description).replaceAll("\n", " "));
         };
         const peers = ids().slice(1);
         return [
-          ...(host.self !== "root" ? [theme.fg("dim", "Ctrl+Shift+Left: Main (keeps questions open)")] : []),
           ...(display.agents ? [row("root"), ...peers.slice(start, start + slots()).map(row),
-            ...(peers.length > 4 ? [theme.fg("dim", `  ↑ ${start} above · ↓ ${Math.max(0, peers.length - start - slots())} below`)] : [])] : []),
-        ].map(line => truncateToWidth(line, width));
+            ...(peers.length > 4 ? [theme.fg("dim", `  ↑ ${start} above · ↓ ${Math.max(0, peers.length - start - slots())} below`)] : [])] :
+            host.self !== "root" ? [row("root")] : []),
+        ].map(line => truncateToWidth(line, width, "..."));
       },
       invalidate() {},
     };
