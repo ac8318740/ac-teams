@@ -186,10 +186,23 @@ test("raising the root ceiling requires explicit host confirmation", async () =>
   } finally { await f.close(); }
 });
 
-test("task tool guidelines require proposal review before task mutations", async () => {
+test("team tools guide task-backed delegation without tracking every action", async () => {
   const f = fixture();
-  try { assert.ok(f.tools.get("team_task")!.promptGuidelines!.includes(taskRequestGuidance)); }
-  finally { await f.close(); }
+  try {
+    for (const name of ["team_agent", "team_task"]) {
+      const tool = f.tools.get(name)!;
+      assert.match(tool.description, /delegated deliverables/);
+      const guidelines = tool.promptGuidelines!.join(" ");
+      assert.match(guidelines, /Before delegating a deliverable through team_agent, create or reuse a team_task/);
+      assert.match(guidelines, /include its ID in the member's brief/);
+      assert.match(guidelines, /independently owned outcomes/);
+      assert.match(guidelines, /not create one task per teammate/);
+      assert.match(guidelines, /Skip tasks for quick lookups, clarification, and brief second opinions unless results need coordination or follow-up/);
+      assert.match(guidelines, /owners claim and start/);
+      assert.match(guidelines, /complete it after checking acceptance criteria or report blockers/);
+    }
+    assert.ok(f.tools.get("team_task")!.promptGuidelines!.includes(taskRequestGuidance));
+  } finally { await f.close(); }
 });
 
 test("tool wiring refuses malformed requests and preserves task acceptance checks", async () => {
