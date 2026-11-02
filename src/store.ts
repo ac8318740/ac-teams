@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { stateRoot } from "./config.ts";
 import { validatePolicy } from "./egress.ts";
 import { stripVTControlCharacters } from "node:util";
-import { isDescendant, isLive, memberNamePattern, memberNameMaxLength, taskLabelMaxLength, taskLabelPattern } from "./types.ts";
+import { isDescendant, isLive, isMain, memberNamePattern, memberNameMaxLength, taskLabelMaxLength, taskLabelPattern } from "./types.ts";
 import type { TeamState, TaskArgs, MessageArgs, Task, TaskView, Message, Worktree } from "./types.ts";
 
 // UI envelopes add task context after the public 16,000-character input limit.
@@ -54,7 +54,18 @@ function taskView(state: TeamState, task: Task): TaskView {
 }
 
 function migrate(state: unknown): boolean {
-  if (!object(state) || (state.version !== 1 && state.version !== 2)) return false;
+  if (!object(state) || ![1, 2, 3].includes(state.version as number)) return false;
+  if (state.version !== 3) migrateTasks(state);
+  // Schema 4: roles replace the special root ID; the creator's record becomes a main session.
+  const root = state.root ?? "root";
+  requireValue(object(state.members) && typeof root === "string" && Object.hasOwn(state.members, root), "Invalid legacy root member");
+  for (const [key, member] of Object.entries(state.members)) if (object(member)) member.role = key === root ? "main" : "member";
+  delete state.root;
+  state.key = randomUUID();
+  state.version = 4;
+  return true;
+}
+function migrateTasks(state: Record<string, unknown>): void {
   requireValue(object(state.tasks), "Invalid legacy state tasks");
   let number = 0;
   for (const task of Object.values(state.tasks)) {
@@ -69,14 +80,12 @@ function migrate(state: unknown): boolean {
     task.number = ++number;
     task.label = stripVTControlCharacters(task.title).replace(/[\x00-\x1f\x7f-\x9f]/g, " ").trim().split(/\s+/).slice(0, 3).join(" ").slice(0, taskLabelMaxLength).trim() || "Task";
   }
-  state.version = 3;
-  return true;
 }
 
 function validate(state: unknown): asserts state is TeamState {
   requireValue(object(state), "Invalid state snapshot");
   id(state.id);
-  requireValue(state.version === 3 && text(state.root) && integer(state.limit, 1) && integer(state.depth) && object(state.members) && object(state.tasks) && Array.isArray(state.messages), "Invalid state snapshot schema");
+  requireValue(state.version === 4 && text(state.key) && integer(state.limit, 1) && integer(state.depth) && object(state.members) && object(state.tasks) && Array.isArray(state.messages), "Invalid state snapshot schema");
   const members = state.members;
   const names = new Set<string>(["main", "root", ...Object.keys(members)]);
   for (const [key, member] of Object.entries(members)) {
@@ -91,6 +100,10 @@ function validate(state: unknown): asserts state is TeamState {
       const usage = member.contextUsage;
       requireValue(object(usage) && integer(usage.contextWindow, 1) && (usage.tokens === null || integer(usage.tokens)) && (usage.percent === null || typeof usage.percent === "number" && Number.isFinite(usage.percent) && usage.percent >= 0), "Invalid member context usage");
     }
+    requireValue(member.role === undefined || member.role === "main" || member.role === "member", "Invalid member role");
+    requireValue(member.role !== "main" || member.parent === undefined, "A main session has no parent");
+    requireValue(member.handover === undefined || ["busy", "idle", "input"].includes(String(member.handover)), "Invalid member handover state");
+    requireValue(member.promotion === undefined || (object(member.promotion) && ["stopped", "moved", "role", "entry"].includes(String(member.promotion.step)) && text(member.promotion.sessionFile)), "Invalid member promotion");
     requireValue(member.terminal === undefined || typeof member.terminal === "boolean", "Invalid member terminal flag");
     requireValue(member.needsInput === undefined || typeof member.needsInput === "boolean", "Invalid member input flag");
     requireValue(member.pid === undefined || integer(member.pid, 1), "Invalid member PID");
@@ -105,7 +118,6 @@ function validate(state: unknown): asserts state is TeamState {
       parent = (members[parent] as Record<string, unknown>).parent;
     }
   }
-  requireValue(Object.hasOwn(members, state.root), "Invalid root member");
   const tasks = state.tasks;
   const edges: Record<string, string[]> = {};
   const taskNumbers = new Set<number>();
@@ -156,13 +168,24 @@ function privateFile(path: string, flags: number): number {
   } catch (error) { closeSync(fd); throw error; }
 }
 
+export const teamsHome = () => join(stateRoot(), "teams");
+/** Reads a team snapshot without taking ownership, for sessions that connect to its coordinator as clients. */
+export function readState(dir: string): TeamState {
+  const fd = privateFile(join(dir, "state.json"), constants.O_RDONLY);
+  try {
+    const stored: unknown = JSON.parse(readFileSync(fd, "utf8"));
+    migrate(stored); validate(stored);
+    return stored;
+  } finally { closeSync(fd); }
+}
+
 export class Store {
   readonly dir: string;
   state: TeamState;
   private lock?: number;
   private closed = false;
 
-  constructor(initial: TeamState, home = join(stateRoot(), "teams")) {
+  constructor(initial: TeamState, home = teamsHome()) {
     validate(initial);
     this.dir = join(resolve(home), initial.id);
     this.state = structuredClone(initial);
@@ -299,12 +322,12 @@ export class Store {
       } else if (args.action === "release") {
         requireValue(task.owner, "Task has no owner to release");
         const interrupted = ["interrupted", "stopped"].includes(state.members[task.owner].status);
-        requireValue(task.owner === actor || (interrupted && (actor === state.root || isDescendant(state, task.owner, actor))), "Only the owner can release this task; ancestors may release interrupted descendants");
+        requireValue(task.owner === actor || (interrupted && (isMain(state.members[actor]) || isDescendant(state, task.owner, actor))), "Only the owner can release this task; ancestors may release interrupted descendants");
         if (task.status === "in_progress") task.status = "todo";
         delete task.owner;
       } else if (args.action === "reopen") {
         requireValue(task.status === "done", "Only done tasks can be reopened");
-        requireValue(!task.owner || task.owner === actor || actor === state.root, "Only the owner or root can reopen an owned task");
+        requireValue(!task.owner || task.owner === actor || isMain(state.members[actor]), "Only the owner or a main session can reopen an owned task");
         const dependents = Object.values(state.tasks).filter(other => other.dependencies.includes(task.id) && other.status !== "todo");
         requireValue(dependents.length === 0, `Cannot reopen task with active or done dependents: ${dependents.map(t => t.id).join(", ")}`);
         task.status = "todo";

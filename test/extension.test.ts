@@ -10,6 +10,8 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext, ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import teams from "../src/index.ts";
 import { taskRequestGuidance } from "../src/coordinator.ts";
+import { Store, teamsHome } from "../src/store.ts";
+import { teamEntryType } from "../src/mains.ts";
 
 // SAFETY: this bounded test double implements only the Pi host calls used by the extension.
 function fixture() {
@@ -24,6 +26,8 @@ function fixture() {
   const warnings: string[] = [], messages: unknown[] = [];
   let approval = false, confirmations = 0;
   const events = new EventEmitter();
+  const entries: { type: string; id: string; customType: string; data: unknown }[] = [];
+  let active = ["team_agent", "team_task", "team_message"];
   const api = {
     events,
     registerFlag() {}, registerCommand(name: string, command: { handler(args: string, ctx: ExtensionToolContext): Promise<void> }) { commands.set(name, command); }, registerMessageRenderer() {},
@@ -33,12 +37,14 @@ function fixture() {
     getThinkingLevel() { return "low"; },
     getAllTools() { return [...tools.values(), { name: "Agent" }]; },
     sendMessage(message: unknown) { messages.push(message); },
+    appendEntry(customType: string, data: unknown) { entries.push({ type: "custom", id: randomUUID(), customType, data }); },
+    getActiveTools() { return active; }, setActiveTools(names: string[]) { active = names; },
   };
   // SAFETY: lifecycle and tool callbacks here only access the mocked context fields below.
   const ctx = { cwd: home, mode: "rpc", hasUI: true, model: { provider: "test", id: "model" }, tools: [], executeTool() { throw new Error("Unexpected nested tool"); },
     getContextUsage: () => undefined,
-    sessionManager: { getSessionId: () => id, getSessionFile: () => join(home, "root.jsonl"), getSessionDir: () => home },
-    ui: { notify(message: string) { warnings.push(message); }, async confirm() { confirmations++; return approval; } },
+    sessionManager: { getSessionId: () => id, getSessionFile: () => join(home, "root.jsonl"), getSessionDir: () => home, getEntries: () => entries },
+    ui: { notify(message: string) { warnings.push(message); }, async confirm() { confirmations++; return approval; }, async select(_title: string, options: string[]) { return options[0]; } },
   } as unknown as ExtensionToolContext;
   const id = randomUUID();
   // SAFETY: all called host methods are provided above; registration captures the real callbacks.
@@ -46,7 +52,7 @@ function fixture() {
   async function execute(name: string, args: unknown) {
     return (await tools.get(name)!.execute(randomUUID(), args, new AbortController().signal, undefined, ctx)).details;
   }
-  return { ctx, flags, warnings, messages, tools, commands, execute, events, approve(value: boolean) { approval = value; }, get confirmations() { return confirmations; },
+  return { ctx, id, home, entries, get active() { return active; }, flags, warnings, messages, tools, commands, execute, events, approve(value: boolean) { approval = value; }, get confirmations() { return confirmations; },
     async event(name: string) { return handlers.get(name)?.({ type: name }, ctx); },
     async close() {
       try { await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, ctx); }
@@ -214,5 +220,71 @@ test("tool wiring refuses malformed requests and preserves task acceptance check
     await f.execute("team_message", { action: "send", text: "persisted, with no recipients" });
     const history = await f.execute("team_message", { action: "history" }) as { text: string }[];
     assert.equal(history[0].text, "persisted, with no recipients");
+  } finally { await f.close(); }
+});
+
+/** Writes a team where this session is the main session "second", beside the creator and one stopped member. */
+function seedTeam(f: ReturnType<typeof fixture>, sessionId = f.id) {
+  const team = randomUUID();
+  const store = new Store({ version: 4, id: team, key: randomUUID(), limit: 10, depth: 2, tasks: {}, messages: [], members: {
+    root: { id: "root", role: "main", depth: 0, token: "a", cwd: f.home, status: "stopped", notified: 0, sessionId: randomUUID() },
+    second: { id: "second", name: "main-2", role: "main", depth: 0, token: "b", cwd: f.home, status: "stopped", notified: 0, sessionId },
+    w1: { id: "w1", name: "worker", role: "member", parent: "root", depth: 1, token: "c", cwd: f.home, status: "stopped", notified: 0 },
+  } }, teamsHome());
+  store.close();
+  return team;
+}
+
+test("a resumed main session with no coordinator offers takeover; declining turns team tools off", async () => {
+  const f = fixture();
+  try {
+    const team = seedTeam(f);
+    f.entries.push({ type: "custom", id: "e1", customType: teamEntryType, data: { team, member: "second" } });
+    f.approve(false);
+    await f.event("session_start");
+    assert.equal(f.confirmations, 1);
+    assert.deepEqual(f.active, []);
+    await assert.rejects(f.execute("team_agent", { action: "list" }), /declined to run the team coordinator/);
+  } finally { await f.close(); }
+});
+
+test("accepting takeover runs the coordinator as that main session", async () => {
+  const f = fixture();
+  try {
+    const team = seedTeam(f);
+    f.entries.push({ type: "custom", id: "e1", customType: teamEntryType, data: { team, member: "second" } });
+    f.approve(true);
+    await f.event("session_start");
+    const status = await f.execute("team_agent", { action: "list" }) as { members: { id: string; status: string }[] };
+    assert.equal(status.members.find(member => member.id === "second")?.status, "idle");
+    assert.equal(f.entries.length, 1, "the existing team entry is reused");
+  } finally { await f.close(); }
+});
+
+test("/teams join refuses a session already in that team or leading a team with members", async () => {
+  const f = fixture();
+  try {
+    seedTeam(f);
+    await f.event("session_start");
+    await f.commands.get("teams")!.handler("join", f.ctx);
+    assert.match(f.warnings.at(-1)!, /already in that team/);
+    await f.execute("team_agent", { action: "launch", name: "helper", brief: "hello" });
+    await f.commands.get("teams")!.handler("join", f.ctx);
+    assert.match(f.warnings.at(-1)!, /already in a team with other members/);
+  } finally { await f.close(); }
+});
+
+test("/teams join adds this session as a main session and writes the team entry", async () => {
+  const f = fixture();
+  try {
+    const team = seedTeam(f, randomUUID());
+    await f.event("session_start");
+    await f.commands.get("teams")!.handler("join", f.ctx);
+    const entry = f.entries.at(-1)!;
+    assert.equal(entry.customType, teamEntryType);
+    assert.equal((entry.data as { team: string }).team, team);
+    const status = await f.execute("team_agent", { action: "list" }) as { members: { id: string; role?: string; sessionId?: string }[] };
+    assert.equal(status.members.find(member => member.sessionId === f.id)?.role, "main");
+    assert.match(String((f.messages.at(-1) as { content: string }).content), /Joined team/);
   } finally { await f.close(); }
 });

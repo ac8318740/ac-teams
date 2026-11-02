@@ -1,10 +1,11 @@
 import { createServer, type Server, type Socket } from "node:net";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { chmodSync, closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, lstatSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, lstatSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "node:url";
 import { assertNarrower, assertStableGrants, mountSet, within, containerProblems, dockerCreateArgs, sandboxMounts, maxSandboxed, memberImage, packageRoot, readable, resolveAccess, sandboxStatus, type Access, type SandboxPlan, type SandboxStatus } from "./access.ts";
 import { Egress, egressPort, providerRoutes, type Credentials } from "./egress.ts";
@@ -15,7 +16,8 @@ import { TerminalAgent, tmux } from "./terminal-agent.ts";
 import { authentic, isRecord, readLines, send } from "./connection.ts";
 import { validate } from "./schemas.ts";
 import { createWorktree, removeWorktree } from "./worktrees.ts";
-import { isDescendant, isLive, taskName, type AgentArgs, type Member, type MessageArgs, type TaskArgs, type TeamState, type UserAction, type Message, type ContextUsage } from "./types.ts";
+import { launchMain, mainEnv, teamEntryType, handoverPrompt, type MainLaunch, type TeamEntry } from "./mains.ts";
+import { canControl, isDescendant, isLive, isMain, memberName, taskName, type AgentArgs, type Member, type MessageArgs, type TaskArgs, type TeamState, type UserAction, type Message, type ContextUsage } from "./types.ts";
 
 export const taskRequestGuidance = [
   "Treat user task requests as proposals to assess, not commands to create tasks.",
@@ -34,7 +36,18 @@ export function assistantEvent(message: unknown): { type: string; text: string }
   return text ? { type: "summary", text } : undefined;
 }
 export interface CoordinatorOptions {
+  /** Team ID: the session ID of the session that created the team. */
   id: string; cwd: string; sessionFile?: string; limit: number; depth: number;
+  /** This session's member ID in the team (default "root", the creator); sessionId defaults to the team ID. */
+  self?: string; sessionId?: string;
+  /** Add this session to an existing team as a new main session (/teams join with no coordinator running). */
+  join?: boolean;
+  /** Another main session asked this owner session to shut down. */
+  shutdown?: () => void;
+  /** Test hook: opens a main session's terminal (default: a Herdr tab, else tmux). */
+  launchMain?: (spec: MainLaunch) => Promise<string>;
+  /** Test hook: runs after each recorded promotion step. */
+  promotionStep?: (step: string) => Promise<void> | void;
   extension: string; home?: string; command?: string;
   interactive?: boolean; model?: string; thinking?: string;
   /** Version of the running Pi; members use the image built for it. Defaults to the `pi` on PATH. */
@@ -73,10 +86,13 @@ export class Coordinator {
   private sandbox?: { status: SandboxStatus; at: number };
 
   private options: CoordinatorOptions;
+  /** The main session hosting this coordinator. */
+  readonly self: string;
   private constructor(options: CoordinatorOptions) {
     this.options = options;
-    const root: Member = { id: "root", depth: 0, token: randomUUID(), cwd: options.cwd, status: "idle", notified: 0, sessionId: options.id, sessionFile: options.sessionFile, model: options.model, thinking: options.thinking };
-    const initial: TeamState = { version: 3, id: options.id, root: "root", limit: options.limit, depth: options.depth, members: { root }, tasks: {}, messages: [] };
+    this.self = options.self ?? "root";
+    const root: Member = { id: "root", role: "main", depth: 0, token: randomUUID(), cwd: options.cwd, status: "idle", notified: 0, sessionId: options.id, sessionFile: options.sessionFile, model: options.model, thinking: options.thinking };
+    const initial: TeamState = { version: 4, id: options.id, key: randomUUID(), limit: options.limit, depth: options.depth, members: { root }, tasks: {}, messages: [] };
     this.store = new Store(initial, options.home);
     this.socketPath = join(this.store.dir, "coordinator.sock");
   }
@@ -84,7 +100,7 @@ export class Coordinator {
     const coordinator = new Coordinator(options);
     try {
       for (const member of Object.values(coordinator.store.state.members)) {
-        if (member.id !== "root" && isLive(member) && member.pid && processAlive(member.pid, member.identity)) {
+        if (!isMain(member) && isLive(member) && member.pid && processAlive(member.pid, member.identity)) {
           throw new Error(`Previous member ${member.id} is still live or uncertain; stop it explicitly before recovery`);
         }
       }
@@ -92,19 +108,25 @@ export class Coordinator {
         state.limit = options.limit; state.depth = options.depth;
         const names = new Set(Object.values(state.members).map(member => member.name));
         let number = 0;
+        if (options.join) coordinator.addMain(state, coordinator.self, options.sessionId ?? options.id, options.sessionFile, options.cwd);
+        const self = state.members[coordinator.self];
+        if (!isMain(self)) throw new Error("This session is not a main session of the team");
         for (const member of Object.values(state.members)) if (member.id !== "root" && !member.name) {
           do { number++; } while (names.has(`teammate-${number}`) || Object.hasOwn(state.members, `teammate-${number}`));
           member.name = `teammate-${number}`; names.add(member.name);
         }
-        state.members.root.status = "idle";
-        state.members.root.sessionFile = options.sessionFile;
-        state.members.root.model = options.model;
-        state.members.root.thinking = options.thinking;
+        self.status = "idle"; delete self.error;
+        self.sessionFile = options.sessionFile ?? self.sessionFile;
+        self.model = options.model;
+        self.thinking = options.thinking;
         for (const member of Object.values(state.members)) {
           delete member.needsInput;
-          if (member.id !== "root" && isLive(member)) member.status = "interrupted";
+          // Other main sessions reconnect as clients; until then they are not running here.
+          if (member.id !== coordinator.self && isLive(member)) member.status = "interrupted";
         }
       });
+      // A promotion cut short by a crash: return the member to where it started.
+      for (const member of Object.values(coordinator.store.state.members)) if (member.promotion) coordinator.rollback(member.id, "Promotion was interrupted");
       // Owner lock held and no member process alive: containers left by a killed coordinator are orphans of this store.
       for (const member of Object.values(coordinator.store.state.members)) if (member.access) {
         const name = coordinator.containerName(member.id);
@@ -119,7 +141,10 @@ export class Coordinator {
         coordinator.server!.listen(coordinator.socketPath, () => { chmodSync(coordinator.socketPath, 0o600); done(); });
       });
       coordinator.server.on("error", error => options.warning(error.message));
-      coordinator.notify("root");
+      coordinator.notify(coordinator.self);
+      const pass = coordinator.resumePass();
+      coordinator.operations.add(pass);
+      void pass.finally(() => coordinator.operations.delete(pass));
       return coordinator;
     } catch (error) { coordinator.server?.close(); coordinator.store.close(); throw error; }
   }
@@ -133,7 +158,12 @@ export class Coordinator {
       if (bound && this.sockets.get(bound) === socket) {
         this.sockets.delete(bound);
         if (!this.closed) {
-          this.store.update(state => { delete state.members[bound!].needsInput; });
+          this.store.update(state => {
+            const member = state.members[bound!];
+            delete member.needsInput;
+            // A main session is not a coordinator process: its socket is its liveness.
+            if (isMain(member) && isLive(member)) member.status = member.status === "stopping" ? "stopped" : "interrupted";
+          });
           this.publishStatus();
         }
         for (const [id, pending] of this.controls) if (pending.member === bound) {
@@ -143,8 +173,20 @@ export class Coordinator {
     });
     readLines(socket, value => {
       if (!isRecord(value) || typeof value.id !== "string" || value.id.length > 128 || typeof value.member !== "string" || typeof value.token !== "string" || typeof value.operation !== "string") { socket.destroy(); return; }
+      if (value.operation === "add_main" && !bound && !this.closed && authentic(value.token, this.store.state.key)) {
+        // The team key sits in the private store, so only an unsandboxed session of this user can join as a main session.
+        const args = value.args;
+        void Promise.resolve().then(() => {
+          if (!isRecord(args) || typeof args.sessionId !== "string" || typeof args.cwd !== "string" || (args.sessionFile !== undefined && typeof args.sessionFile !== "string")) throw new Error("Invalid join request");
+          const id = randomUUID().slice(0, 16);
+          this.store.update(state => this.addMain(state, id, args.sessionId as string, args.sessionFile as string | undefined, args.cwd as string));
+          return { id, token: this.store.state.members[id].token };
+        }).then(data => send(socket, { id: value.id, data }), error => send(socket, { id: value.id, error: String(error instanceof Error ? error.message : error) }));
+        return;
+      }
       const member = this.store.state.members[value.member];
-      if ((this.closed && value.operation !== "control_result") || !member || !isLive(member) || !authentic(value.token, member.token) || member.id === "root" || (bound && bound !== member.id)) { socket.destroy(); return; }
+      const main = isMain(member);
+      if ((this.closed && value.operation !== "control_result") || !member || !(main || isLive(member)) || !authentic(value.token, member.token) || member.id === this.self || (bound && bound !== member.id)) { socket.destroy(); return; }
       bound = member.id;
       const operation = value.operation;
       const run = async () => {
@@ -153,6 +195,19 @@ export class Coordinator {
           if (previous && previous !== socket && !previous.destroyed) throw new Error("Member already connected");
           const args = value.args;
           if (!isRecord(args) || typeof args.sessionId !== "string" || typeof args.sessionFile !== "string" || !Array.isArray(args.tools) || !["team_agent", "team_task", "team_message"].every(name => Array.isArray(args.tools) && args.tools.includes(name))) throw new Error("Incomplete ac-teams readiness handshake");
+          if (main) {
+            // A main session's identity never changes; its transcript may live anywhere the user keeps sessions.
+            if (member.sessionId && args.sessionId !== member.sessionId) throw new Error("This main session's record belongs to another Pi session");
+            this.store.update(state => {
+              const current = state.members[member.id];
+              current.status = "idle"; delete current.error;
+              current.sessionId = args.sessionId as string; current.sessionFile = args.sessionFile as string;
+            });
+            this.sockets.set(member.id, socket);
+            this.publishStatus();
+            this.notify(member.id);
+            return { id: this.store.state.id, member: this.publicMember(this.store.state.members[member.id]), limit: this.store.state.limit, depth: this.store.state.depth };
+          }
           // The session file chooses a host mount on resume, so it must stay in the directory ac-teams assigned.
           const assigned = this.sessionDirs.get(member.id) ?? this.memberSessionDir(member.id);
           if (!assigned || !within(resolve(args.sessionFile as string), assigned)) throw new Error("Member session file is outside its assigned directory");
@@ -230,8 +285,8 @@ export class Coordinator {
       else if (event.type === "model_error") current.error = event.text || "Model request failed";
     });
     this.publishStatus();
-    if (event.type === "model_error" && actor !== "root" && member.status !== "stopping") {
-      const recipient = member.parent && isLive(this.store.state.members[member.parent]) ? member.parent : "root";
+    if (event.type === "model_error" && !isMain(member) && member.status !== "stopping") {
+      const recipient = member.parent && isLive(this.store.state.members[member.parent]) ? member.parent : this.self;
       this.store.message(actor, { action: "send", recipients: [recipient], text: `Member ${actor} model error: ${event.text || "Model request failed"}` });
       this.notify(recipient);
     }
@@ -243,7 +298,7 @@ export class Coordinator {
       if (!member) throw new Error("Unknown member ID");
       if (member.status === "stopping") throw new Error("Member is stopping; retry after it stops");
       if (isLive(member)) return;
-      const launch = this.launch("root", { action: "resume", id, brief: "Resume the native session without replaying work.", model: member.model ?? args.model, thinking: member.thinking ?? args.thinking }, false);
+      const launch = this.launch(this.self, { action: "resume", id, brief: "Resume the native session without replaying work.", model: member.model ?? args.model, thinking: member.thinking ?? args.thinking }, false);
       this.operations.add(launch);
       try { await launch; } finally { this.operations.delete(launch); }
     };
@@ -251,22 +306,30 @@ export class Coordinator {
       if (!args.id) throw new Error("A member ID is required");
       await resume(args.id); return `Resumed ${args.id}`;
     }
+    // Promoting and leaving change authority, so only the user, from a main session's TUI, can do them.
+    if (args.action === "promote" || args.action === "leave") {
+      if (!isMain(this.store.state.members[actor])) throw new Error("Only a main session can promote members or leave the team");
+      const run = args.action === "promote" ? this.promote(args.id ?? "", args.confirmed === true) : Promise.resolve(this.leave(actor));
+      this.operations.add(run);
+      try { return await run; } finally { this.operations.delete(run); }
+    }
     if (!args.text?.trim()) throw new Error("Write a request or feedback before sending");
-    let recipient = "root", fallback = "";
+    const main = isMain(this.store.state.members[actor]) ? actor : this.self;
+    let recipient = main, fallback = "";
     let text = `User task request (review before changing tasks):\n${taskRequestGuidance}\n\nRequest:\n${args.text}`;
     if (args.action === "feedback") {
       const task = this.store.state.tasks[args.id ?? ""];
       if (!task) throw new Error("Unknown task ID");
-      recipient = task.creator ?? "root";
+      recipient = task.creator && this.store.state.members[task.creator]?.role ? task.creator : main;
       text = `User feedback on task ${taskName(task)} [${task.id}] (${task.title}):\n${args.text}`;
       if (!isLive(this.store.state.members[recipient]) || this.store.state.members[recipient].status === "stopping") {
         try { await resume(recipient); }
-        catch (error) { fallback = `Creator ${recipient} could not resume (${String(error)}); delivered to Main instead. `; recipient = "root"; }
+        catch (error) { fallback = `Creator ${recipient} could not resume (${String(error)}); delivered to ${memberName(this.store.state.members[main])} instead. `; recipient = main; }
       }
     }
     const message = this.store.message(actor, { action: "send", recipients: [recipient], text }, true) as Message;
     this.notify(recipient);
-    return `${fallback}Sent to ${recipient === "root" ? "Main" : recipient} · message ${message.seq}`;
+    return `${fallback}Sent to ${isMain(this.store.state.members[recipient]) ? memberName(this.store.state.members[recipient]) : recipient} · message ${message.seq}`;
   }
   private publicMember(member: Member) {
     const { token: _token, identity: _identity, ...view } = member;
@@ -282,7 +345,8 @@ export class Coordinator {
     }
     return this.sandbox.status;
   }
-  live(): Member[] { return Object.values(this.store.state.members).filter(member => member.id !== "root" && isLive(member)); }
+  /** Live members this coordinator runs; main sessions run in their own terminals and never count. */
+  live(): Member[] { return Object.values(this.store.state.members).filter(member => !isMain(member) && isLive(member)); }
   ack(id: string, through: number): void {
     const last = this.store.state.messages.at(-1)?.seq ?? 0;
     if (!Number.isSafeInteger(through) || through < 0 || through > last) throw new Error("Invalid notification cursor");
@@ -298,7 +362,7 @@ export class Coordinator {
       const through = pending.at(-1)?.seq;
       if (!through) return;
       try {
-        if (id === "root") this.options.notice(through, pending.slice(-5));
+        if (id === this.self) this.options.notice(through, pending.slice(-5));
         else { const socket = this.sockets.get(id); if (socket) send(socket, { type: "notice", through, messages: pending.slice(-5) }); }
       } catch (error) { this.options.warning(`Team notification remains in history: ${String(error)}`); }
     }, 50));
@@ -326,7 +390,7 @@ export class Coordinator {
     const state = this.store.state;
     if (args.action === "list") return { team: state.id, limit: state.limit, depth: state.depth, sandbox: this.sandboxStatus(), lastMessage: state.messages.at(-1)?.seq ?? 0, members: Object.values(state.members).map(member => this.publicMember(member)) };
     if (args.action === "limits") {
-      if (actor !== "root") throw new Error("Only the root can change team limits");
+      if (!isMain(state.members[actor])) throw new Error("Only a main session can change team limits");
       if ((args.limit ?? state.limit) > 10 && !authorizedLimit) throw new Error("A ceiling above 10 requires explicit user confirmation or --teams-limit");
       this.store.update(next => { next.limit = args.limit ?? next.limit; next.depth = args.depth ?? next.depth; });
       return { limit: this.store.state.limit, depth: this.store.state.depth, sandbox: this.sandboxStatus() };
@@ -339,7 +403,7 @@ export class Coordinator {
     const member = args.id ? state.members[args.id] : undefined;
     if (!member) throw new Error("Unknown member ID");
     if (args.action === "status") return this.publicMember(member);
-    if (member.id === "root" || !isDescendant(state, member.id, actor)) throw new Error("Only a member's ancestor can stop or clean it up");
+    if (!canControl(state, actor, member.id)) throw new Error("Only a main session or a member's ancestor can stop or clean it up");
     if (args.action === "cleanup") {
       if (state.members[actor].access) throw new Error("Sandboxed members cannot remove worktrees");
       if (isLive(member)) throw new Error("Stop the member before worktree cleanup");
@@ -355,7 +419,8 @@ export class Coordinator {
       this.operations.add(cleanup);
       try { return await cleanup; } finally { this.cleaning.delete(member.id); this.operations.delete(cleanup); }
     }
-    await this.stopTree(member.id);
+    if (isMain(member)) await this.stopMain(member.id);
+    else await this.stopTree(member.id);
     return this.publicMember(this.store.state.members[member.id]);
   }
   private async launch(actor: string, args: AgentArgs, prompt = true): Promise<unknown> {
@@ -364,7 +429,8 @@ export class Coordinator {
     if (!args.brief?.trim()) throw new Error("A launch or resume brief is required");
     if (!args.model || !args.model.includes("/")) throw new Error("A provider/model is required (normally inherited from the requesting member)");
     const resumed = args.action === "resume" ? state.members[args.id ?? ""] : undefined;
-    if (args.action === "resume" && (!resumed || resumed.id === "root" || !resumed.sessionFile || !isDescendant(state, resumed.id, actor))) throw new Error("Resume requires a stopped descendant with a native session file");
+    if (args.action === "resume" && (!resumed || !resumed.sessionFile || !canControl(state, actor, resumed.id))) throw new Error("Resume requires a stopped member you control with a native session file");
+    if (resumed && isMain(resumed)) return this.resumeMain(resumed.id);
     if (resumed && this.cleaning.has(resumed.id)) throw new Error("Worktree cleanup is running; cannot resume this member");
     if (resumed && (isLive(resumed) || (resumed.pid && processAlive(resumed.pid, resumed.identity)))) throw new Error("Cannot resume a live or uncertain member");
     const depth = resumed ? resumed.depth : parent.depth + 1;
@@ -388,7 +454,7 @@ export class Coordinator {
     const provider = args.model.slice(0, args.model.indexOf("/"));
     const locked = resumed ? resumed.provider : parent.access?.network.allow ? parent.provider : undefined;
     if (access?.network.allow && locked && provider !== locked) throw new Error(`A member with restricted network access can only use ${locked} models`);
-    const member: Member = resumed ? { ...resumed, token: randomUUID(), status: "starting", error: undefined, contextUsage: undefined, modelName: undefined } : { id, name: args.name, parent: actor, depth, token: randomUUID(), cwd, status: "starting", notified: 0, access, provider: access ? provider : undefined };
+    const member: Member = resumed ? { ...resumed, token: randomUUID(), status: "starting", error: undefined, contextUsage: undefined, modelName: undefined, handover: undefined } : { id, name: args.name, role: "member", parent: actor, depth, token: randomUUID(), cwd, status: "starting", notified: 0, access, provider: access ? provider : undefined };
     // Reserve synchronously before the first await so concurrent launches cannot oversubscribe.
     this.store.update(next => { next.members[id] = member; });
     this.publishStatus();
@@ -419,7 +485,8 @@ export class Coordinator {
       this.sessionDirs.set(id, sessions);
       const rpcArgs = [...(this.options.interactive ? [] : ["--mode", "rpc"]), "--session-dir", sessions, "-e", this.options.extension, "--provider", provider, "--model", modelId, "--thinking", args.thinking ?? "off"];
       if (resumed?.sessionFile) rpcArgs.push("--session", resumed.sessionFile);
-      const identity = { HERDR_ENV: "0", AC_TEAMS_SOCKET: this.socketPath, AC_TEAMS_MEMBER: id, AC_TEAMS_TOKEN: member.token, AC_TEAMS_ACCESS: JSON.stringify(access ? { enforced: true, ...access } : { enforced: false }) };
+      // ACSTACK_AGENT_ROLE tells ACStack hooks this is not a main session; children inherit it.
+      const identity = { HERDR_ENV: "0", ACSTACK_AGENT_ROLE: "member", AC_TEAMS_SOCKET: this.socketPath, AC_TEAMS_MEMBER: id, AC_TEAMS_TOKEN: member.token, AC_TEAMS_ACCESS: JSON.stringify(access ? { enforced: true, ...access } : { enforced: false }) };
       const spawnOptions = access
         ? await this.sandboxed(id, access, member.cwd, provider, modelId, rpcArgs, identity, sessions)
         : { cwd: member.cwd, args: rpcArgs, command: this.options.command, env: { ...process.env, ...identity, AC_TEAMS_TERMINAL_SOCKET: join(this.store.dir, "t.sock") } };
@@ -447,7 +514,8 @@ export class Coordinator {
         if (this.closed) return;
         this.store.update(next => { next.members[id].status = next.members[id].status === "stopping" ? "stopped" : "interrupted"; delete next.members[id].needsInput; });
         this.publishStatus();
-        void this.stopDescendants(id).catch(error => this.options.warning(String(error)));
+        // A promoted member keeps its descendants.
+        if (!this.store.state.members[id].promotion) void this.stopDescendants(id).catch(error => this.options.warning(String(error)));
       });
       if (agent instanceof TerminalAgent) await agent.start();
       member.pid = agent.process.pid;
@@ -473,6 +541,129 @@ export class Coordinator {
       this.publishStatus();
       throw error;
     }
+  }
+  /** Adds a main session record; the caller writes the team entry into its transcript. */
+  private addMain(state: TeamState, id: string, sessionId: string, sessionFile: string | undefined, cwd: string): void {
+    if (Object.values(state.members).some(member => member.sessionId === sessionId)) throw new Error("This Pi session is already in the team");
+    const names = new Set(Object.values(state.members).map(member => member.name));
+    let number = 1;
+    do { number++; } while (names.has(`main-${number}`));
+    state.members[id] = { id, name: `main-${number}`, role: "main", depth: 0, token: randomUUID(), cwd, status: "stopped", notified: state.messages.at(-1)?.seq ?? 0, sessionId, sessionFile };
+  }
+  /** Restores members a previous owner stopped to the state it recorded. */
+  private async resumePass(): Promise<void> {
+    for (const member of Object.values(this.store.state.members)) {
+      const state = member.handover;
+      if (!state || isLive(member)) continue;
+      try {
+        if (!member.model) throw new Error("no recorded model");
+        await this.launch(this.self, { action: "resume", id: member.id, brief: state === "busy" ? handoverPrompt : "Resume the native session without replaying work.", model: member.model, thinking: member.thinking }, state === "busy");
+        if (state === "input") this.recordEvent(member.id, { type: "blocked", active: true });
+      } catch (error) {
+        if (this.closed) return;
+        this.options.warning(`Could not resume ${memberName(member)} after the coordinator handover: ${error instanceof Error ? error.message : String(error)}`);
+        if (this.store.state.members[member.id]?.handover) this.store.update(next => { delete next.members[member.id].handover; });
+      }
+    }
+  }
+  /** The top-level session folder: Main's session directory without ac-teams nesting. */
+  private topSessionDir(): string {
+    return resolve(this.options.sessionDir ?? join(this.store.dir, "sessions")).replace(/\/ac-teams\/[^/]+\/[^/]+$/, "");
+  }
+  /** Opens a main session's transcript in its own terminal with a clean environment. */
+  private async openMain(id: string): Promise<string> {
+    const member = this.store.state.members[id];
+    const notice = await (this.options.launchMain ?? launchMain)({
+      id, name: memberName(member), cwd: member.cwd, socket: join(this.store.dir, `m-${id}.sock`), env: mainEnv(),
+      command: [this.options.command ?? process.env.AC_TEAMS_PI ?? "pi", "--session", member.sessionFile!],
+    });
+    this.store.update(state => { state.members[id].status = "starting"; delete state.members[id].error; });
+    return notice;
+  }
+  private async resumeMain(id: string): Promise<string> {
+    const member = this.store.state.members[id];
+    if (isLive(member) || this.sockets.has(id)) throw new Error("That main session is already running");
+    return this.openMain(id);
+  }
+  private async stopMain(id: string): Promise<void> {
+    if (id === this.self) {
+      if (!this.options.shutdown) throw new Error("This main session cannot be stopped remotely");
+      this.options.shutdown(); return;
+    }
+    if (!this.sockets.has(id)) throw new Error("That main session is not running");
+    this.store.update(state => { state.members[id].status = "stopping"; });
+    await this.control(id, "shutdown");
+  }
+  /** Stops a member and relaunches its transcript as a main session. Each step is recorded so a failure can roll back. */
+  private async promote(id: string, confirmed: boolean): Promise<string> {
+    const member = this.store.state.members[id];
+    if (!member || member.role !== "member") throw new Error("Only a member can be promoted");
+    if (!member.sessionFile) throw new Error("The member has no native session file yet");
+    if (member.promotion) throw new Error("The member is already being promoted");
+    if (member.access && !confirmed) throw new Error("Promoting a sandboxed member runs it with your full access; confirm before promoting");
+    const original = member.sessionFile;
+    const step = async (name: NonNullable<Member["promotion"]>["step"], change: (current: Member) => void = () => {}) => {
+      this.store.update(state => { const current = state.members[id]; change(current); current.promotion = { ...current.promotion!, step: name }; });
+      await this.options.promotionStep?.(name);
+    };
+    this.store.update(state => { state.members[id].promotion = { step: "stopped", sessionFile: original, parent: member.parent, access: member.access, provider: member.provider }; });
+    try {
+      await this.stopOne(id);
+      await step("stopped");
+      const target = join(this.topSessionDir(), basename(original));
+      if (existsSync(target)) throw new Error(`A session file already exists at ${target}`);
+      mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+      moveFile(original, target);
+      await step("moved", current => { current.sessionFile = target; });
+      rmSync(memberConfigDir(id), { recursive: true, force: true });
+      await step("role", current => {
+        current.role = "main"; current.depth = 0; current.token = randomUUID();
+        delete current.parent; delete current.access; delete current.provider; delete current.handover;
+      });
+      this.store.update(recomputeDepths);
+      const entry: TeamEntry = { team: this.store.state.id, member: id };
+      SessionManager.open(target).appendCustomEntry(teamEntryType, entry);
+      await step("entry");
+      const notice = await this.openMain(id);
+      this.store.update(state => { delete state.members[id].promotion; });
+      return `Promoted ${memberName(member)} to a main session. ${notice}`;
+    } catch (error) {
+      this.rollback(id, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+  }
+  /** Returns a partly promoted member to a stopped member with its original transcript path. */
+  private rollback(id: string, reason: string): void {
+    const promotion = this.store.state.members[id].promotion!;
+    const current = this.store.state.members[id].sessionFile;
+    try {
+      if (current && current !== promotion.sessionFile && existsSync(current)) {
+        // The moved transcript may already claim main-session membership; record the departure first.
+        if (promotion.step === "entry") SessionManager.open(current).appendCustomEntry(teamEntryType, { team: this.store.state.id, member: id, left: true } satisfies TeamEntry);
+        moveFile(current, promotion.sessionFile);
+      }
+    } catch (error) { this.options.warning(`Promotion rollback could not restore ${promotion.sessionFile}: ${String(error)}`); }
+    this.store.update(state => {
+      const member = state.members[id];
+      Object.assign(member, { role: "member", sessionFile: promotion.sessionFile, parent: promotion.parent, access: promotion.access, provider: promotion.provider, status: "stopped", error: `Promotion failed: ${reason}`.slice(0, 2000) });
+      for (const key of ["parent", "access", "provider"] as const) if (member[key] === undefined) delete member[key];
+      if (member.parent && !state.members[member.parent]) delete member.parent;
+      delete member.promotion;
+      recomputeDepths(state);
+    });
+  }
+  /** A main session leaves: its in-progress tasks return to todo and its record keeps history without a role. */
+  private leave(actor: string): string {
+    const state = this.store.state;
+    const others = Object.values(state.members).filter(member => isMain(member) && member.id !== actor);
+    if (!others.length && this.live().length) throw new Error("You are the only main session and members are still live; stop them first");
+    this.store.update(next => {
+      for (const task of Object.values(next.tasks)) if (task.owner === actor && task.status !== "done") { task.status = "todo"; delete task.owner; }
+      const member = next.members[actor];
+      delete member.role;
+      member.status = "stopped";
+    });
+    return `Left team ${state.id}`;
   }
   private image() {
     return memberImage(this.options.piVersion ?? JSON.parse(readFileSync(join(packageRoot(command("pi")), "package.json"), "utf8")).version);
@@ -624,6 +815,13 @@ export class Coordinator {
   private async closeOnce(): Promise<void> {
     this.closed = true;
     for (const timer of this.notices.values()) clearTimeout(timer);
+    // The next owner's resume pass restores each member to the state recorded here.
+    this.store.update(state => {
+      for (const member of Object.values(state.members)) if (!isMain(member) && isLive(member) && member.status !== "stopping") {
+        member.handover = member.needsInput ? "input" : member.status === "idle" ? "idle" : "busy";
+      }
+      if (state.members[this.self]?.status !== undefined && isLive(state.members[this.self])) state.members[this.self].status = "stopped";
+    });
     for (const member of this.live().sort((a, b) => b.depth - a.depth)) await this.stopOne(member.id);
     // Finish recording worktree operations already in flight before the store closes.
     await Promise.allSettled([...this.operations]);
@@ -643,6 +841,19 @@ export class Coordinator {
 }
 
 const memberConfigDir = (id: string) => join(stateRoot(), "agents", id);
+
+function moveFile(from: string, to: string): void {
+  try { renameSync(from, to); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
+    copyFileSync(from, to, constants.COPYFILE_EXCL); unlinkSync(from);
+  }
+}
+/** Depth follows ancestry, so a promotion moves the promoted member's descendants up. */
+function recomputeDepths(state: TeamState): void {
+  const depth = (member: Member, seen = 0): number => member.parent && state.members[member.parent] && seen < 64 ? depth(state.members[member.parent], seen + 1) + 1 : 0;
+  for (const member of Object.values(state.members)) member.depth = depth(member);
+}
 
 function command(name: string): string {
   if (name.includes("/")) return realpathSync(name);

@@ -9,6 +9,13 @@ import { resolveTeammate, teamsCompletions } from "./commands.ts";
 import { showTeamsPanel } from "./panel.ts";
 import { teamToolRenderers, renderTeamMessage, cleanText } from "./render.ts";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import { existsSync, readdirSync } from "node:fs";
+import { promisify } from "node:util";
+import { readState, teamsHome } from "./store.ts";
+import { teamEntryType, type TeamEntry } from "./mains.ts";
+import { isMain, memberName, taskName, type TeamState } from "./types.ts";
 import { Coordinator, assistantEvent, taskRequestGuidance } from "./coordinator.ts";
 import { Connection, isRecord } from "./connection.ts";
 import { policy, readDisplaySettings, defaultDisplaySettings } from "./config.ts";
@@ -30,21 +37,113 @@ export default function teams(pi: ExtensionAPI) {
   let disposeUI: (() => void) | undefined;
   let telemetryTimer: NodeJS.Timeout | undefined;
   let inputCount = 0;
+  /** This main session's team, from its transcript's team entry; a session with no entry leads its own team as "root". */
+  let team: TeamEntry | undefined;
+  /** Why team tools are off in this session, if they are. */
+  let disabled: string | undefined;
+  let linking: Promise<void> | undefined;
+  let linkedSession: string | undefined;
   const drafts = new Map<string, string>();
   const display = { ...defaultDisplaySettings };
-  const self = environment[1] ?? "root";
+  const teamTools = ["team_agent", "team_task", "team_message"];
+  const memberId = () => child ? environment[1]! : team?.member ?? "root";
+  const teamId = (ctx: ExtensionContext) => team?.team ?? ctx.sessionManager.getSessionId();
   pi.registerMessageRenderer("ac-teams", renderTeamMessage);
   const warn = (message: string) => context?.ui.notify(message, "warning");
   const notify = (through: number, messages: Message[] = []) => {
     pi.sendMessage({ customType: "ac-teams", content: `New team messages through sequence ${through}. Read team_message history after your last cursor. Reply only with useful updates, not acknowledgements.`, display: true, details: { through, messages } }, { deliverAs: "followUp", triggerTurn: true });
     if (connection) void connection.request("ack", { through }).catch(error => warn(String(error)));
-    else coordinator?.ack("root", through);
+    else coordinator?.ack(coordinator.self, through);
   };
-  async function root(ctx: ExtensionContext): Promise<Coordinator> {
+  function disable(reason: string) {
+    disabled = reason;
+    pi.setActiveTools(pi.getActiveTools().filter(name => !teamTools.includes(name)));
+  }
+  function enable() {
+    disabled = undefined;
+    pi.setActiveTools([...new Set([...pi.getActiveTools(), ...teamTools])]);
+  }
+  function remember(entry: TeamEntry) {
+    team = entry;
+    pi.appendEntry(teamEntryType, entry);
+  }
+  /** Runs a native command sent by the coordinator: members get these from their parent, main sessions from other mains. */
+  function onCommand(ctx: ExtensionContext, link: Connection) {
+    return (command: { id: string; command: string; args: Record<string, unknown> }) => {
+      void (async () => {
+        let data: unknown = {}, error: string | undefined;
+        try {
+          if (command.command === "get_state") data = { sessionId: ctx.sessionManager.getSessionId(), sessionFile: ctx.sessionManager.getSessionFile(), model: ctx.model ? { id: ctx.model.id, provider: ctx.model.provider, name: ctx.model.name } : undefined, contextUsage: readTelemetry(ctx).contextUsage, isStreaming: !ctx.isIdle() };
+          else if (command.command === "prompt") {
+            if (typeof command.args.message !== "string" || !command.args.message.trim() || command.args.message.length > 16000) throw new Error("Invalid native prompt");
+            pi.sendUserMessage(command.args.message, { deliverAs: "followUp" });
+          } else if (command.command === "abort") ctx.abort();
+          else if (command.command !== "shutdown") throw new Error("Unsupported native command");
+        } catch (failure) { error = String(failure).slice(0, 2000); }
+        try { await link.request("control_result", { id: command.id, data, error }); }
+        catch { return; }
+        if (command.command === "shutdown" && !error) { exiting = true; ctx.shutdown(); }
+      })();
+    };
+  }
+  /** Connects to a running coordinator as a main-session client; false when none is listening. */
+  async function connectMain(ctx: ExtensionContext): Promise<boolean> {
+    const dir = join(teamsHome(), teamId(ctx)), socket = join(dir, "coordinator.sock");
+    if (!existsSync(socket)) return false;
+    const record = readState(dir).members[memberId()];
+    if (!isMain(record)) throw new Error("This session is no longer a main session of its team; use /teams join");
+    const link = new Connection(socket, record.id, record.token);
+    try { await link.open(); } catch { return false; }
+    link.on("notice", (through, messages) => notify(through, messages));
+    link.on("command", onCommand(ctx, link));
+    link.on("disconnect", () => {
+      if (connection !== link) return;
+      connection = undefined;
+      if (!exiting) void takeover(ctx);
+    });
+    try { await link.request("join", { sessionId: ctx.sessionManager.getSessionId(), sessionFile: ctx.sessionManager.getSessionFile(), tools: pi.getAllTools().map(tool => tool.name), trusted: ctx.isProjectTrusted() }); }
+    catch (error) { link.close(); throw error; }
+    connection = link; linkedSession = ctx.sessionManager.getSessionId();
+    if (!team) remember({ team: teamId(ctx), member: record.id });
+    return true;
+  }
+  /** The coordinator owner went away: one main session takes the owner lock, the rest reconnect to it. */
+  async function takeover(ctx: ExtensionContext) {
+    warn("The team coordinator stopped; taking over or reconnecting");
+    for (let attempt = 0; attempt < 40 && !exiting; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 250 + Math.random() * 250));
+      try {
+        await link(ctx);
+        warn(coordinator ? "This session now runs the team coordinator" : "Reconnected to the team coordinator");
+        return;
+      } catch { /* The new owner may still be starting. */ }
+    }
+    if (!exiting) warn("Could not reach or take over the team coordinator; team tools will retry on next use");
+  }
+  /** Makes this session an owner or client of its team's coordinator. */
+  async function link(ctx: ExtensionContext): Promise<void> {
+    if (child) { if (!connection) throw new Error("Team coordinator is not connected"); return; }
+    if (exiting) throw new Error("Team is stopping");
+    if (disabled) throw new Error(disabled);
+    if (connection || coordinator) return;
+    linking ??= (async () => {
+      if (await connectMain(ctx)) return;
+      try { await root(ctx); }
+      catch (error) {
+        // Another main session won the owner lock first; join it as a client.
+        if (String(error).includes("live owner lock") && await connectMain(ctx)) return;
+        throw error;
+      }
+    })().finally(() => { linking = undefined; });
+    return linking;
+  }
+  async function root(ctx: ExtensionContext, join?: { id: string; member: string }): Promise<Coordinator> {
     if (exiting) throw new Error("Team is stopping");
     context = ctx;
     opening ??= Coordinator.open({
-      id: ctx.sessionManager.getSessionId(), cwd: ctx.cwd, sessionFile: ctx.sessionManager.getSessionFile(), sessionDir: ctx.sessionManager.getSessionDir(),
+      id: join?.id ?? teamId(ctx), self: join?.member ?? memberId(), join: join !== undefined, sessionId: ctx.sessionManager.getSessionId(),
+      shutdown: () => { exiting = true; ctx.shutdown(); },
+      cwd: ctx.cwd, sessionFile: ctx.sessionManager.getSessionFile(), sessionDir: ctx.sessionManager.getSessionDir(),
       ...policy(ctx.cwd, pi.getFlag("teams-project-config") === true, { limit: pi.getFlag("teams-limit") as string | undefined, depth: pi.getFlag("teams-depth") as string | undefined }),
       extension: fileURLToPath(import.meta.url), notice: notify, warning: warn, piVersion: VERSION,
       status: (kind, active) => pi.events.emit(`herdr:${kind}`, { active, source: "ac-teams" }),
@@ -62,9 +161,10 @@ export default function teams(pi: ExtensionAPI) {
       },
       interactive: ctx.mode === "tui", model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined, thinking: pi.getThinkingLevel(),
     }).then(value => {
-      coordinator = value;
-      if (ctx.isIdle?.() === false) value.recordEvent("root", { type: "agent_start" });
-      if (inputCount > 0) value.recordEvent("root", { type: "blocked", active: true });
+      coordinator = value; linkedSession = ctx.sessionManager.getSessionId();
+      if (!team) remember({ team: value.store.state.id, member: value.self });
+      if (ctx.isIdle?.() === false) value.recordEvent(value.self, { type: "agent_start" });
+      if (inputCount > 0) value.recordEvent(value.self, { type: "blocked", active: true });
       return value;
     }, error => { opening = undefined; throw error; });
     return opening;
@@ -80,19 +180,18 @@ export default function teams(pi: ExtensionAPI) {
       }
       args = agent;
     }
-    if (child) {
-      if (!connection) throw new Error("Team coordinator is not connected");
-      return connection.request(operation, args);
-    }
+    await link(ctx);
+    // shortcut: client main sessions cannot approve a ceiling above 10, only the owner can; add a confirmation relay if needed.
+    if (connection) return connection.request(operation, args);
     let authorized = false;
     if (operation === "agent" && (args as AgentArgs).action === "limits" && ((args as AgentArgs).limit ?? 0) > 10) {
       if (!ctx.hasUI || !await ctx.ui.confirm("Raise team ceiling?", `Allow up to ${(args as AgentArgs).limit} live Pi members, including idle members? This increases possible model costs.`)) throw new Error("Ceiling increase was not explicitly approved");
       authorized = true;
     }
-    return (await root(ctx)).handle("root", operation, args, authorized);
+    return coordinator!.handle(coordinator!.self, operation, args, authorized);
   }
   async function snapshot(ctx: ExtensionContext): Promise<TeamSnapshot> {
-    if (!child && !opening) return { members: [{ id: "root", cwd: ctx.cwd, depth: 0, status: ctx.isIdle() ? "idle" : "busy", notified: 0, needsInput: inputCount > 0 }], tasks: [], messages: [], limit: 10, depth: 2 };
+    if (!child && !opening && !connection) return { members: [{ id: "root", cwd: ctx.cwd, depth: 0, status: ctx.isIdle() ? "idle" : "busy", notified: 0, needsInput: inputCount > 0 }], tasks: [], messages: [], limit: 10, depth: 2 };
     const status = await handle("agent", { action: "list" }, ctx) as Pick<TeamSnapshot, "members" | "limit" | "depth"> & { lastMessage: number };
     const tasks: TaskView[] = [];
     let total = 0;
@@ -107,30 +206,35 @@ export default function teams(pi: ExtensionAPI) {
   function host(ctx: ExtensionContext): PanelHost {
     const userAction = async (args: UserAction): Promise<string> => {
       const value = { ...args, model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined, thinking: pi.getThinkingLevel() };
-      if (child) {
-        if (!connection) throw new Error("Team coordinator is not connected");
-        return await connection.request("ui", value) as string;
-      }
-      return await (await root(ctx)).handle("root", "ui", value) as string;
+      await link(ctx);
+      if (connection) return await connection.request("ui", value) as string;
+      return await coordinator!.handle(coordinator!.self, "ui", value) as string;
     };
     const api: PanelHost = {
-      self, drafts, snapshot: () => snapshot(ctx),
+      self: memberId(), child, drafts, snapshot: () => snapshot(ctx),
       visit: async id => {
-        if (id === self) return;
-        const socket = child ? process.env.AC_TEAMS_TERMINAL_SOCKET : join((await root(ctx)).store.dir, "t.sock");
+        if (id === memberId()) return;
+        if (!child) await link(ctx);
+        const socket = child ? process.env.AC_TEAMS_TERMINAL_SOCKET : join(teamsHome(), teamId(ctx), "t.sock");
         if (!socket) throw new Error("This member has no live terminal transport");
         await visitMember(ctx, api, socket, id);
       },
       requestTask: text => userAction({ action: "task_request", text }),
       feedback: (task, text) => userAction({ action: "feedback", id: task.id, text }),
       resume: async id => { await userAction({ action: "resume", id }); },
+      promote: async id => {
+        const member = (await snapshot(ctx)).members.find(member => member.id === id);
+        const confirmed = member?.access ? await ctx.ui.confirm("Promote a sandboxed member?", `${memberName(member)} will leave its sandbox and run as a main session with your full access.`) : false;
+        if (member?.access && !confirmed) return;
+        ctx.ui.notify(await userAction({ action: "promote", id, confirmed }), "info");
+      },
     };
     return api;
   }
   function report(ctx: ExtensionContext, event: { type: string; text?: string; active?: boolean }) {
     if (exiting) return;
-    if (child && ctx.mode === "tui") void connection?.request("event", event).catch(error => warn(cleanText(String(error))));
-    else if (!child) coordinator?.recordEvent("root", event);
+    if (connection && (!child || ctx.mode === "tui")) void connection.request("event", event).catch(error => warn(cleanText(String(error))));
+    else coordinator?.recordEvent(coordinator.self, event);
   }
   function startTelemetry(ctx: ExtensionContext) {
     clearInterval(telemetryTimer);
@@ -141,8 +245,8 @@ export default function teams(pi: ExtensionAPI) {
       try {
         const event = readTelemetry(ctx), encoded = JSON.stringify(event);
         if (encoded === previous) return;
-        if (child) await connection?.request("event", event);
-        else coordinator?.recordEvent("root", event);
+        if (connection) await connection.request("event", event);
+        else coordinator?.recordEvent(coordinator.self, event);
         previous = encoded;
       } catch (error) { if (!exiting) warn(cleanText(String(error))); }
       finally { pending = false; }
@@ -157,8 +261,8 @@ export default function teams(pi: ExtensionAPI) {
     inputCount = Math.max(0, inputCount + (data.active ? 1 : -1));
     if (context) {
       const event = { type: "blocked", active: inputCount > 0 };
-      if (child) void connection?.request("event", event).catch(error => warn(cleanText(String(error))));
-      else coordinator?.recordEvent("root", event);
+      if (connection) void connection.request("event", event).catch(error => warn(cleanText(String(error))));
+      else coordinator?.recordEvent(coordinator.self, event);
     }
   });
   pi.on("agent_start", (_event, ctx) => report(ctx, { type: "agent_start" }));
@@ -196,34 +300,104 @@ export default function teams(pi: ExtensionAPI) {
     disposeUI?.(); disposeUI = undefined;
     connection?.close(); connection = undefined;
     if (opening) await (await opening).close();
-    coordinator = undefined; opening = undefined;
+    coordinator = undefined; opening = undefined; linkedSession = undefined;
+  }
+  /** A resumed main session reconnects to its team, or offers to run the coordinator and resume the team's members. */
+  async function rejoin(ctx: ExtensionContext) {
+    try {
+      if (await connectMain(ctx)) return;
+      const dir = join(teamsHome(), teamId(ctx));
+      if (!existsSync(join(dir, "state.json"))) return;
+      const state = readState(dir);
+      if (!isMain(state.members[memberId()])) { disable("This session is no longer a main session of its team; use /teams join"); return; }
+      const others = Object.values(state.members).filter(member => member.id !== memberId() && member.role);
+      if (!ctx.hasUI || !others.length) return;
+      if (await ctx.ui.confirm("Run the team coordinator?", `This is a main session of a team with ${others.length} other member(s), and no coordinator is running. Run it here and resume the members that were working?`)) await link(ctx);
+      else disable("You declined to run the team coordinator; team tools are off in this session. Resume the session again to take over.");
+    } catch (error) { warn(cleanText(String(error))); }
+  }
+  async function repository(cwd: string): Promise<string> {
+    try { return (await promisify(execFile)("git", ["-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"], { timeout: 5000 })).stdout.trim(); }
+    catch { return cwd; }
+  }
+  /** /teams join: adds this session to another team in the same project as a main session. */
+  async function joinTeam(ctx: ExtensionContext) {
+    if (child) throw new Error("A member cannot join another team");
+    if (!ctx.hasUI) throw new Error("/teams join requires an interactive session");
+    const sessionId = ctx.sessionManager.getSessionId(), home = teamsHome();
+    const current = existsSync(join(home, teamId(ctx), "state.json")) ? readState(join(home, teamId(ctx))) : undefined;
+    if (current && Object.values(current.members).some(member => member.id !== memberId() && member.role)) throw new Error("This session is already in a team with other members; use /teams leave first");
+    const repo = await repository(ctx.cwd), teams: TeamState[] = [];
+    for (const name of existsSync(home) ? readdirSync(home) : []) {
+      try {
+        const state = readState(join(home, name)), main = Object.values(state.members).find(isMain);
+        if (state.id !== current?.id && main && await repository(main.cwd) === repo) teams.push(state);
+      } catch { /* Unreadable or foreign team folders are not offered. */ }
+    }
+    if (!teams.length) { ctx.ui.notify("No other teams in this project", "info"); return; }
+    const describe = (state: TeamState) => {
+      const members = Object.values(state.members);
+      return `${members.filter(isMain).map(memberName).join(", ")} · ${members.filter(member => member.role === "member").length} member(s) · ${Object.values(state.tasks).filter(task => task.status !== "done").length} open task(s) · ${state.id.slice(0, 8)}`;
+    };
+    const labels = teams.map(describe), choice = await ctx.ui.select("Join which team?", labels);
+    const chosen = teams[labels.indexOf(choice ?? "")];
+    if (!chosen) return;
+    if (Object.values(chosen.members).some(member => member.sessionId === sessionId)) throw new Error("This session is already in that team");
+    await close(); exiting = false; enable();
+    const dir = join(home, chosen.id), probe = new Connection(join(dir, "coordinator.sock"), "join", chosen.key);
+    let running = false;
+    try { await probe.open(); running = true; } catch { /* No coordinator: this session runs it. */ }
+    if (running) {
+      try {
+        const added = await probe.request("add_main", { sessionId, sessionFile: ctx.sessionManager.getSessionFile(), cwd: ctx.cwd }) as { id: string };
+        remember({ team: chosen.id, member: added.id });
+      } finally { probe.close(); }
+      if (!await connectMain(ctx)) throw new Error("The team coordinator stopped while joining; resume this session to retry");
+    } else {
+      const member = randomUUID().slice(0, 16);
+      await root(ctx, { id: chosen.id, member });
+      remember({ team: chosen.id, member });
+    }
+    const state = readState(dir), name = (id?: string) => id ? memberName(state.members[id] ?? { id }) : "unowned";
+    const open = Object.values(state.tasks).filter(task => task.status !== "done");
+    const recent = state.messages.slice(-5);
+    pi.sendMessage({ customType: "ac-teams", display: true, details: { through: state.messages.at(-1)?.seq ?? 0, messages: recent }, content: [
+      `Joined team ${state.id} as ${name(team!.member)}, a main session.`,
+      open.length ? `Open tasks:\n${open.map(task => `- ${taskName(task)} (${task.status}, ${name(task.owner)})`).join("\n")}` : "No open tasks.",
+      recent.length ? `Recent messages:\n${recent.map(message => `- ${name(message.from)}: ${message.text.split("\n")[0].slice(0, 200)}`).join("\n")}` : "No messages yet.",
+    ].join("\n\n") }, { triggerTurn: false });
+  }
+  /** /teams leave: hands this session's work back and drops its main-session role. */
+  async function leaveTeam(ctx: ExtensionContext) {
+    if (child) throw new Error("A member cannot leave its team; its parent stops it");
+    await link(ctx);
+    const left = { team: teamId(ctx), member: memberId(), left: true };
+    const result = connection ? await connection.request("ui", { action: "leave" }) : await coordinator!.handle(coordinator!.self, "ui", { action: "leave" });
+    pi.appendEntry(teamEntryType, left);
+    team = undefined;
+    await close(); exiting = false;
+    disable("This session left its team; use /teams join to join one");
+    ctx.ui.notify(String(result), "info");
   }
   pi.on("session_start", async (_event, ctx) => {
-    if (!child && coordinator && coordinator.store.state.id !== ctx.sessionManager.getSessionId()) { await close(); drafts.clear(); }
+    if (!child && linkedSession && linkedSession !== ctx.sessionManager.getSessionId()) { await close(); drafts.clear(); }
     context = ctx; exiting = false; inputCount = 0;
     if (child) {
       if (environment.some(value => !value)) throw new Error("Incomplete AC_TEAMS membership environment; refusing independent-root fallback");
-      connection = new Connection(environment[0]!, environment[1]!, environment[2]!);
-      connection.on("notice", (through, messages) => notify(through, messages));
-      connection.on("disconnect", () => { warn("Team coordinator disconnected; this member is shutting down"); ctx.abort(); ctx.shutdown(); });
-      connection.on("command", (command: { id: string; command: string; args: Record<string, unknown> }) => {
-        void (async () => {
-          let data: unknown = {}, error: string | undefined;
-          try {
-            if (command.command === "get_state") data = { sessionId: ctx.sessionManager.getSessionId(), sessionFile: ctx.sessionManager.getSessionFile(), model: ctx.model ? { id: ctx.model.id, provider: ctx.model.provider, name: ctx.model.name } : undefined, contextUsage: readTelemetry(ctx).contextUsage, isStreaming: !ctx.isIdle() };
-            else if (command.command === "prompt") {
-              if (typeof command.args.message !== "string" || !command.args.message.trim() || command.args.message.length > 16000) throw new Error("Invalid native prompt");
-              pi.sendUserMessage(command.args.message, { deliverAs: "followUp" });
-            } else if (command.command === "abort") ctx.abort();
-            else if (command.command !== "shutdown") throw new Error("Unsupported native command");
-          } catch (failure) { error = String(failure).slice(0, 2000); }
-          try { await connection?.request("control_result", { id: command.id, data, error }); }
-          catch { return; }
-          if (command.command === "shutdown" && !error) ctx.shutdown();
-        })();
-      });
-      await connection.open();
-      await connection.request("join", { sessionId: ctx.sessionManager.getSessionId(), sessionFile: ctx.sessionManager.getSessionFile(), tools: pi.getAllTools().map(tool => tool.name), trusted: ctx.isProjectTrusted() });
+      const link = new Connection(environment[0]!, environment[1]!, environment[2]!);
+      connection = link;
+      link.on("notice", (through, messages) => notify(through, messages));
+      link.on("disconnect", () => { warn("Team coordinator disconnected; this member is shutting down"); ctx.abort(); ctx.shutdown(); });
+      link.on("command", onCommand(ctx, link));
+      await link.open();
+      await link.request("join", { sessionId: ctx.sessionManager.getSessionId(), sessionFile: ctx.sessionManager.getSessionFile(), tools: pi.getAllTools().map(tool => tool.name), trusted: ctx.isProjectTrusted() });
+    } else if (!linkedSession) {
+      const entry = ctx.sessionManager.getEntries().filter(entry => entry.type === "custom" && entry.customType === teamEntryType).at(-1);
+      const data = entry?.type === "custom" ? entry.data as TeamEntry : undefined;
+      team = data && !data.left ? { team: data.team, member: data.member } : undefined;
+      disabled = undefined;
+      if (data?.left) disable("This session left its team; use /teams join to join one");
+      else if (team) await rejoin(ctx);
     }
     startTelemetry(ctx);
     if (!warned) {
@@ -241,7 +415,7 @@ export default function teams(pi: ExtensionAPI) {
   });
   pi.on("session_shutdown", close);
   const switchGuard = () => {
-    if (child || coordinator?.live().length) {
+    if (child || coordinator?.live().length || connection) {
       warn("Stop team members before switching/forking/traversing sessions (team_agent stop, or /teams stop)");
       return { cancel: true as const };
     }
@@ -262,12 +436,12 @@ export default function teams(pi: ExtensionAPI) {
     handler: async ctx => { if (ctx.mode === "tui") await host(ctx).visit("root"); },
   });
   pi.registerCommand("teams", {
-    description: "Team panel; /teams teammate <name-or-id>, config, back, stop, or status",
+    description: "Team panel; /teams teammate <name-or-id>, config, back, stop, status, join, or leave",
     async getArgumentCompletions(prefix) {
       if (!prefix.includes(" ")) return teamsCompletions(prefix, []);
       if (!context) return null;
       try {
-        const members = child || opening ? (await handle("agent", { action: "list" }, context) as Pick<TeamSnapshot, "members">).members : [{ id: "root", status: "idle" as const }];
+        const members = child || opening || connection ? (await handle("agent", { action: "list" }, context) as Pick<TeamSnapshot, "members">).members : [{ id: "root", status: "idle" as const }];
         return teamsCompletions(prefix, members);
       } catch { return null; }
     },
@@ -279,13 +453,20 @@ export default function teams(pi: ExtensionAPI) {
         catch (error) { ctx.ui.notify(cleanText(String(error)), "error"); }
         return;
       }
+      if (args.trim() === "join" || args.trim() === "leave") {
+        try { await (args.trim() === "join" ? joinTeam(ctx) : leaveTeam(ctx)); }
+        catch (error) { ctx.ui.notify(cleanText(String(error instanceof Error ? error.message : error)), "error"); }
+        return;
+      }
       if (args.trim() === "stop") {
         if (child) throw new Error("A member can only stop its descendants using team_agent");
-        const team = await root(ctx);
-        for (const member of [...team.live()].sort((a, b) => b.depth - a.depth)) await team.stopTree(member.id);
+        await link(ctx);
+        // Main sessions keep running; /teams stop stops members only.
+        const { members } = await handle("agent", { action: "list" }, ctx) as Pick<TeamSnapshot, "members">;
+        for (const member of members.filter(member => member.role === "member" && !member.parent && ["starting", "busy", "idle"].includes(member.status))) await handle("agent", { action: "stop", id: member.id }, ctx);
       }
       if (ctx.mode === "tui" && args.trim() !== "stop" && args.trim() !== "status") {
-        if (!child) await root(ctx);
+        if (!child) await link(ctx);
         const api = host(ctx);
         if (args.trim() === "back") await api.visit("root");
         else if (/^(teammate|open)\s+/.test(args.trim())) {
@@ -296,7 +477,7 @@ export default function teams(pi: ExtensionAPI) {
           else ctx.ui.notify(`Unknown teammate: ${cleanText(value)}. Use autocomplete or /teams panel.`, "error");
         }
         else if (!args.trim() || args.trim() === "panel") await showTeamsPanel(ctx, api);
-        else ctx.ui.notify("Usage: /teams [panel|teammate <name-or-id>|config|back|stop|status]", "info");
+        else ctx.ui.notify("Usage: /teams [panel|teammate <name-or-id>|config|back|stop|status|join|leave]", "info");
       } else {
         const status = await handle("agent", { action: "list" }, ctx);
         ctx.ui.notify(JSON.stringify(status, null, 2), "info");

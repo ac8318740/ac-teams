@@ -105,7 +105,7 @@ async function panelFixture(snapshot: TeamSnapshot) {
   let component: Component & { dispose?(): void; handleInput(data: string): void };
   let close: (id?: string) => void = () => {};
   const visits: string[] = [], resumes: string[] = [], sent: string[] = [];
-  const host: PanelHost = { self: "root", drafts: new Map(), snapshot: async () => snapshot,
+  const host: PanelHost = { self: "root", child: false, promote: async () => {}, drafts: new Map(), snapshot: async () => snapshot,
     visit: async id => { visits.push(id); }, resume: async id => { resumes.push(id); },
     requestTask: async text => { sent.push(text); return "Delivered to Main"; },
     feedback: async (_task, text) => { sent.push(text); return "Delivered feedback"; } };
