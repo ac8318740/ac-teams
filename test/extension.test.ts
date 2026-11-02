@@ -37,7 +37,7 @@ function fixture() {
   // SAFETY: lifecycle and tool callbacks here only access the mocked context fields below.
   const ctx = { cwd: home, mode: "rpc", hasUI: true, model: { provider: "test", id: "model" }, tools: [], executeTool() { throw new Error("Unexpected nested tool"); },
     getContextUsage: () => undefined,
-    sessionManager: { getSessionId: () => id, getSessionFile: () => join(home, "root.jsonl") },
+    sessionManager: { getSessionId: () => id, getSessionFile: () => join(home, "root.jsonl"), getSessionDir: () => home },
     ui: { notify(message: string) { warnings.push(message); }, async confirm() { confirmations++; return approval; } },
   } as unknown as ExtensionToolContext;
   const id = randomUUID();
@@ -137,7 +137,7 @@ test("display configuration rejects headless use without opening a team", async 
   try {
     await f.commands.get("teams")!.handler("config", f.ctx);
     assert.match(f.warnings[0], /requires an interactive terminal/);
-    assert.equal(existsSync(join(f.ctx.cwd, ".acstack", "ac-teams", "teams")), false);
+    assert.equal(existsSync(join(f.ctx.cwd, ".pi", "ac-teams", "teams")), false);
   } finally { await f.close(); }
 });
 
@@ -154,7 +154,7 @@ test("context telemetry refreshes, skips unchanged writes, and stops on shutdown
     await f.event("session_start");
     await rootMember();
     await waitTokens(100);
-    const path = join(f.ctx.cwd, ".acstack", "ac-teams", "teams", f.ctx.sessionManager.getSessionId(), "state.json");
+    const path = join(f.ctx.cwd, ".pi", "ac-teams", "teams", f.ctx.sessionManager.getSessionId(), "state.json");
     const modified = statSync(path).mtimeMs;
     await delay(1200);
     assert.equal(statSync(path).mtimeMs, modified, "unchanged metrics must not rewrite state");
@@ -173,7 +173,9 @@ test("raising the root ceiling requires explicit host confirmation", async () =>
     await f.event("session_start");
     await assert.rejects(f.execute("team_agent", { action: "limits", limit: 11 }), /not explicitly approved/);
     f.approve(true);
-    assert.deepEqual(await f.execute("team_agent", { action: "limits", limit: 11 }), { limit: 11, depth: 2 });
+    const { sandbox, ...limits } = await f.execute("team_agent", { action: "limits", limit: 11 }) as { sandbox: { backend: string } };
+    assert.deepEqual(limits, { limit: 11, depth: 2 });
+    assert.equal(sandbox.backend, "docker");
     assert.equal(f.confirmations, 2);
   } finally { await f.close(); }
 });

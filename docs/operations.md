@@ -1,6 +1,6 @@
 # Operate ac-teams
 
-ac-teams runs on Linux with Node 22.19 or newer and an authenticated `pi` executable on `PATH`. Interactive roots also require `tmux`: each team owns a private server and native member terminals. Headless roots retain RPC members. Both share your OS user's access, not a sandbox.
+ac-teams runs on Linux with Node 22.19 or newer and an authenticated `pi` executable on `PATH`. Interactive roots also require `tmux`: each team owns a private server and native member terminals. Headless roots retain RPC members. Both share your OS user's access unless a member is launched with [enforced access](access.md).
 
 ## Save project trust before launching
 
@@ -15,7 +15,7 @@ Default: at most **10 live descendants**, counting starting, busy, idle, and sto
 Root policy precedence, from lowest to highest:
 
 1. Built-in defaults
-2. `~/.acstack/ac-teams/config.json`
+2. `~/.pi/ac-teams/config.json`
 3. `.pi/ac-teams.json`, only with `--teams-project-config`
 4. Explicit `--teams-limit` and `--teams-depth` flags
 
@@ -33,7 +33,7 @@ Other delegation tools remain outside these limits. See [companion tools](usage.
 
 ## Display preferences are global
 
-`/teams config` saves task-summary and agent-selector visibility to `~/.acstack/ac-teams/display.json`:
+`/teams config` saves task-summary and agent-selector visibility to `~/.pi/ac-teams/display.json`:
 
 ```json
 {"tasks":true,"agents":true}
@@ -75,10 +75,10 @@ Missing targets, dirty work, and uncertain/squashed integration retain the tree.
 
 ## Local records contain sensitive project data
 
-Each root session uses `~/.acstack/ac-teams/teams/<session-id>/`:
+Each root session uses `~/.pi/ac-teams/teams/<session-id>/`:
 
 - `state.json` contains membership, policy, tasks, messages, claims, and notification cursors
-- `sessions/` contains native Pi-managed member transcripts
+- Member transcripts live under Main's session directory in `ac-teams/<team>/<member>/`, normally `~/.pi/agent/sessions/<project>/ac-teams/...`; Pi's `/resume` lists only top-level sessions, so use `/teams` to find them
 - `owner.lock` and `coordinator.sock` coordinate the running root
 - Interactive teams also own `t.sock`, the private tmux socket, and per-member terminal environment files; shutdown removes those files
 

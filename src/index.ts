@@ -12,6 +12,8 @@ import { join } from "node:path";
 import { Coordinator, assistantEvent, taskRequestGuidance } from "./coordinator.ts";
 import { Connection, isRecord } from "./connection.ts";
 import { policy, readDisplaySettings, defaultDisplaySettings } from "./config.ts";
+import { providerRoutes } from "./egress.ts";
+import { VERSION, readStoredCredential } from "@earendil-works/pi-coding-agent";
 
 export default function teams(pi: ExtensionAPI) {
   pi.registerFlag("teams-limit", { description: "Explicit maximum live ac-teams members (default 10, idle members count)", type: "string" });
@@ -42,10 +44,22 @@ export default function teams(pi: ExtensionAPI) {
     if (exiting) throw new Error("Team is stopping");
     context = ctx;
     opening ??= Coordinator.open({
-      id: ctx.sessionManager.getSessionId(), cwd: ctx.cwd, sessionFile: ctx.sessionManager.getSessionFile(),
+      id: ctx.sessionManager.getSessionId(), cwd: ctx.cwd, sessionFile: ctx.sessionManager.getSessionFile(), sessionDir: ctx.sessionManager.getSessionDir(),
       ...policy(ctx.cwd, pi.getFlag("teams-project-config") === true, { limit: pi.getFlag("teams-limit") as string | undefined, depth: pi.getFlag("teams-depth") as string | undefined }),
-      extension: fileURLToPath(import.meta.url), notice: notify, warning: warn,
+      extension: fileURLToPath(import.meta.url), notice: notify, warning: warn, piVersion: VERSION,
       status: (kind, active) => pi.events.emit(`herdr:${kind}`, { active, source: "ac-teams" }),
+      credentials: async (provider, modelId) => {
+        // Only providers whose request shape was verified are brokered; anything else fails closed.
+        const registry = (context ?? ctx).modelRegistry, model = registry.find(provider, modelId), route = providerRoutes[provider];
+        if (!model || !route || model.api !== route.api || model.baseUrl !== route.baseUrl || !registry.isUsingOAuth(model)) throw new Error(`Enforced access supports only OAuth ${Object.keys(providerRoutes).join("/")} models at their default endpoints, not ${provider}/${modelId}`);
+        const auth = await registry.getApiKeyAndHeaders(model);
+        if (!auth.ok) throw new Error(auth.error);
+        if (!auth.apiKey || auth.baseUrl || Object.keys(auth.headers ?? {}).length || Object.keys(auth.env ?? {}).length) throw new Error(`Unsupported credential shape for ${provider}`);
+        // The member gets the token's real expiry; an unknown expiry is kept short so the parent's rewrite stays ahead of it.
+        const stored = readStoredCredential(provider) as { type?: string; access?: string; expires?: number } | undefined;
+        const expires = stored?.type === "oauth" && stored.access === auth.apiKey && typeof stored.expires === "number" ? stored.expires : Date.now() + 10 * 60000;
+        return { token: auth.apiKey, expires };
+      },
       interactive: ctx.mode === "tui", model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined, thinking: pi.getThinkingLevel(),
     }).then(value => {
       coordinator = value;

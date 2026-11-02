@@ -8,7 +8,7 @@ import { policy, readDisplaySettings, saveDisplaySettings } from "../src/config.
 test("display defaults are independent, global, private, and preserve invalid files", () => {
   const home = mkdtempSync(join(tmpdir(), "at-display-")), previous = process.env.HOME;
   process.env.HOME = home;
-  const file = join(home, ".acstack", "ac-teams", "display.json");
+  const file = join(home, ".pi", "ac-teams", "display.json");
   try {
     assert.deepEqual(readDisplaySettings(), { tasks: true, agents: true });
     saveDisplaySettings({ tasks: false, agents: true });
@@ -34,9 +34,9 @@ test("policy precedence requires project opt-in and explicit authorization above
   const directory = mkdtempSync(join(tmpdir(), "at-policy-"));
   const previous = process.env.HOME;
   process.env.HOME = directory;
-  mkdirSync(join(directory, ".acstack", "ac-teams"), { recursive: true });
-  mkdirSync(join(directory, ".pi"));
-  const user = join(directory, ".acstack", "ac-teams", "config.json");
+  mkdirSync(join(directory, ".pi", "ac-teams"), { recursive: true });
+  mkdirSync(join(directory, ".pi"), { recursive: true });
+  const user = join(directory, ".pi", "ac-teams", "config.json");
   const project = join(directory, ".pi", "ac-teams.json");
   try {
     assert.deepEqual(policy(directory, false, {}), { limit: 10, depth: 2 });

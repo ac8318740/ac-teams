@@ -13,6 +13,13 @@ export const AgentSchema = Type.Object({
   worktree: Type.Optional(Type.Boolean()), base: Type.Optional(id), target: Type.Optional(id),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
   depth: Type.Optional(Type.Integer({ minimum: 0, maximum: 10 })),
+  access: Type.Optional(Type.Object({
+    read: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 4096 }), { maxItems: 32 })),
+    write: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 4096 }), { maxItems: 32 })),
+    network: Type.Optional(Type.Object({
+      allow: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 260 }), { maxItems: 64, description: "Hosts the member may reach through its proxy: host or *.host (subdomains), optionally :port; without a port, 80 and 443. [] allows only the model provider. Omit allow for any public destination." })),
+    }, { additionalProperties: false, description: "Omit to keep the requester's network access. Children can only narrow it. The model provider stays reachable." })),
+  }, { additionalProperties: false, description: "Launch only: OS-enforced directory access (Docker container). Paths are absolute or cwd-relative directories; write implies read and permits changing those live files; everything else on the host is hidden, and outbound access goes through a proxy that reaches only public addresses. Omit to inherit the requesting member's access; an unsandboxed requester then launches an unsandboxed member. Children can only narrow access. Launch fails if enforcement is unavailable; check team_agent list/limits sandbox first." })),
 }, { additionalProperties: false });
 export const TaskSchema = Type.Object({
   revision: Type.Optional(Type.Integer({ minimum: 1 })), acceptance: Type.Optional(Type.Boolean()),
@@ -56,5 +63,6 @@ export function validate(operation: string, value: unknown): void {
     const args = value as { action: string; name?: string };
     if (args.action === "launch" && !args.name) throw new Error("A descriptive teammate name is required on launch");
     if (args.action !== "launch" && args.name !== undefined) throw new Error("A teammate name can only be set on launch");
+    if (args.action !== "launch" && (value as { access?: unknown }).access !== undefined) throw new Error("Access can only be set on launch; resume keeps the member's access");
   }
 }

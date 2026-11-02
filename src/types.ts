@@ -1,3 +1,4 @@
+import type { Access, AccessRequest } from "./access.ts";
 export interface Worktree {
   repo: string;
   path: string;
@@ -39,6 +40,9 @@ export interface Member {
   summary?: string;
   terminal?: boolean;
   needsInput?: boolean;
+  access?: Access;
+  /** Provider fixed at an enforced member's first launch; member telemetry cannot change it. */
+  provider?: string;
 }
 export const memberNameMaxLength = 40;
 export const memberNamePattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)?(?![\s\S])/;
@@ -113,6 +117,7 @@ export interface AgentArgs {
   target?: string;
   limit?: number;
   depth?: number;
+  access?: AccessRequest;
 }
 export interface UserAction {
   action: "task_request" | "feedback" | "resume";

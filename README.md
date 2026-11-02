@@ -4,7 +4,7 @@ Persistent agent teams for [Pi](https://github.com/earendil-works/pi): shared ta
 
 ## Install
 
-Requires Linux, Node 22.19 or newer, and an authenticated `pi` executable on `PATH`. Interactive teams also require `tmux` on `PATH`. Tested with Pi 1.4.0.
+Requires Linux, Node 22.19 or newer, and an authenticated `pi` executable on `PATH`. Interactive teams also require `tmux` on `PATH`. Tested with Pi 1.4.0 and 1.5.0.
 
 ```sh
 pi install npm:ac-teams@0.0.4
@@ -34,7 +34,7 @@ Defaults allow up to **10 live members** and **two levels of delegation**. Use t
 
 ## Know the boundaries
 
-- Members share your filesystem access. All members can read all team messages, including direct messages.
+- Members share your filesystem access unless launched with [enforced access](docs/access.md), an opt-in Docker sandbox that needs Docker and a locally built member image. All members can read all team messages, including direct messages.
 - Limits cover only `team_agent`, not other delegation tools. Use separate worktrees for concurrent writers.
 - Stop retains tasks, sessions, and worktrees. Worktree deletion is explicit and requires clean, integrated work.
 - Exit confirmation needs Pi's `session_before_exit` hook, which installed Pi 1.4.0 lacks. Without it, shutdown cleans up but cannot ask first. Signals always bypass confirmation.
@@ -45,6 +45,7 @@ See the [operations guide](docs/operations.md) for recovery guarantees, storage,
 
 - [Usage](docs/usage.md): tool actions, task rules, messages, and companion tools
 - [Operations](docs/operations.md): limits, stop/resume, worktrees, and security
+- [Enforced access](docs/access.md): Docker-enforced read/write grants, outbound proxy and destination policy, and setup
 - [Development](docs/development.md): source setup, verification, and publishing
 - [Implementation history](docs/implementation-plan.md): design decisions and prior art
 
