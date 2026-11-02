@@ -1,6 +1,6 @@
 # Use ac-teams
 
-ac-teams provides three tools without prescribing a workflow. Your Pi session is the root; its child agents are members. The root opens coordination state on the first team request.
+ac-teams provides three tools without prescribing a workflow. Your Pi session is a main session; the agents it launches are members. The first main session opens coordination state on the first team request. See [main sessions](#main-sessions-share-one-team) for adding more.
 
 | Tool | Actions | Main rule |
 | --- | --- | --- |
@@ -8,7 +8,7 @@ ac-teams provides three tools without prescribing a workflow. Your Pi session is
 | `team_task` | `create`, `list`, `read`, `edit`, `claim`, `start`, `release`, `complete`, `reopen` | Claim reserves work; dependencies gate starting, not ownership |
 | `team_message` | `send`, `history`, `search` | Recipients select who receives notification, not who can read |
 
-In interactive Pi, `/teams` or `/teams panel` opens the team panel. `/teams teammate <name-or-id>` opens a live teammate directly; autocomplete suggests subcommands and teammate names. You can also enter an exact teammate ID. The older `/teams open <id>` form remains supported. Headless roots retain the status listing. `/teams stop` stops every descendant. See [operations](operations.md) for limits, recovery, and worktree cleanup.
+In interactive Pi, `/teams` or `/teams panel` opens the team panel. `/teams teammate <name-or-id>` opens a live teammate directly; autocomplete suggests subcommands and teammate names. You can also enter an exact teammate ID. The older `/teams open <id>` form remains supported. Headless roots retain the status listing. `/teams stop` stops every member; main sessions keep running. `/teams join` and `/teams leave` change which team this session belongs to. See [operations](operations.md) for limits, recovery, and worktree cleanup.
 
 ## Navigate without stopping members
 
@@ -37,6 +37,17 @@ Each team tool call uses one line with a status dot, tool name, action, and resu
 The `+N lines` hint shows the hidden detail count. Ctrl+O expands the full request and response JSON; mouse-enabled Pi views also support clicking the row.
 
 Team notification messages remain compact; Ctrl+O expands their labeled fields. UI state colors do not replace the underlying progress, ownership, or dependency fields.
+
+## Main sessions share one team
+
+A team can have several main sessions, each a top-level Pi session a person drives. Members are the agents they launch. Every main session controls every member and can stop or resume other main sessions; a member controls only its own descendants and never a main session.
+
+- **Promote:** On the panel's Teammates tab, `P` stops a member and relaunches it as a main session. It keeps its session ID and history, its transcript moves to the normal Pi session folder so `/resume` lists it, and it stays in the team. Under Herdr it opens in a new tab of the workspace for its worktree; otherwise it runs in its own tmux server and ac-teams prints the attach command. A member with enforced access asks first, because the promoted session runs without the container.
+- **Join:** `/teams join` lists the teams in this project and adds this session to the chosen one as a main session, then posts a summary of open tasks, owners, and recent messages. It refuses a session already in that team, or one already in a team with other members.
+- **Leave:** `/teams leave` returns this session's in-progress tasks to `todo`, clears their ownership, and drops its main-session role; its record keeps its history. The last main session cannot leave while members are live.
+- **Resume:** A session remembers its team in its transcript. Resuming it reconnects to the team; if no coordinator is running, ac-teams offers to run it here. Declining turns the team tools off for this session.
+
+One main session runs the coordinator; the others connect to it. When that session exits, another main session takes over automatically and resumes the members that were working. See [operations](operations.md#coordinator-handover).
 
 ## Show tasks and configure the displays
 
