@@ -37,8 +37,8 @@ export const MessageSchema = Type.Object({
   after: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
 }, { additionalProperties: false });
 const UserActionSchema = Type.Object({
-  action: Type.Union([Type.Literal("task_request"), Type.Literal("feedback"), Type.Literal("resume")]),
-  id: Type.Optional(id), text: Type.Optional(text),
+  action: Type.Union([Type.Literal("task_request"), Type.Literal("feedback"), Type.Literal("resume"), Type.Literal("promote"), Type.Literal("leave")]),
+  id: Type.Optional(id), text: Type.Optional(text), confirmed: Type.Optional(Type.Boolean()),
   model: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
   thinking: AgentSchema.properties.thinking,
 }, { additionalProperties: false });

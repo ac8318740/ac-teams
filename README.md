@@ -28,7 +28,7 @@ Your Pi session is the root; its child agents are members. Ask Pi to delegate a 
 
 The task summary sits above the input. The agent selector sits below the input, above your existing footer, and shows descriptive names, models, and context usage. ac-teams publishes a compact team status without replacing the footer or editor supplied by other extensions. `/teams config` toggles these displays independently.
 
-From an empty editor, press Down to select the team row, then Enter to open a member. A red **Needs input** label marks a member with an open question. Ctrl+Shift+Left returns to Main without stopping the member or dismissing its question. `/teams stop` stops every descendant.
+From an empty editor, press Down to select the team row, then Enter to open a member. A red **Needs input** label marks a member with an open question. Ctrl+Shift+Left returns to Main without stopping the member or dismissing its question. `/teams stop` stops every member; main sessions keep running. `/teams join` and `/teams leave` add this session to another team or take it out.
 
 Defaults allow up to **10 live members** and **two levels of delegation**. Use the fewest useful agents.
 

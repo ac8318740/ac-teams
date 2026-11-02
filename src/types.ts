@@ -43,10 +43,22 @@ export interface Member {
   access?: Access;
   /** Provider fixed at an enforced member's first launch; member telemetry cannot change it. */
   provider?: string;
+  /** Authority: a main session or a member. Absent once a main session has left the team. */
+  role?: "main" | "member";
+  /** State recorded when the coordinator owner stopped this member; the next owner's resume pass consumes it. */
+  handover?: "busy" | "idle" | "input";
+  /** Promotion in progress: the last completed step and what a rollback restores. */
+  promotion?: { step: "stopped" | "moved" | "role" | "entry"; sessionFile: string; parent?: string; access?: Access; provider?: string };
 }
 export const memberNameMaxLength = 40;
 export const memberNamePattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)?(?![\s\S])/;
 export function memberName(member: Pick<Member, "id" | "name">): string { return member.id === "root" ? "Main" : member.name ?? member.id; }
+export function isMain(member: Pick<Member, "role"> | undefined): boolean { return member?.role === "main"; }
+/** Mains control every member and other mains; members control only their descendants, never a main. */
+export function canControl(state: TeamState, actor: string, id: string): boolean {
+  const target = state.members[id];
+  return !!target && id !== actor && (isMain(state.members[actor]) ? target.role !== undefined : !isMain(target) && isDescendant(state, id, actor));
+}
 export const taskLabelMaxLength = 60;
 export const taskLabelPattern = /^[^\s\x00-\x1f\x7f-\x9f]+(?: [^\s\x00-\x1f\x7f-\x9f]+){0,2}(?![\s\S])/;
 export function taskName(task: Pick<Task, "number" | "label">): string { return `#${task.number} ${task.label}`; }
@@ -75,9 +87,10 @@ export interface Message {
   time: string;
 }
 export interface TeamState {
-  version: 3;
+  version: 4;
   id: string;
-  root: string;
+  /** Lets an unsandboxed session of the same user add itself as a main session. */
+  key: string;
   limit: number;
   depth: number;
   members: Record<string, Member>;
@@ -120,13 +133,15 @@ export interface AgentArgs {
   access?: AccessRequest;
 }
 export interface UserAction {
-  action: "task_request" | "feedback" | "resume";
+  action: "task_request" | "feedback" | "resume" | "promote" | "leave";
   id?: string;
+  /** Promote: the user approved running a sandboxed member with full access. */
+  confirmed?: boolean;
   text?: string;
   model?: string;
   thinking?: string;
 }
-export type Operation = "agent" | "task" | "message" | "join" | "ack" | "event" | "control_result" | "ui";
+export type Operation = "agent" | "task" | "message" | "join" | "ack" | "event" | "control_result" | "ui" | "add_main";
 export function isLive(member: Pick<Member, "status">): boolean {
   return ["starting", "busy", "idle", "stopping"].includes(member.status);
 }

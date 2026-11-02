@@ -1,0 +1,28 @@
+id: member
+name: Member
+summary: >-
+  An agent-launched Pi process with ACSTACK_AGENT_ROLE=member and AC_TEAMS_*
+  variables. It controls only its descendants, and its transcript stays under
+  ac-teams/<team>/<member>/ until promotion.
+kind: component
+relationships:
+  - id: coordinator-runs-member
+    from: coordinator
+    to: member
+    direction: one-way
+    label: Launches, stops, and resumes
+  - id: member-uses-coordinator
+    from: member
+    to: coordinator
+    direction: one-way
+    label: Calls team tools through
+  - id: member-writes-transcript
+    from: member
+    to: transcripts
+    direction: one-way
+    label: Writes its conversation to
+  - id: guard-reads-member
+    from: read-guard
+    to: member
+    direction: one-way
+    label: Reads ACSTACK_AGENT_ROLE=member in

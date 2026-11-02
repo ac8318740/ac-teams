@@ -5,7 +5,9 @@ import { execFileSync } from "node:child_process";
 import { connect } from "node:net";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { mainEnv, handoverPrompt } from "../src/mains.ts";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { Coordinator, assistantEvent, taskRequestGuidance, type CoordinatorOptions } from "../src/coordinator.ts";
@@ -43,6 +45,7 @@ for (const interactive of [false, true]) test(`members cannot report directly to
     const member = await f.team.handle("root", "agent", launch) as { pid: number };
     const env = readFileSync(`/proc/${member.pid}/environ`, "utf8").split("\0");
     assert.ok(env.includes("HERDR_ENV=0"));
+    assert.ok(env.includes("ACSTACK_AGENT_ROLE=member"), "ACStack hooks see a member, not a main session");
   } finally { await f.close(); if (previous === undefined) delete process.env.HERDR_ENV; else process.env.HERDR_ENV = previous; }
 });
 
@@ -168,7 +171,7 @@ test("forged tokens, extra fields, and unauthenticated connections cannot mutate
     await assert.rejects(bad.request("message", { action: "send", text: "forged" }), /disconnected/);
     bad.close();
     await assert.rejects(f.team.handle("root", "message", { action: "send", text: "test", injected: true }), /Invalid/);
-    await assert.rejects(f.team.handle(member.id, "agent", { action: "limits", limit: 1 }), /root/);
+    await assert.rejects(f.team.handle(member.id, "agent", { action: "limits", limit: 1 }), /main session/);
     assert.equal(f.team.store.state.messages.length, 0);
     const status = JSON.stringify(await f.team.handle("root", "agent", { action: "list" }));
     assert.equal(status.includes(member.token), false);
@@ -246,11 +249,16 @@ test("coordinator shutdown closes owned idle processes and durable recovery keep
   try {
     await f.team.handle("root", "agent", launch);
     const id = f.team.live()[0].id;
+    await until(() => f.team.store.state.members[id].status === "idle");
     await f.team.close();
+    assert.equal(f.team.store.state.members[id].handover, "idle");
     const recovered = await Coordinator.open(f.options);
     try {
+      // The next owner's resume pass restores the idle member without a new prompt.
+      await until(() => recovered.store.state.members[id].status === "idle");
+      assert.equal(recovered.store.state.members[id].handover, undefined);
+      await recovered.handle("root", "agent", { action: "stop", id });
       assert.equal(recovered.live().length, 0);
-      assert.equal(recovered.store.state.members[id].status, "stopped");
       await recovered.handle("root", "agent", { action: "resume", id, model: "test/model", brief: "resumed after recovery" });
       assert.equal(recovered.live().length, 1);
     } finally { await recovered.close(); }
@@ -328,7 +336,7 @@ test("native members keep PID while idle, stop cleanly, and quietly resume for c
     assert.equal(f.team.store.state.members[member.id].contextUsage?.tokens, null);
     assert.equal(member.token, undefined);
     await until(() => f.team.store.state.members[member.id].status === "idle");
-    const saved = () => JSON.parse(readFileSync(member.sessionFile, "utf8")) as { prompts: string[] };
+    const saved = () => ({ prompts: readFileSync(member.sessionFile, "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(entry => entry.type === "message").map(entry => entry.message.content[0].text as string) });
     assert.deepEqual(saved().prompts, ["hello"]);
     const task = await f.team.handle(member.id, "task", { action: "create", title: "Creator task", description: "Do not mutate from feedback" }) as { id: string; creator: string };
     assert.equal(task.creator, member.id);
@@ -394,7 +402,7 @@ test("creator resume failure reports Main fallback, while headless roots reject 
 
 test("full-size user text survives task envelopes, transport and recovery; stopping creators fall back", async () => {
   const f = await setup(2, 2, true);
-  const member = { id: "creator", parent: "root", depth: 1, token: randomUUID(), cwd: f.home, status: "idle" as const, notified: 0 };
+  const member = { id: "creator", role: "member" as const, parent: "root", depth: 1, token: randomUUID(), cwd: f.home, status: "idle" as const, notified: 0 };
   f.team.store.update(state => { state.members[member.id] = member; });
   const reader = new Connection(f.team.socketPath, member.id, member.token);
   try {
@@ -475,4 +483,179 @@ test("network access is inherited when omitted and can only narrow", async () =>
     await assert.rejects(f.team.handle(worker.id, "agent", { ...launch, name: "inherit", access: { read: ["."] } }), /Enforced access is unavailable/);
     await assert.rejects(f.team.handle(worker.id, "agent", { ...launch, name: "narrow", access: { read: ["."], network: { allow: [] } } }), /Enforced access is unavailable/);
   } finally { await f.close(); }
+});
+
+// Session roles: main sessions, promotion, joining, leaving, and coordinator handover.
+/** Connects a main session as a coordinator client, answering shutdown commands like a real session. */
+async function mainClient(team: Coordinator, id: string) {
+  const member = team.store.state.members[id];
+  const link = new Connection(team.socketPath, id, member.token);
+  link.on("command", (command: { id: string; command: string }) => {
+    void link.request("control_result", { id: command.id, data: {} }).then(() => { if (command.command === "shutdown") link.close(); }, () => {});
+  });
+  await link.open();
+  await link.request("join", { sessionId: member.sessionId, sessionFile: member.sessionFile, tools: ["team_agent", "team_task", "team_message"], trusted: true });
+  return link;
+}
+async function addMain(team: Coordinator, home: string) {
+  const sessionId = randomUUID(), sessionFile = join(home, `${sessionId}.jsonl`);
+  writeFileSync(sessionFile, JSON.stringify({ type: "session", version: 3, id: sessionId, timestamp: new Date().toISOString(), cwd: home }) + "\n");
+  const probe = new Connection(team.socketPath, "join", team.store.state.key);
+  await probe.open();
+  try { return { ...await probe.request("add_main", { sessionId, sessionFile, cwd: home }) as { id: string; token: string }, sessionId, sessionFile }; }
+  finally { probe.close(); }
+}
+const lines = (file: string) => readFileSync(file, "utf8").trim().split("\n").map(line => JSON.parse(line) as Record<string, unknown>);
+
+test("a main session's environment drops member identity and Herdr opt-out", () => {
+  const env = mainEnv({ PATH: "/bin", HOME: "/h", ACSTACK_AGENT_ROLE: "member", AC_TEAMS_SOCKET: "s", AC_TEAMS_TOKEN: "t", HERDR_ENV: "0", TMUX: "x" });
+  assert.deepEqual(env, { PATH: "/bin", HOME: "/h" });
+  assert.equal(mainEnv({ HERDR_ENV: "1" }).HERDR_ENV, "1", "a real Herdr session keeps its marker");
+});
+
+test("promotion keeps the session, moves the transcript to the top-level folder, and keeps descendants", async () => {
+  const f = await setup(4, 3, true);
+  const launched: { command: string[]; env: Record<string, string> }[] = [];
+  f.options.launchMain = async spec => { launched.push(spec); return "opened"; };
+  try {
+    const member = await f.team.handle("root", "agent", { ...launch, brief: "DELEGATE" }) as { id: string; sessionId: string; sessionFile: string };
+    await until(() => f.team.live().length === 2);
+    const nested = f.team.live().find(other => other.id !== member.id)!;
+    await until(() => f.team.store.state.members[member.id].status === "idle");
+    const original = f.team.store.state.members[member.id].sessionFile!;
+    const result = await f.team.handle("root", "ui", { action: "promote", id: member.id });
+    assert.match(String(result), /Promoted worker to a main session/);
+    const promoted = f.team.store.state.members[member.id];
+    const target = join(f.team.store.dir, "sessions", basename(original));
+    assert.equal(promoted.role, "main");
+    assert.equal(promoted.sessionId, member.sessionId);
+    assert.equal(promoted.sessionFile, target);
+    assert.equal(promoted.depth, 0);
+    assert.equal(promoted.parent, undefined);
+    assert.equal(promoted.promotion, undefined);
+    assert.ok(!existsSync(original) && existsSync(target));
+    assert.deepEqual(lines(target).at(-1)!.data, { team: f.team.store.state.id, member: member.id });
+    assert.ok((await SessionManager.list(f.home, dirname(target))).some(session => session.id === member.sessionId), "Pi's session list shows the promoted transcript");
+    assert.deepEqual(launched[0].command.slice(-2), ["--session", target]);
+    assert.ok(!Object.keys(launched[0].env).some(key => key.startsWith("AC_TEAMS_") || key === "ACSTACK_AGENT_ROLE"));
+    // The nested member keeps running, moves up a level, and stays under every main session's control.
+    assert.equal(f.team.store.state.members[nested.id].status, "idle");
+    assert.equal(f.team.store.state.members[nested.id].depth, 1);
+    await assert.rejects(f.team.handle("root", "ui", { action: "promote", id: member.id }), /Only a member/);
+    await f.team.handle("root", "agent", { action: "stop", id: nested.id });
+  } finally { await f.close(); }
+});
+
+test("a sandboxed member is promoted only after the user confirms", async () => {
+  const f = await setup(10, 2, true);
+  f.options.launchMain = async () => "opened";
+  try {
+    const member = await f.team.handle("root", "agent", launch) as { id: string };
+    await until(() => f.team.store.state.members[member.id].status === "idle");
+    f.team.store.update(state => { state.members[member.id].access = { read: [f.home], write: [], network: {} }; });
+    await assert.rejects(f.team.handle("root", "ui", { action: "promote", id: member.id }), /confirm/);
+    assert.equal(f.team.store.state.members[member.id].status, "idle", "a refused promotion leaves the member running");
+    await f.team.handle("root", "ui", { action: "promote", id: member.id, confirmed: true });
+    assert.equal(f.team.store.state.members[member.id].access, undefined);
+    assert.equal(f.team.store.state.members[member.id].role, "main");
+  } finally { await f.close(); }
+});
+
+for (const step of ["stopped", "moved", "role", "entry"]) test(`a promotion failing after the ${step} step rolls back to a stopped member`, async () => {
+  const f = await setup(10, 2, true);
+  f.options.launchMain = async () => "opened";
+  f.options.promotionStep = name => { if (name === step) throw new Error(`injected at ${name}`); };
+  try {
+    const member = await f.team.handle("root", "agent", launch) as { id: string };
+    await until(() => f.team.store.state.members[member.id].status === "idle");
+    const original = f.team.store.state.members[member.id].sessionFile!;
+    await assert.rejects(f.team.handle("root", "ui", { action: "promote", id: member.id }), new RegExp(`injected at ${step}`));
+    const after = f.team.store.state.members[member.id];
+    assert.deepEqual([after.role, after.status, after.parent, after.depth, after.sessionFile, after.promotion], ["member", "stopped", "root", 1, original, undefined]);
+    assert.match(after.error!, /Promotion failed/);
+    assert.ok(existsSync(original) && !existsSync(join(f.team.store.dir, "sessions", basename(original))));
+    if (step === "entry") assert.equal((lines(original).at(-1)!.data as { left?: boolean }).left, true, "the transcript no longer claims a main-session role");
+  } finally { await f.close(); }
+});
+
+test("main sessions control members and each other; members cannot touch a main session", async () => {
+  const f = await setup(10, 2, true);
+  const launched: string[] = [];
+  let shutdown = 0;
+  f.options.launchMain = async spec => { launched.push(spec.id); return "opened"; };
+  f.options.shutdown = () => { shutdown++; };
+  try {
+    const second = await addMain(f.team, f.home);
+    await assert.rejects(addMain2(f.team, second.sessionId, f.home), /already in the team/);
+    let client = await mainClient(f.team, second.id);
+    assert.equal(f.team.store.state.members[second.id].status, "idle");
+    const member = await f.team.handle("root", "agent", launch) as { id: string };
+    await assert.rejects(f.team.handle(member.id, "agent", { action: "stop", id: second.id }), /Only a main session or a member's ancestor/);
+    await assert.rejects(f.team.handle(member.id, "agent", { action: "stop", id: "root" }), /Only a main session or a member's ancestor/);
+    await client.request("agent", { action: "stop", id: member.id });
+    assert.equal(f.team.store.state.members[member.id].status, "stopped");
+    await client.request("agent", { action: "resume", id: member.id, brief: "continue", model: "test/model" });
+    await until(() => f.team.store.state.members[member.id].status === "idle");
+    await f.team.handle("root", "agent", { action: "stop", id: second.id });
+    await until(() => f.team.store.state.members[second.id].status === "stopped");
+    await f.team.handle("root", "agent", { action: "resume", id: second.id, brief: "x", model: "test/model" });
+    assert.deepEqual(launched, [second.id]);
+    client = await mainClient(f.team, second.id);
+    await client.request("agent", { action: "stop", id: "root" });
+    assert.equal(shutdown, 1, "stopping the owner asks its session to exit");
+    client.close();
+  } finally { await f.close(); }
+});
+async function addMain2(team: Coordinator, sessionId: string, home: string) {
+  const probe = new Connection(team.socketPath, "join", team.store.state.key);
+  await probe.open();
+  try { return await probe.request("add_main", { sessionId, cwd: home }); } finally { probe.close(); }
+}
+
+test("leaving returns in-progress tasks and keeps the leaver's members manageable", async () => {
+  const f = await setup(10, 2, true);
+  try {
+    const own = await f.team.handle("root", "agent", { ...launch, name: "own" }) as { id: string };
+    await assert.rejects(f.team.handle("root", "ui", { action: "leave" }), /only main session/, "the last main session cannot strand live members");
+    await f.team.handle("root", "agent", { action: "stop", id: own.id });
+    const second = await addMain(f.team, f.home);
+    const client = await mainClient(f.team, second.id);
+    const member = await client.request("agent", launch) as { id: string };
+    const task = await client.request("task", { action: "create", title: "Work", description: "Do it" }) as { id: string };
+    await client.request("task", { action: "claim", id: task.id });
+    await client.request("task", { action: "start", id: task.id });
+    await client.request("ui", { action: "leave" });
+    const state = f.team.store.state;
+    assert.equal(state.tasks[task.id].status, "todo");
+    assert.equal(state.tasks[task.id].owner, undefined);
+    assert.equal(state.members[second.id].role, undefined);
+    await assert.rejects(client.request("task", { action: "list" }), /disconnected|unavailable/i, "a session that left loses team access");
+    await f.team.handle("root", "agent", { action: "stop", id: member.id });
+    assert.equal(f.team.store.state.members[member.id].status, "stopped");
+    client.close();
+  } finally { await f.close(); }
+});
+
+test("a new owner resumes each member to its recorded state after a handover", async () => {
+  const f = await setup(10, 2, true);
+  try {
+    const second = await addMain(f.team, f.home);
+    const idle = await f.team.handle("root", "agent", launch) as { id: string; sessionFile: string };
+    const busy = await f.team.handle("root", "agent", { ...launch, name: "busy", brief: "WAIT" }) as { id: string; sessionFile: string };
+    const asking = await f.team.handle("root", "agent", { ...launch, name: "asking" }) as { id: string; sessionFile: string };
+    await until(() => f.team.store.state.members[idle.id].status === "idle" && f.team.store.state.members[asking.id].status === "idle" && f.team.store.state.members[busy.id].status === "busy");
+    f.team.recordEvent(asking.id, { type: "blocked", active: true });
+    await f.team.close();
+    assert.deepEqual([idle.id, busy.id, asking.id].map(id => f.team.store.state.members[id].handover), ["idle", "busy", "input"]);
+    const options = { ...f.options, self: second.id, sessionId: second.sessionId, sessionFile: second.sessionFile };
+    const next = await Coordinator.open(options);
+    try {
+      await until(() => [idle.id, busy.id, asking.id].every(id => ["idle", "busy"].includes(next.store.state.members[id].status) && next.store.state.members[id].handover === undefined));
+      const prompts = (file: string) => lines(file).filter(entry => entry.type === "message").map(entry => ((entry.message as { content: { text: string }[] }).content[0].text));
+      assert.equal(prompts(busy.sessionFile).at(-1), handoverPrompt);
+      assert.equal(prompts(idle.sessionFile).at(-1), "hello", "idle members resume without a new prompt");
+      assert.equal(next.store.state.members[asking.id].needsInput, true);
+      assert.equal(next.store.state.members.root.status, "stopped");
+    } finally { await next.close(); }
+  } finally { rmSync(f.home, { recursive: true, force: true }); }
 });

@@ -9,10 +9,10 @@ import type { TaskView, TeamState } from "../src/types.ts";
 function fixture(t: test.TestContext) {
   const home = mkdtempSync(join(tmpdir(), "ac-task-state-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
-  const initial: TeamState = { version: 3, id: "team", root: "root", limit: 3, depth: 1, tasks: {}, messages: [], members: {
-    root: { id: "root", depth: 0, token: "r", cwd: home, status: "idle", notified: 0 },
-    a: { id: "a", parent: "root", depth: 1, token: "a", cwd: home, status: "idle", notified: 0 },
-    b: { id: "b", parent: "root", depth: 1, token: "b", cwd: home, status: "idle", notified: 0 },
+  const initial: TeamState = { version: 4, id: "team", key: "key", limit: 3, depth: 1, tasks: {}, messages: [], members: {
+    root: { id: "root", role: "main", depth: 0, token: "r", cwd: home, status: "idle", notified: 0 },
+    a: { id: "a", role: "member", parent: "root", depth: 1, token: "a", cwd: home, status: "idle", notified: 0 },
+    b: { id: "b", role: "member", parent: "root", depth: 1, token: "b", cwd: home, status: "idle", notified: 0 },
   } };
   const store = new Store(initial, home);
   t.after(() => store.close());
@@ -160,7 +160,7 @@ test("legacy progress migrates durably without losing owners, dependencies, or r
   } };
   writeFileSync(path, JSON.stringify(legacy));
   const reopened = new Store(initial, home);
-  assert.equal(reopened.state.version, 3);
+  assert.equal(reopened.state.version, 4);
   assert.deepEqual(Object.values(reopened.state.tasks).map(t => [t.status, t.owner, t.revision]), [["done", "a", 4], ["in_progress", "b", 2], ["todo", undefined, 1]]);
   assert.deepEqual(reopened.state.tasks.next.dependencies, ["first"]);
   assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), reopened.state);

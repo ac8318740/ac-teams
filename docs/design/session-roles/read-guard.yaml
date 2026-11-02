@@ -1,0 +1,17 @@
+id: read-guard
+name: ACStack read guard
+summary: >-
+  ACStack's large-read hook. It blocks a large untargeted read once in main
+  agents only, and reads ACSTACK_AGENT_ROLE on every call to decide.
+kind: external-system
+relationships:
+  - id: guard-reads-member
+    from: read-guard
+    to: member
+    direction: one-way
+    label: Reads ACSTACK_AGENT_ROLE=member in
+  - id: guard-reads-main
+    from: read-guard
+    to: main-session
+    direction: one-way
+    label: Finds no member role in

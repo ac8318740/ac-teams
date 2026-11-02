@@ -93,7 +93,9 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
       try {
         const member = snapshot.members.find(member => member.id === id);
         if (member && ["stopped", "interrupted"].includes(member.status)) await host.resume(id);
-        done(id);
+        // Main sessions run in their own terminals; resuming one opens it there.
+        if (member?.role === "main" && id !== host.self) receipt = `${name(id)} runs in its own terminal`;
+        else done(id);
       } catch (error) { receipt = `Could not open ${name(id)}: ${clean(String(error))}`; }
       finally { opening = false; refresh(); }
     }
@@ -237,6 +239,7 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
         heading("Message with full context"), "Open the native Pi session to read its conversation and type your message there.", "",
         fg("accent", member && ["stopped", "interrupted"].includes(member.status) ? "Enter  Resume and open" : "Enter  Open full session"),
         fg("muted", "No separate message composer."),
+        ...(!host.child && member?.role === "member" ? ["", fg("accent", "P  Promote to main session"), fg("muted", "Stops it and reopens its transcript as a main session in its own terminal.")] : []),
       ], width);
     }
 
@@ -294,6 +297,11 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
         } else if (data.toLowerCase() === "g" && tab === 0 && !detail) { graph = !graph; scroll = 0; }
         else if (data.toLowerCase() === "n") begin("new");
         else if (data.toLowerCase() === "c" && tab === 0) begin("feedback");
+        else if (data.toLowerCase() === "p" && tab === 1 && !host.child) {
+          const id = memberIds()[memberIndex];
+          if (snapshot.members.find(member => member.id === id)?.role !== "member") receipt = "Only a member can be promoted.";
+          else { done(undefined); void host.promote(id).catch(error => ctx.ui.notify(`Promotion failed: ${clean(String(error))}`, "error")); return; }
+        }
         else if (matchesKey(data, "enter") || data.toLowerCase() === "o") {
           if (tab === 1 || data.toLowerCase() === "o") {
             const id = tab === 1 ? memberIds()[memberIndex] : tab === 0 ? selectedTask()?.owner : events[eventIndex]?.from;

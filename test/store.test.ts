@@ -9,10 +9,10 @@ import { Store, processAlive, processIdentity } from "../src/store.ts";
 import type { TeamState, Task, Message } from "../src/types.ts";
 
 function initial(): TeamState {
-  return { version: 3, id: "team", root: "root", limit: 5, depth: 3, tasks: {}, messages: [], members: {
-    root: { id: "root", depth: 0, token: "secret", cwd: "/tmp", status: "idle", notified: 0 },
-    child: { id: "child", parent: "root", depth: 1, token: "secret2", cwd: "/tmp", status: "idle", notified: 0 },
-    other: { id: "other", parent: "root", depth: 1, token: "secret3", cwd: "/tmp", status: "idle", notified: 0 },
+  return { version: 4, id: "team", key: "key", limit: 5, depth: 3, tasks: {}, messages: [], members: {
+    root: { id: "root", role: "main", depth: 0, token: "secret", cwd: "/tmp", status: "idle", notified: 0 },
+    child: { id: "child", role: "member", parent: "root", depth: 1, token: "secret2", cwd: "/tmp", status: "idle", notified: 0 },
+    other: { id: "other", role: "member", parent: "root", depth: 1, token: "secret3", cwd: "/tmp", status: "idle", notified: 0 },
   } };
 }
 function fixture(t: test.TestContext) {
@@ -236,6 +236,26 @@ test("task numbers and concise labels survive edits, failures, pagination, and r
   } finally { reopened.close(); }
 });
 
+test("schema 3 migrates the root record to a main session and every other record to a member", t => {
+  const { home, store } = fixture(t);
+  store.task("child", { action: "create", title: "Keep me", description: "Survives migration" });
+  const path = join(store.dir, "state.json");
+  const legacy = JSON.parse(readFileSync(path, "utf8"));
+  store.close();
+  Object.assign(legacy, { version: 3, root: "root" });
+  delete legacy.key;
+  for (const member of Object.values(legacy.members) as Record<string, unknown>[]) delete member.role;
+  writeFileSync(path, JSON.stringify(legacy));
+  const reopened = new Store(initial(), home);
+  t.after(() => reopened.close());
+  assert.equal(reopened.state.version, 4);
+  assert.equal((reopened.state as unknown as Record<string, unknown>).root, undefined);
+  assert.match(reopened.state.key, /^[0-9a-f-]{36}$/);
+  assert.deepEqual(Object.fromEntries(Object.values(reopened.state.members).map(member => [member.id, member.role])), { root: "main", child: "member", other: "member" });
+  assert.equal(Object.values(reopened.state.tasks)[0].title, "Keep me");
+  assert.equal(JSON.parse(readFileSync(path, "utf8")).version, 4, "the migration is written back");
+});
+
 test("v2 tasks gain durable numbers and initial labels without changing existing work", t => {
   const { home, store } = fixture(t);
   const first = store.task("root", { action: "create", title: "Parser tests", description: "Keep all acceptance criteria" }) as Task;
@@ -251,7 +271,7 @@ test("v2 tasks gain durable numbers and initial labels without changing existing
   const reopened = new Store(initial(), home);
   assert.deepEqual(reopened.state.tasks[first.id], { ...legacy.tasks[first.id], number: 1, label: "Run complete parser" });
   assert.deepEqual(reopened.state.tasks[second.id], { ...legacy.tasks[second.id], number: 2, label: "Review" });
-  assert.equal(reopened.state.version, 3);
+  assert.equal(reopened.state.version, 4);
   const migrated = readFileSync(path, "utf8");
   reopened.close();
   const again = new Store(initial(), home);
