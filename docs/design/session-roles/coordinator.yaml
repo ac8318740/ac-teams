@@ -1,0 +1,44 @@
+id: coordinator
+name: Coordinator
+summary: >-
+  The team's single referee, running inside whichever main session holds
+  owner.lock. It starts and stops member processes, answers every team_agent,
+  team_task, and team_message call, delivers message notifications, checks
+  who may do what, and runs promotion, joining, and takeover.
+kind: component
+relationships:
+  - id: main-uses-coordinator
+    from: main-session
+    to: coordinator
+    direction: one-way
+    label: Hosts as owner, or connects to as a client
+  - id: member-uses-coordinator
+    from: member
+    to: coordinator
+    direction: one-way
+    label: Calls team tools through
+  - id: coordinator-runs-member
+    from: coordinator
+    to: member
+    direction: one-way
+    label: Launches, stops, and resumes
+  - id: coordinator-launches-main
+    from: coordinator
+    to: main-session
+    direction: one-way
+    label: Relaunches promoted members as
+  - id: coordinator-writes-store
+    from: coordinator
+    to: team-store
+    direction: one-way
+    label: Holds owner.lock and records roles in
+  - id: coordinator-moves-transcript
+    from: coordinator
+    to: transcripts
+    direction: one-way
+    label: Moves promoted transcripts within
+  - id: coordinator-opens-tabs
+    from: coordinator
+    to: herdr
+    direction: one-way
+    label: Opens main-session tabs through

@@ -1,0 +1,17 @@
+id: herdr
+name: Herdr
+summary: >-
+  Optional terminal workspace manager. When present, each main session gets
+  its own tab in the workspace for its worktree.
+kind: external-system
+relationships:
+  - id: user-uses-herdr
+    from: user
+    to: herdr
+    direction: one-way
+    label: Switches between main sessions in
+  - id: coordinator-opens-tabs
+    from: coordinator
+    to: herdr
+    direction: one-way
+    label: Opens main-session tabs through

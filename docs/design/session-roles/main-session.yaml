@@ -1,0 +1,34 @@
+id: main-session
+name: Main session
+summary: >-
+  A Pi session the user started, joined to a team, or promoted. Every main
+  session controls every member and other main sessions, shares the team's
+  tasks and messages, and belongs to one team at a time.
+kind: component
+channels: [cli]
+relationships:
+  - id: user-drives-main
+    from: user
+    to: main-session
+    direction: one-way
+    label: Promotes, joins, and leaves through /teams in
+  - id: main-uses-coordinator
+    from: main-session
+    to: coordinator
+    direction: one-way
+    label: Hosts as owner, or connects to as a client
+  - id: main-writes-transcript
+    from: main-session
+    to: transcripts
+    direction: one-way
+    label: Writes its conversation and team entry to
+  - id: guard-reads-main
+    from: read-guard
+    to: main-session
+    direction: one-way
+    label: Finds no member role in
+  - id: coordinator-launches-main
+    from: coordinator
+    to: main-session
+    direction: one-way
+    label: Relaunches promoted members as
