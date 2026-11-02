@@ -6,7 +6,9 @@ import { isRecord } from "./connection.ts";
 
 export interface DisplaySettings { tasks: boolean; agents: boolean }
 export const defaultDisplaySettings: DisplaySettings = { tasks: true, agents: true };
-const displayPath = () => join(homedir(), ".acstack", "ac-teams", "display.json");
+/** ac-teams state outside Pi's agent directory: settings, team stores, and generated member configuration. */
+export const stateRoot = () => join(homedir(), ".pi", "ac-teams");
+const displayPath = () => join(stateRoot(), "display.json");
 
 export function readDisplaySettings(): DisplaySettings {
   let value: unknown;
@@ -32,7 +34,7 @@ export function saveDisplaySettings(value: DisplaySettings): void {
 
 export function policy(cwd: string, trusted: boolean, flags: { limit?: string; depth?: string }) {
   let config: Record<string, unknown> = { limit: 10, depth: 2 };
-  const files = [join(homedir(), ".acstack", "ac-teams", "config.json")];
+  const files = [join(stateRoot(), "config.json")];
   if (trusted) files.push(join(cwd, ".pi", "ac-teams.json"));
   for (const file of files) {
     let value: unknown;

@@ -133,6 +133,6 @@ Messages survive crashes; exactly-once delivery or model execution does not. Avo
 
 ac-teams works alone. ACStack adds planning, review, and shipping skills; Herdr adds terminal tabs, panes, and visible root sessions. These are companion capabilities, not automatic integrations. ac-teams does not open a Herdr pane for each member. Interactive members use a team-private tmux server and open in the current terminal when selected; headless roots use RPC members.
 
-Other delegation tools can coexist. ac-teams warns when `Agent`, `SubagentWorkflow`, or `subagent` is active, but does not disable them. Its limits cover only members launched through `team_agent`. Use Pi's resource settings to disable other launchers if you want one team authority. Shell access and same-user extensions are not sandboxed.
+Other delegation tools can coexist. ac-teams warns when `Agent`, `SubagentWorkflow`, or `subagent` is active, but does not disable them. Its limits cover only members launched through `team_agent`. Use Pi's resource settings to disable other launchers if you want one team authority. Shell access and same-user extensions are not sandboxed unless a member is launched with [enforced access](access.md).
 
 [Back to README](../README.md)
