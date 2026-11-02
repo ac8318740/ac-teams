@@ -182,7 +182,7 @@ test("large valid message and task pages cross the authenticated socket without 
   const connection = new Connection(f.team.socketPath, reader.id, reader.token);
   try {
     await connection.open();
-    await connection.request("join", { sessionId: randomUUID(), sessionFile: join(f.home, "reader.jsonl"), tools: ["team_agent", "team_task", "team_message"], trusted: true });
+    await connection.request("join", { sessionId: randomUUID(), sessionFile: join(f.team.store.dir, "sessions", "ac-teams", f.team.store.state.id, "reader", "reader.jsonl"), tools: ["team_agent", "team_task", "team_message"], trusted: true });
     const text = "\u0000".repeat(16000);
     for (let index = 0; index < 20; index++) {
       await f.team.handle("root", "message", { action: "send", recipients: ["root"], text });
@@ -399,7 +399,7 @@ test("full-size user text survives task envelopes, transport and recovery; stopp
   const reader = new Connection(f.team.socketPath, member.id, member.token);
   try {
     await reader.open();
-    await reader.request("join", { sessionId: randomUUID(), sessionFile: join(f.home, "creator.jsonl"), tools: ["team_agent", "team_task", "team_message"], trusted: true });
+    await reader.request("join", { sessionId: randomUUID(), sessionFile: join(f.team.store.dir, "sessions", "ac-teams", f.team.store.state.id, "creator", "creator.jsonl"), tools: ["team_agent", "team_task", "team_message"], trusted: true });
     const text = "q".repeat(16000);
     const task = await f.team.handle(member.id, "task", { action: "create", title: "t".repeat(500), label: "Boundary task", description: "Boundary task" }) as { id: string };
     await f.team.handle("root", "ui", { action: "task_request", text });
@@ -432,5 +432,47 @@ test("unexpected intermediate process exit stops its descendants", async () => {
     await until(() => f.team.live().length === 0);
     assert.equal(f.team.store.state.members[parent.id].status, "interrupted");
     assert.equal(f.team.store.state.members[descendant.id].status, "stopped");
+  } finally { await f.close(); }
+});
+
+test("enforced access fails closed, cannot be escalated by a sandboxed member, and blocks privileged user actions", async () => {
+  const f = await setup(4, 3);
+  try {
+    // No credential broker means enforced access is unavailable, whatever the host supports.
+    assert.equal((await f.team.handle("root", "agent", { action: "list" }) as { sandbox: { available: boolean } }).sandbox.available, false);
+    await assert.rejects(f.team.handle("root", "agent", { ...launch, name: "reader", access: { read: ["."] } }), /Enforced access is unavailable/);
+    assert.equal(Object.values(f.team.store.state.members).some(member => member.name === "reader"), false);
+    await assert.rejects(f.team.handle("root", "agent", { action: "resume", id: "x", brief: "b", model: "test/model", access: { read: ["."] } }), /Invalid agent request|only be set on launch/);
+    const worker = await f.team.handle("root", "agent", launch) as { id: string };
+    f.team.store.update(state => { state.members[worker.id].access = { read: [f.home], write: [], network: {} }; });
+    await assert.rejects(f.team.handle(worker.id, "agent", { ...launch, name: "writer", access: { write: ["."] } }), /Write access .* exceeds/);
+    await assert.rejects(f.team.handle(worker.id, "agent", { ...launch, name: "wide", access: { read: ["/"] } }), /would expose/);
+    await assert.rejects(f.team.handle(worker.id, "agent", { ...launch, name: "plain", cwd: "/" }), /cwd must be inside/);
+    await assert.rejects(f.team.handle(worker.id, "agent", { ...launch, name: "inherit" }), /Enforced access is unavailable/);
+    await assert.rejects(f.team.handle(worker.id, "agent", { ...launch, name: "tree", worktree: true }), /Worktrees cannot be combined/);
+    await assert.rejects(f.team.handle(worker.id, "ui", { action: "resume", id: worker.id }), /Sandboxed members cannot send user team actions/);
+    const env = readFileSync(`/proc/${f.team.store.state.members[worker.id].pid}/environ`, "utf8").split("\0");
+    assert.ok(env.includes('AC_TEAMS_ACCESS={"enforced":false}'));
+  } finally { await f.close(); }
+});
+
+test("a member cannot claim a session file outside its assigned directory", async () => {
+  const f = await setup();
+  process.env.AC_TEAMS_TEST_SESSION_FILE = join(f.home, "elsewhere", "forged.jsonl");
+  try {
+    await assert.rejects(f.team.handle("root", "agent", { ...launch, name: "forger" }), /outside its assigned directory/);
+  } finally { delete process.env.AC_TEAMS_TEST_SESSION_FILE; await f.close(); }
+});
+
+test("network access is inherited when omitted and can only narrow", async () => {
+  const f = await setup(4, 3);
+  try {
+    const worker = await f.team.handle("root", "agent", launch) as { id: string };
+    f.team.store.update(state => { state.members[worker.id].access = { read: [f.home], write: [], network: { allow: ["docs.example.com"] } }; });
+    await assert.rejects(f.team.handle(worker.id, "agent", { ...launch, name: "public", access: { read: ["."], network: {} } }), /restricted network access cannot launch one with public access/);
+    await assert.rejects(f.team.handle(worker.id, "agent", { ...launch, name: "wider", access: { read: ["."], network: { allow: ["*.example.com"] } } }), /exceeds/);
+    // Omitted network keeps the requester's restriction, then fails only because Docker access is unavailable in this test.
+    await assert.rejects(f.team.handle(worker.id, "agent", { ...launch, name: "inherit", access: { read: ["."] } }), /Enforced access is unavailable/);
+    await assert.rejects(f.team.handle(worker.id, "agent", { ...launch, name: "narrow", access: { read: ["."], network: { allow: [] } } }), /Enforced access is unavailable/);
   } finally { await f.close(); }
 });

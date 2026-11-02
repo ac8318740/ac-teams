@@ -190,3 +190,13 @@ test("malformed status types cannot be coerced into valid tasks or migrated to d
     }
   }
 });
+
+test("stored member network policies are validated on load", t => {
+  const { store, home, initial } = fixture(t);
+  const path = join(store.dir, "state.json");
+  store.close();
+  const state = JSON.parse(readFileSync(path, "utf8"));
+  state.members.a.access = { read: [home], write: [], network: { allow: ["not a host!"] } };
+  writeFileSync(path, JSON.stringify(state));
+  assert.throws(() => new Store(initial, home), /Invalid member access/);
+});

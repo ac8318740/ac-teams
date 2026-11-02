@@ -1,7 +1,8 @@
 import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+import { stateRoot } from "./config.ts";
+import { validatePolicy } from "./egress.ts";
 import { stripVTControlCharacters } from "node:util";
 import { isDescendant, isLive, memberNamePattern, memberNameMaxLength, taskLabelMaxLength, taskLabelPattern } from "./types.ts";
 import type { TeamState, TaskArgs, MessageArgs, Task, TaskView, Message, Worktree } from "./types.ts";
@@ -85,7 +86,7 @@ function validate(state: unknown): asserts state is TeamState {
       names.add(member.name);
     }
     requireValue(member.parent === undefined || (text(member.parent) && Object.hasOwn(members, member.parent)), "Invalid member parent");
-    for (const field of ["identity", "sessionId", "sessionFile", "error", "model", "modelName", "thinking", "activity", "summary"]) requireValue(member[field] === undefined || typeof member[field] === "string", "Invalid member field");
+    for (const field of ["identity", "sessionId", "sessionFile", "error", "model", "modelName", "thinking", "activity", "summary", "provider"]) requireValue(member[field] === undefined || typeof member[field] === "string", "Invalid member field");
     if (member.contextUsage !== undefined) {
       const usage = member.contextUsage;
       requireValue(object(usage) && integer(usage.contextWindow, 1) && (usage.tokens === null || integer(usage.tokens)) && (usage.percent === null || typeof usage.percent === "number" && Number.isFinite(usage.percent) && usage.percent >= 0), "Invalid member context usage");
@@ -94,6 +95,9 @@ function validate(state: unknown): asserts state is TeamState {
     requireValue(member.needsInput === undefined || typeof member.needsInput === "boolean", "Invalid member input flag");
     requireValue(member.pid === undefined || integer(member.pid, 1), "Invalid member PID");
     requireValue(member.worktree === undefined || validateWorktree(member.worktree), "Invalid member worktree");
+    const paths = (value: unknown) => Array.isArray(value) && value.every(path => typeof path === "string" && path.startsWith("/"));
+    const network = (value: unknown) => { try { return object(value) && (value.allow === undefined || (Array.isArray(value.allow) && value.allow.every(entry => typeof entry === "string"))) && (validatePolicy(value), true); } catch { return false; } };
+    requireValue(member.access === undefined || (object(member.access) && paths(member.access.read) && paths(member.access.write) && network(member.access.network)), "Invalid member access");
     const seen = new Set<string>([key]);
     for (let parent: unknown = member.parent; parent !== undefined;) {
       requireValue(typeof parent === "string" && !seen.has(parent), "Cyclic member ancestry");
@@ -158,7 +162,7 @@ export class Store {
   private lock?: number;
   private closed = false;
 
-  constructor(initial: TeamState, home = join(homedir(), ".acstack", "ac-teams", "teams")) {
+  constructor(initial: TeamState, home = join(stateRoot(), "teams")) {
     validate(initial);
     this.dir = join(resolve(home), initial.id);
     this.state = structuredClone(initial);

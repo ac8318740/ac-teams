@@ -229,7 +229,7 @@ test("native settings screen toggles independently and preserves values on faile
     component!.handleInput("\x1b[B"); component!.handleInput("\r");
     assert.deepEqual(settings, { tasks: false, agents: false });
     assert.deepEqual(readDisplaySettings(), settings);
-    const path = join(home, ".acstack", "ac-teams", "display.json");
+    const path = join(home, ".pi", "ac-teams", "display.json");
     writeFileSync(path, "{");
     component!.handleInput(" ");
     assert.deepEqual(settings, { tasks: false, agents: false });

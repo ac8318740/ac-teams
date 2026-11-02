@@ -46,7 +46,7 @@ socket.on("data", chunk => {
 socket.on("error", () => process.exit(1));
 socket.on("close", () => process.exit(0));
 socket.on("connect", () => {
-  void request("join", { sessionId, sessionFile, tools: ["team_agent", "team_task", "team_message"], trusted: process.env.AC_TEAMS_TEST_UNTRUSTED !== "1" }).catch(() => process.exit(1));
+  void request("join", { sessionId, sessionFile: process.env.AC_TEAMS_TEST_SESSION_FILE ?? sessionFile, tools: ["team_agent", "team_task", "team_message"], trusted: process.env.AC_TEAMS_TEST_UNTRUSTED !== "1" }).catch(() => process.exit(1));
 });
 async function run(command) {
   const data = command.type === "get_state" ? { sessionId, sessionFile, model: { provider: arg("--provider"), id: arg("--model"), name: "Fixture model" }, contextUsage: { tokens: 48000, contextWindow: 200000, percent: 24 } } : {};
@@ -63,6 +63,10 @@ async function run(command) {
     emit({ type: "agent_start" });
     if (command.message.startsWith("DELEGATE")) {
       await request("agent", { action: "launch", name: "nested-review", brief: "REPORT:nested ready", model: "test/model" });
+    }
+    if (command.message.startsWith("PROBE:")) {
+      const { probe } = await import("./sandbox-probe.mjs");
+      await request("message", { action: "send", recipients: ["root"], text: JSON.stringify(await probe(JSON.parse(command.message.slice(6)), request)).slice(0, 16000) });
     }
     if (command.message.startsWith("REPORT:")) await request("message", { action: "send", recipients: ["root"], text: command.message.slice(7) });
     if (command.message === "ERROR") emit({ type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "Provider rejected this model" } });

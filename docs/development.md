@@ -48,6 +48,24 @@ Terminal UI checks used real native Pi processes in an isolated full-size Herdr 
 - Task summary above the input, agent selector below status, native subcommand/name autocomplete, and same-PID/session opening by name or ID
 - Pi-reported model display names and changing context estimates in the live selector
 
+### Enforced access verification
+
+Checks on 2026-11-02, Ubuntu 24.04, kernel 6.8, Docker 29.9.2 (rootful, default AppArmor and seccomp), Pi 1.4.0, member image `ac-teams-member:1.4.0-<hash>`:
+
+- `test/sandbox.test.ts` with real containers for RPC and native (tmux) members: grants enforced read-only and read-write; host files, other transcripts, team state, the real `auth.json`, the Docker socket, and the tmux socket unreachable; only the selected provider's access token is present, without a refresh token, and a token change reaches the container in place; public HTTP and HTTPS work through the proxy with curl and Node; this host's addresses (including its public IP and Tailscale address), the Docker bridge, and cloud metadata are refused; no direct network, UDP, or host Unix socket; the start gate cannot be replayed; no capabilities, `NoNewPrivs`, private PIDs, read-only root, written files owned by the user; nested narrower launch works and escalation is refused; the native member's terminal is the container's own pty, and TIOCSTI did not inject; containers and member credentials are removed on close
+- A grant swapped for a symlink between the checks and start is caught before any member code runs, and the container is removed; a writer of a repo and a reader of its subdirectory run together; resume gets a new gated container
+- A refused second owner leaves live containers alone; after the coordinator is killed, the next owner removes the orphaned container; the enforced-member cap counts other teams' containers
+- A real OpenAI OAuth member with the full installed extension set (billion-context active, ACStack, pi-web-access) answered through the proxy, ran curl (200), `web_search`, and `fetch_content` on a public documentation page; a member with `network.allow: []` still reached the model while curl to a public site failed; no refresh token or other provider in the container; network `none`, no ports, and no host listener changes
+
+Anthropic, later on 2026-11-02 (Pi 1.4.0 for the first two checks; Pi 1.5.0 with member image `ac-teams-member:1.5.0-<hash>` for the third and for a full `npm test` rerun, 118 pass):
+
+- A `claude-haiku-4-5` member with the full installed extension set ran curl (200), `web_search`, and `fetch_content`; with `network.allow: []` it still reached the model while curl failed; no refresh token or other provider in the container; network `none`, no ports
+- A real Pi Main loading this branch from an isolated agent directory (access tokens only, no refresh tokens) launched an enforced Anthropic member with `network.allow: []` through Main's own credential code: the sandbox was available, the launch succeeded, and the member answered `curl=000`; no host listener changes and no leftover containers or member files
+
+On the final tree with Pi 1.5.0, the OpenAI full-extension and `network.allow: []` runs passed again: curl 200, `web_search` and `fetch_content` ok, then curl `000` with the model still reachable. `npm test` passed 119 tests, and the Docker suite passed 10.
+
+Not verified: an Anthropic Main session, because Main's own Anthropic request was refused as out of extra usage while the member's Haiku requests succeeded.
+
 Not verified on macOS, Windows, or network filesystems. The package is Linux-only because safe process identity uses `/proc`. No web dashboard, workflow DSL, daemon, or automatic merging is included.
 
 ## Stage releases for npm approval
