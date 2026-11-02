@@ -1,0 +1,34 @@
+name: Version check
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require a new version when shipped files change
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="origin/${GITHUB_BASE_REF}"
+          # Shipped files match the "files" list in package.json.
+          changed="$(git diff --name-only "${base}...HEAD" -- \
+            src README.md LICENSE docs)"
+          [[ -z "$changed" ]] && { echo "No shipped files changed."; exit 0; }
+          old="$(git show "${base}:package.json" |
+            node -p 'JSON.parse(require("fs").readFileSync(0)).version')"
+          new="$(node -p 'require("./package.json").version')"
+          if [[ "$old" == "$new" ]]; then
+            echo "::error::Shipped files changed; version is still ${new}."
+            echo "Raise package.json's version so the merge stages a release."
+            exit 1
+          fi
+          echo "Version ${old} -> ${new}."
