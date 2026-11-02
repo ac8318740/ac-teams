@@ -21,7 +21,8 @@ test("grants resolve to canonical directories and write implies read", () => {
     assert.throws(() => resolveAccess({ read: ["file"] }, t.root), /must be a directory/);
     mkdirSync(join(t.root, "real,readonly=false"));
     assert.throws(() => resolveAccess({ read: ["real,readonly=false"] }, t.root), /commas/);
-    for (const path of ["/", "/tmp", "/proc", "/dev/shm", "/run", homedir(), dirname(homedir()), join(homedir(), ".pi")]) assert.throws(() => resolveAccess({ read: [path] }, t.root), /not allowed|would expose/, path);
+    // CI runners may have no ~/.pi; only paths that exist can be granted.
+    for (const path of ["/", "/tmp", "/proc", "/dev/shm", "/run", homedir(), dirname(homedir()), join(homedir(), ".pi")].filter(path => existsSync(path))) assert.throws(() => resolveAccess({ read: [path] }, t.root), /not allowed|would expose/, path);
     if (existsSync(join(homedir(), ".pi/agent/sessions"))) assert.throws(() => resolveAccess({ read: [join(homedir(), ".pi/agent/sessions")] }, t.root), /private Pi or ac-teams state/);
   } finally { t.close(); }
 });
