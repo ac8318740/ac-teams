@@ -32,8 +32,8 @@ export async function launchMain(spec: MainLaunch): Promise<string> {
       : await herdr("workspace", "create", "--cwd", spec.cwd, "--label", spec.name, "--focus");
     const pane = created.result?.root_pane?.pane_id;
     if (typeof pane !== "string") throw new Error("Herdr did not report the new tab's pane");
-    // shortcut: Herdr types the command into the pane's shell, so paths with spaces would split; session paths have none.
-    await exec("herdr", ["pane", "run", pane, ...spec.command], { env: spec.env, timeout: 10000 });
+    // Herdr types the command into the pane's shell, so each word is quoted for it.
+    await exec("herdr", ["pane", "run", pane, spec.command.map(word => `'${word.replaceAll("'", "'\\''")}'`).join(" ")], { env: spec.env, timeout: 10000 });
     return `${spec.name} opened in its own Herdr tab`;
   }
   await exec("tmux", ["-S", spec.socket, "new-session", "-d", "-s", spec.id, "-c", spec.cwd, "--", ...spec.command], { env: spec.env, timeout: 10000 });
