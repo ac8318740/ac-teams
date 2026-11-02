@@ -1,0 +1,13 @@
+id: team-store
+name: Team store
+summary: >-
+  Private team state under ~/.pi/ac-teams/teams/<team>/: members with their
+  role, tasks, messages, owner.lock, and each main session's connection
+  token. Sandboxed members cannot read it.
+kind: store
+relationships:
+  - id: coordinator-writes-store
+    from: coordinator
+    to: team-store
+    direction: one-way
+    label: Holds owner.lock and records roles in

@@ -51,6 +51,8 @@ This is snapshot-based cleanup, not OS containment. Detached or uncaptured desce
 
 The interactive panel can instead quietly resume a saved member session without inventing a new brief. Feedback then arrives through the durable team mailbox.
 
+Stopping a main session ends its Pi process; an exiting coordinator hands over first. Resuming another main session relaunches it in its own terminal.
+
 Root session switching, forking, and tree traversal are blocked while members are live. A member cannot switch away from its team binding. Stop members explicitly before replacing the root session.
 
 ### Exit confirmation needs a Pi hook
@@ -58,6 +60,12 @@ Root session switching, forking, and tree traversal are blocked while members ar
 Exit confirmation requires Pi's `session_before_exit` hook. The prerequisite is implemented in the separate local Pi checkout described in [the implementation history](implementation-plan.md#exit-confirmation-supported-hook-versus-package-interception), not in installed Pi 1.4.0.
 
 With that hook, native exit asks before stopping live members; cancellation leaves them running. Without it, shutdown performs cleanup but cannot ask first. Signals bypass confirmation.
+
+### Coordinator handover
+
+The main session holding `owner.lock` runs the coordinator. Before it exits it records whether each member was busy, idle, or waiting for input, then stops the members. Another connected main session takes the lock within seconds and runs the resume pass: busy members resume and are told their process restarted during a handover, idle members resume idle, and members waiting for input resume and ask again. The same pass runs when a main session opens a team with no coordinator running.
+
+A main session that crashes is marked interrupted; any main session can resume it. Raising the member limit above 10 requires the coordinator's own session, because the confirmation prompt runs there.
 
 ### Crash recovery is best effort
 
@@ -79,7 +87,8 @@ Each root session uses `~/.pi/ac-teams/teams/<session-id>/`:
 
 - `state.json` contains membership, policy, tasks, messages, claims, and notification cursors
 - Member transcripts live under Main's session directory in `ac-teams/<team>/<member>/`, normally `~/.pi/agent/sessions/<project>/ac-teams/...`; Pi's `/resume` lists only top-level sessions, so use `/teams` to find them
-- `owner.lock` and `coordinator.sock` coordinate the running root
+- `owner.lock` and `coordinator.sock` coordinate the main session running the coordinator; other main sessions authenticate with tokens stored in `state.json`
+- Promoted members' transcripts move to `<session folder>/` beside other top-level sessions, and their `~/.pi/ac-teams/agents/<id>` folder is removed
 - Interactive teams also own `t.sock`, the private tmux socket, and per-member terminal environment files; shutdown removes those files
 
 New members also store their descriptive names and optional model/context reports. When an existing team opens, unnamed members receive stable, collision-free names such as `teammate-1`; their IDs and sessions do not change.
@@ -88,7 +97,9 @@ State schema 3 adds stable task numbers and short labels. Opening a schema 1 or 
 
 Schema 1 also migrates progress: `pending` becomes `todo`, `claimed` becomes `in_progress`, and `completed` becomes `done`. Migration writes atomically and rejects invalid snapshots without replacement. Older ac-teams code cannot reopen schema 3; stop old sessions before updating.
 
-Only the root writes state. Mutations validate a copy, flush a temporary snapshot, atomically rename it, and flush the directory before returning success. An exclusive process-identity lock prevents concurrent owners. Private team directories use 0700; state files and the authenticated Unix socket use 0600. Uncertain locks fail closed.
+State schema 4 adds a role to each record: `main` or `member`. Opening a schema 3 team makes the root record a main session and every other record a member. A record without a role has left the team. A promotion records each step, so a failure rolls the member back to a stopped member with its original transcript path.
+
+Only the coordinator writes state. Mutations validate a copy, flush a temporary snapshot, atomically rename it, and flush the directory before returning success. An exclusive process-identity lock prevents concurrent owners. Private team directories use 0700; state files and the authenticated Unix socket use 0600. Uncertain locks fail closed.
 
 This is a small-team store: each mutation rewrites the snapshot, and search scans local history. There is no database, compaction, retention policy, automatic deletion, or deduplication of repeated mutation requests. Inspect state before retrying an ambiguous failed request.
 

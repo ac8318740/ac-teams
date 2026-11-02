@@ -49,7 +49,7 @@ test("team widgets and status preserve other footers and statuses through toggle
   const statuses = new Map<string, string>([["another-extension", "keep this status"]]);
   let refreshes = 0, needsInput = true;
   const settings = { tasks: true, agents: true };
-  const host: PanelHost = { self: "root", drafts: new Map(), snapshot: async () => {
+  const host: PanelHost = { self: "root", child: false, promote: async () => {}, drafts: new Map(), snapshot: async () => {
     refreshes++;
     return { members: [{ id: "worker", name: "reviewer", cwd: "/trial", depth: 1, status: "busy", notified: 0, needsInput },
       ...Array.from({ length: 5 }, (_, i) => ({ id: `stopped-${i}`, cwd: "/trial", depth: 1, status: "stopped" as const, notified: 0 })),
@@ -139,7 +139,7 @@ test("agent navigation composes with the active editor and cleanup respects late
   };
   const previous: Factory = () => customEditor;
   let active: Factory | undefined = previous;
-  const host: PanelHost = { self: "root", drafts: new Map(), snapshot: async () => ({
+  const host: PanelHost = { self: "root", child: false, promote: async () => {}, drafts: new Map(), snapshot: async () => ({
     members: [{ id: "old", cwd: "/trial", depth: 1, status: "stopped", notified: 0 },
       { id: "peer", parent: "root", name: "peer", cwd: "/trial", depth: 1, status: stopped ? "stopped" : "idle", createdAt: 0, notified: 0 },
       { id: "interrupted", cwd: "/trial", depth: 1, status: "interrupted", notified: 0 }], tasks: [], messages: [], limit: 10, depth: 2,

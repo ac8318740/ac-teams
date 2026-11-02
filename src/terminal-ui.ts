@@ -14,10 +14,13 @@ export async function visitMember(ctx: ExtensionContext, host: PanelHost, socket
   if (ctx.mode !== "tui") throw new Error("Live sessions require an interactive terminal");
   if (id === host.self) return;
   const member = (await host.snapshot()).members.find(member => member.id === id);
+  // A member returns to whichever main session attached it by detaching.
+  if (host.child && member?.role === "main") { await exec("tmux", ["-S", socket, "detach-client", "-s", host.self], { timeout: 5000, maxBuffer: 65536 }); return; }
   if (!member || !isLive(member)) throw new Error(`Member ${id} is stopped or unavailable; resume it from /teams`);
-  if (id !== "root" && !member.terminal) throw new Error("This member has no live terminal (it was launched headlessly)");
-  if (host.self !== "root") {
-    await exec("tmux", ["-S", socket, ...(id === "root" ? ["detach-client", "-s", host.self] : ["switch-client", "-t", id])], { timeout: 5000, maxBuffer: 65536 });
+  if (member.role === "main") throw new Error(`${memberName(member)} is a main session in its own terminal; switch to it there`);
+  if (!member.terminal) throw new Error("This member has no live terminal (it was launched headlessly)");
+  if (host.child) {
+    await exec("tmux", ["-S", socket, "switch-client", "-t", id], { timeout: 5000, maxBuffer: 65536 });
     return;
   }
   const code = await ctx.ui.custom<number>((tui, _theme, _keys, done) => {

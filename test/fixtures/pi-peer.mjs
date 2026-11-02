@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Deterministic RPC/native peer fixture. It exercises the real socket, never a model API.
 import { createConnection } from "node:net";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -9,9 +9,15 @@ const arg = name => process.argv[process.argv.indexOf(name) + 1];
 const directory = arg("--session-dir");
 mkdirSync(directory, { recursive: true });
 const existing = process.argv.includes("--session") ? arg("--session") : undefined;
-const sessionId = existing ? JSON.parse(readFileSync(existing, "utf8")).id : randomUUID();
+// A real Pi session file: a header line, then entries, so Pi's SessionManager can open and list it.
+const sessionId = existing ? JSON.parse(readFileSync(existing, "utf8").split("\n")[0]).id : randomUUID();
 const sessionFile = existing ?? join(directory, `${sessionId}.jsonl`);
-if (!existing) writeFileSync(sessionFile, JSON.stringify({ id: sessionId }));
+const entry = message => {
+  const lines = readFileSync(sessionFile, "utf8").trim().split("\n"), last = JSON.parse(lines.at(-1));
+  const timestamp = new Date().toISOString();
+  appendFileSync(sessionFile, JSON.stringify({ type: "message", id: randomUUID().slice(0, 8), parentId: last.type === "session" ? null : last.id, timestamp, message: { role: "user", content: [{ type: "text", text: message }], timestamp: Date.now() } }) + "\n");
+};
+if (!existing) writeFileSync(sessionFile, JSON.stringify({ type: "session", version: 3, id: sessionId, timestamp: new Date().toISOString(), cwd: process.cwd() }) + "\n");
 const socket = createConnection(process.env.AC_TEAMS_SOCKET);
 const pending = new Map();
 let buffer = "";
@@ -54,11 +60,7 @@ async function run(command) {
   else emit({ type: "response", id: command.id, success: true, data });
   if (native && command.type === "shutdown") process.exit(0);
   if (command.type === "prompt") {
-    if (native) {
-      const session = JSON.parse(readFileSync(sessionFile, "utf8"));
-      session.prompts = [...(session.prompts ?? []), command.message];
-      writeFileSync(sessionFile, JSON.stringify(session));
-    }
+    if (native) entry(command.message);
     errorOnAbort = command.message === "ERROR_ON_ABORT";
     emit({ type: "agent_start" });
     if (command.message.startsWith("DELEGATE")) {

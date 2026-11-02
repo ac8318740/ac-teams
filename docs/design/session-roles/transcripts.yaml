@@ -1,0 +1,23 @@
+id: transcripts
+name: Pi transcripts
+summary: >-
+  Standard Pi session files. Main sessions sit at the top level of the
+  project's session folder, where /resume finds them. Members sit under
+  ac-teams/<team>/<member>/, where only /teams finds them.
+kind: store
+relationships:
+  - id: main-writes-transcript
+    from: main-session
+    to: transcripts
+    direction: one-way
+    label: Writes its conversation and team entry to
+  - id: member-writes-transcript
+    from: member
+    to: transcripts
+    direction: one-way
+    label: Writes its conversation to
+  - id: coordinator-moves-transcript
+    from: coordinator
+    to: transcripts
+    direction: one-way
+    label: Moves promoted transcripts within

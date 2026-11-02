@@ -1,0 +1,17 @@
+id: user
+name: User
+summary: >-
+  Starts main sessions and is the only party who can promote a member, join a
+  session to a team, or approve a sandboxed member's full access.
+kind: actor
+relationships:
+  - id: user-drives-main
+    from: user
+    to: main-session
+    direction: one-way
+    label: Promotes, joins, and leaves through /teams in
+  - id: user-uses-herdr
+    from: user
+    to: herdr
+    direction: one-way
+    label: Switches between main sessions in

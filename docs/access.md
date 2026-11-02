@@ -84,6 +84,10 @@ docker build -t ac-teams-member:1.5.0-<hash> --build-arg PI_VERSION=1.5.0 -f <ac
 
 The image is `node:22-bookworm-slim`, pinned by digest, with bash, curl, Git, ripgrep, CA certificates, and the same Pi version as Main. Rebuild after upgrading Pi.
 
+## Promotion drops enforcement
+
+Promoting an enforced member to a main session relaunches it outside the container with your user's access. The panel asks for confirmation first. Members always run with `ACSTACK_AGENT_ROLE=member`; main sessions run without it and without inherited `AC_TEAMS_*` variables.
+
 ## Storage
 
 - Coordinator state and settings: `~/.pi/ac-teams/teams/<team>/`, `~/.pi/ac-teams/config.json`, and `~/.pi/ac-teams/display.json`

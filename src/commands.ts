@@ -3,7 +3,7 @@ import { memberName, type Member } from "./types.ts";
 import { cleanText } from "./render.ts";
 
 type NamedMember = Pick<Member, "id" | "name" | "status">;
-const actions = ["panel", "teammate", "config", "back", "stop", "status"];
+const actions = ["panel", "teammate", "config", "back", "stop", "status", "join", "leave"];
 
 export function resolveTeammate(members: NamedMember[], value: string): string | undefined {
   const key = value === "main" ? "root" : value;

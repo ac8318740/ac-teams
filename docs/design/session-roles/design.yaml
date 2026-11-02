@@ -1,0 +1,70 @@
+id: session-roles
+name: Session roles - promotion, joining, and several main sessions
+summary: >-
+  A team can have several main sessions. The user can promote a member into a
+  main session or join an existing session to a team. Identity, transcript
+  discovery, membership, coordinator ownership, and permission authority stay
+  separate, and ACSTACK_AGENT_ROLE tells hooks which processes are main.
+detail: journey.md
+elements:
+  - user.yaml
+  - main-session.yaml
+  - member.yaml
+  - coordinator.yaml
+  - team-store.yaml
+  - transcripts.yaml
+  - herdr.yaml
+  - read-guard.yaml
+concerns:
+  - id: main-signal
+    name: Main-agent signal
+    elements: [coordinator, member, main-session, read-guard]
+    requirement: >-
+      ACStack's large-read guard applies only to main agents. A main agent is
+      a session the user created or promoted, never one an agent created. The
+      signal must reach in-process Pi hooks and shell hooks, and must change
+      when a member is promoted.
+    response: >-
+      The coordinator sets ACSTACK_AGENT_ROLE=member on every member process,
+      next to AC_TEAMS_MEMBER. Absent or "main" means main; any other value
+      means not main. Children of a member inherit it. Promotion always
+      relaunches the transcript in a new process without ACSTACK_AGENT_ROLE
+      or any AC_TEAMS_* variable, so a live process never needs to change its
+      role. Main status grants no permissions.
+  - id: separate-axes
+    name: Separate identity, discovery, membership, and authority
+    elements: [main-session, member, coordinator, team-store, transcripts]
+    requirement: >-
+      Issue #19 forbids tying session identity or permission authority to
+      picker visibility, storage location, or a single main session.
+    response: >-
+      Identity is the Pi session id. Discovery is where the transcript file
+      lives. Membership and role are records in the team store. Ownership is
+      whoever holds owner.lock. Authority comes from the member's role in the
+      team store, which only explicit user actions change. Moving a file or
+      taking the lock changes nothing else.
+  - id: duplicate-prevention
+    name: Duplicate prevention
+    elements: [coordinator, team-store, main-session]
+    requirement: >-
+      A session must not appear twice in a team, run as two processes, or
+      belong to two teams.
+    response: >-
+      The team store keys members by member id and refuses a second record
+      with the same Pi session id. The coordinator accepts one live
+      connection per member and keeps the existing pid and identity check
+      before any launch or relaunch. A session in a team with members cannot
+      join another team.
+  - id: recovery
+    name: Recovery without the original owner
+    elements: [main-session, coordinator, team-store, member]
+    requirement: >-
+      The team must carry on when the owner exits, and a promoted session
+      resumed later must find its team again.
+    response: >-
+      When the owner exits, another connected main session takes owner.lock
+      and resumes members by their recorded state: busy members get a message
+      to check their last steps and continue, idle members stay idle, and open
+      questions reappear. A main session resumed
+      from /resume reads its team entry, then connects to the live
+      coordinator or offers to take ownership.
