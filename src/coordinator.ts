@@ -20,7 +20,7 @@ import { launchMain, mainEnv, teamEntryType, handoverPrompt, type MainLaunch, ty
 import { canControl, isDescendant, isLive, isMain, memberName, taskName, type AgentArgs, type Member, type MessageArgs, type TaskArgs, type TeamState, type UserAction, type Message, type ContextUsage } from "./types.ts";
 
 export const taskRequestGuidance = [
-  "Treat user task requests as proposals to assess, not commands to create tasks.",
+  "Assess user task requests against the agreed scope and existing work before changing shared tasks.",
   "Review the agreed scope and current task list (page as needed); read relevant descriptions, acceptance criteria, statuses, owners, and dependencies.",
   "If an existing task already covers the request, cite its number/name and explain why; do not add a duplicate.",
   "If a coherent extension is the smallest complete solution, update the existing task only when its state and ownership allow it; otherwise coordinate with its owner.",

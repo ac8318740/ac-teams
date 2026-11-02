@@ -1,6 +1,6 @@
 # Use ac-teams
 
-ac-teams provides three tools without prescribing a workflow. Your Pi session is a main session; the agents it launches are members. The first main session opens coordination state on the first team request. See [main sessions](#main-sessions-share-one-team) for adding more.
+ac-teams provides three tools with lightweight guidance for tracking delegated work. Your Pi session is a main session; the agents it launches are members. The first main session opens coordination state on the first team request. See [main sessions](#main-sessions-share-one-team) for adding more.
 
 | Tool | Actions | Main rule |
 | --- | --- | --- |
@@ -68,11 +68,26 @@ Hiding a display does not stop agents, change tasks, or disable `/teams`. With t
 
 ## Give members bounded assignments
 
-Example `team_agent` arguments:
+Before delegating a deliverable, create or reuse a shared task and include its ID in the member's brief. Track independently owned outcomes, not every agent, tool call, or procedural step. For example:
+
+- A fix and an independently owned test assignment need separate tasks.
+- A diagnosis others need for follow-up needs a task, even if the investigation is read-only.
+- A quick lookup, clarification, or brief second opinion can skip a task unless its result needs coordination or follow-up.
+- Running tests as part of a fix usually belongs to the fix's existing task.
+
+Review the current task list and relevant details first. Reuse an existing task when it covers the assignment. If none does, create one with acceptance criteria. Example `team_task` arguments:
 
 ```json
-{"action":"launch","name":"parser-review","brief":"Review src/parser.ts. Read only; do not delegate or edit. Send findings to root through team_message."}
+{"action":"create","label":"Parser review","title":"Review parser errors and malformed input","description":"Read-only review of src/parser.ts. Acceptance: report concrete malformed-input failures with reproduction steps, or report that none were found."}
 ```
+
+Put the returned task UUID in the brief in place of `<task-id>`. Example `team_agent` arguments:
+
+```json
+{"action":"launch","name":"parser-review","brief":"Task <task-id>: claim and start it, then review src/parser.ts. Read only; do not delegate or edit. Send findings to root through team_message. Complete the task after checking its acceptance criteria, or report blockers."}
+```
+
+These are prompt guidelines, not launch requirements. ac-teams neither creates tasks automatically nor blocks launches without tasks.
 
 Every launch needs a unique descriptive `name`: one or two lowercase words, hyphenated if two, at most 40 characters. For example, `parser-review` or `research`. `main`, `root`, and names matching an existing member's ID are reserved. Names remain stable across stop/resume; IDs remain the API references.
 
@@ -86,11 +101,7 @@ Children can delegate through the same coordinator, subject to depth and capacit
 
 ## Track progress separately from ownership
 
-Example `team_task` arguments:
-
-```json
-{"action":"create","label":"Parser review","title":"Review parser errors and malformed input","description":"Check malformed input and report concrete failures; no edits."}
-```
+Task owners claim and start their work, then complete it after checking acceptance criteria or report blockers. Claiming reserves a task; starting also requires its dependencies to be done.
 
 Each task has a stable team-local `number` and a 1–3-word `label` (at most 60 characters). The graph and list show `#3 Parser review`; details retain the full title, description, and UUID.
 
