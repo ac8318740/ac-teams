@@ -274,7 +274,7 @@ export default function teams(pi: ExtensionAPI) {
   });
   function output(data: unknown) { return { content: [{ type: "text" as const, text: JSON.stringify(data) }], details: data }; }
   const guidance = "Team launches use real long-lived Pi sessions. Idle members count against the shared ceiling. Use stable member/task IDs; query status and history instead of acknowledging notifications. Limits cover only ac-teams, not other launchers or shell commands.";
-  const taskTrackingGuidance = "Before delegating a deliverable through team_agent, create or reuse a team_task and include its ID in the member's brief. Track independently owned outcomes, not tool calls or procedural steps; do not create one task per teammate by default. Skip tasks for quick lookups, clarification, and brief second opinions unless results need coordination or follow-up. Task owners claim and start their work, then complete it after checking acceptance criteria or report blockers.";
+  const taskTrackingGuidance = "Before delegating a deliverable through team_agent, create or reuse a team_task and include its ID in the member's brief. Use one shared task list for your own work and delegated work; do not create one task per teammate by default. Quick lookups and brief second opinions need no separate task unless their results need coordination or follow-up.";
   pi.registerTool({
     name: "team_agent", label: "Team agent", description: "Launch/resume Pi members, list/status, stop owned subtrees, change root limits, and explicitly clean stopped worktrees. Create or reuse team_task entries for delegated deliverables; quick lookups need no task unless results need coordination or follow-up.",
     promptGuidelines: [guidance, taskTrackingGuidance, "Delegation needs the user's authorization. Give each new member a unique descriptive name (one or two lowercase words, hyphenated if two), plus a bounded brief. Names remain stable on resume. Avoid concurrent writers in the same cwd. Worktrees are opt-in."],
@@ -283,11 +283,24 @@ export default function teams(pi: ExtensionAPI) {
     async execute(_id, args, _signal, _update, ctx) { return output(await handle("agent", args, ctx)); },
   });
   pi.registerTool({
-    name: "team_task", label: "Team task", description: "Track delegated deliverables, not every agent or action. Create or reuse tasks before delegation; quick lookups need no task unless results need coordination or follow-up. Manage shared tasks: create/list/read/edit, claim a reservation, start work, complete, release ownership, or explicitly reopen. Progress is todo/in_progress/done; blockedBy is derived from unfinished dependencies. Mutations support revision checks.",
-    promptGuidelines: [taskTrackingGuidance, taskRequestGuidance, "Give every task a concise 1–3-word label, alongside its full title and acceptance criteria. Stable team-local numbers are assigned automatically; use UUIDs for API references. Interim and final goals are ordinary tasks. Add dependencies only for real prerequisites, never merely to connect the diagram.", "Claim reserves a to-do task even if blocked; start requires ownership and all dependencies done. Complete requires in-progress work and acceptance=true after checking the criteria. Release clears ownership, returns in-progress work to todo, and leaves done work done. Reopen is explicit and cannot invalidate active or done dependents."],
+    name: "team_task", label: "Team task", description: "Plan and track multi-step solo and team work in one shared list. Create one task or a batch with tasks:[{title,...}], list compact summaries, read full details, edit, claim a reservation, start, complete, release, or reopen. Start atomically claims unowned ready work. Progress is todo/in_progress/done; blockedBy is derived from unfinished dependencies. Mutations support revision checks.",
+    promptSnippet: "Plan and track multi-step work, alone or with teammates",
+    promptGuidelines: [
+      "Use team_task before substantial work with 3+ steps, when the user gives an explicit task list, or when coordinating deliverables. This includes your own research, design, implementation, and verification; no teammate is required. Skip single trivial tasks, conversation, and tool-by-tool bookkeeping.",
+      "Create the initial plan in one team_task call with tasks:[{title,description},...]. Titles are required; labels and descriptions default from titles. Include acceptance criteria for substantial or delegated work. Dependencies must reference existing task UUIDs; create prerequisites before dependent tasks. Reuse relevant existing tasks rather than duplicating them.",
+      "Call team_task start BEFORE beginning a task; it claims unowned ready work atomically. Use claim only to reserve work in advance, including blocked work. Complete each task IMMEDIATELY after checking its result with acceptance=true; never complete partial work or work with unresolved failures. Report blockers. Each agent should normally work on one task at a time; teammates can work in parallel.",
+      taskTrackingGuidance, taskRequestGuidance,
+      "team_task list returns compact summaries; read a task for its full description and acceptance criteria. Use returned UUIDs for API references and stable task numbers/names when reporting to people. Add dependencies only for real prerequisites, never merely to connect the diagram.",
+      "team_task start refuses another owner's task or unfinished dependencies. Complete requires ownership, in-progress work, and acceptance=true. Release clears ownership, returns in-progress work to todo, and leaves done work done. Reopen is explicit and cannot invalidate active or done dependents.",
+    ],
     parameters: TaskSchema,
     ...teamToolRenderers("team_task"),
-    async execute(_id, args, _signal, _update, ctx) { return output(await handle("task", args, ctx)); },
+    async execute(_id, args, _signal, _update, ctx) {
+      const data = await handle("task", args, ctx) as TaskView | { tasks: TaskView[]; total: number };
+      const compact = (task: TaskView) => ({ id: task.id, number: task.number, label: task.label, title: task.title, status: task.status, owner: task.owner, revision: task.revision, dependencies: task.dependencies, blockedBy: task.blockedBy });
+      const content = args.action === "read" ? data : "tasks" in data ? { tasks: data.tasks.map(compact), total: data.total } : compact(data);
+      return { content: [{ type: "text" as const, text: JSON.stringify(content) }], details: data };
+    },
   });
   pi.registerTool({
     name: "team_message", label: "Team message", description: "Send a persistent direct/team message or read cursor-paged history. Send returns a receipt; history and search return full messages. New messages queue a compact follow-up notification for each recipient.",

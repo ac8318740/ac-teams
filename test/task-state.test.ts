@@ -50,6 +50,58 @@ test("checkout reserves blocked to-do work without starting it; readiness is der
   assert.equal(store.state.tasks[task.id].status, "in_progress");
 });
 
+test("batch create is atomic, supplies concise defaults, and preserves explicit details", t => {
+  const { store, home, initial } = fixture(t);
+  const result = store.task("root", { action: "create", tasks: [
+    { title: "Research the existing implementation" },
+    { title: "Implement change", label: "Implementation", description: "Acceptance: tests pass" },
+  ] });
+  assert.ok("tasks" in result);
+  assert.equal(result.total, 2);
+  assert.deepEqual(result.tasks.map(task => task.number), [1, 2]);
+  assert.equal(result.tasks[0].label, "Research the existing");
+  assert.equal(result.tasks[0].description, result.tasks[0].title);
+  assert.equal(result.tasks[1].description, "Acceptance: tests pass");
+  const before = readFileSync(join(store.dir, "state.json"), "utf8");
+  for (const args of [
+    { tasks: [] }, { title: "Ambiguous", tasks: [{ title: "No" }] },
+    { tasks: [{ title: "Valid" }, { title: "Invalid", dependencies: ["missing"] }] },
+    { tasks: [{ title: "Valid" }, { title: "   " }] },
+    { tasks: [{ title: "Invalid", description: null as unknown as string }] },
+    { tasks: [{ title: "Invalid", label: null as unknown as string }] },
+    { tasks: Array.from({ length: 101 }, () => ({ title: "Too many" })) },
+  ]) assert.throws(() => store.task("root", { action: "create", ...args }));
+  assert.equal(Object.keys(store.state.tasks).length, 2);
+  assert.equal(readFileSync(join(store.dir, "state.json"), "utf8"), before);
+  const dependent = store.task("root", { action: "create", tasks: [{ title: "Follow up", dependencies: [result.tasks[0].id] }] });
+  assert.ok("tasks" in dependent);
+  assert.deepEqual(dependent.tasks[0].blockedBy, [result.tasks[0].id]);
+  store.close();
+  const reopened = new Store(initial, home);
+  t.after(() => reopened.close());
+  assert.equal(Object.keys(reopened.state.tasks).length, 3);
+});
+
+test("start atomically claims ready work without stealing or reserving blocked work", t => {
+  const { store, create } = fixture(t);
+  const prerequisite = create();
+  const blocked = create([prerequisite.id]);
+  assert.throws(() => store.task("a", { action: "start", id: blocked.id }), /blocked/i);
+  assert.equal(store.state.tasks[blocked.id].owner, undefined);
+  assert.equal(store.state.tasks[blocked.id].revision, 1);
+  assert.throws(() => store.task("a", { action: "start", id: prerequisite.id, revision: 99 }), /revision/i);
+  const started = store.task("a", { action: "start", id: prerequisite.id, revision: 1 }) as TaskView;
+  assert.equal(started.owner, "a");
+  assert.equal(started.status, "in_progress");
+  assert.equal(started.revision, 2);
+  assert.throws(() => store.task("b", { action: "start", id: prerequisite.id }), /owner/i);
+  assert.throws(() => store.task("a", { action: "complete", id: prerequisite.id }), /acceptance/i);
+  store.task("a", { action: "complete", id: prerequisite.id, acceptance: true });
+  store.task("b", { action: "start", id: blocked.id });
+  assert.equal(store.state.tasks[blocked.id].owner, "b");
+  assert.throws(() => store.task("a", { action: "start", id: prerequisite.id }), /to.do/i);
+});
+
 test("completion time persists for summary ordering and is cleared on reopen", t => {
   const { store, home, initial, create } = fixture(t);
   const task = create();
@@ -71,7 +123,6 @@ test("completion time persists for summary ordering and is cleared on reopen", t
 test("release clears reservations, resets active work, and never reopens done work", t => {
   const { store, create } = fixture(t);
   const task = create();
-  assert.throws(() => store.task("a", { action: "start", id: task.id }), /owner/i);
   store.task("a", { action: "claim", id: task.id });
   assert.throws(() => store.task("a", { action: "complete", id: task.id, acceptance: true }), /in.progress/i);
   assert.throws(() => store.task("b", { action: "release", id: task.id }), /owner/i);

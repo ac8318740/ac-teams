@@ -21,14 +21,18 @@ export const AgentSchema = Type.Object({
     }, { additionalProperties: false, description: "Omit to keep the requester's network access. Children can only narrow it. The model provider stays reachable." })),
   }, { additionalProperties: false, description: "Launch only: OS-enforced directory access (Docker container). Paths are absolute or cwd-relative directories; write implies read and permits changing those live files; everything else on the host is hidden, and outbound access goes through a proxy that reaches only public addresses. Omit to inherit the requesting member's access; an unsandboxed requester then launches an unsandboxed member. Children can only narrow access. Launch fails if enforcement is unavailable; check team_agent list/limits sandbox first." })),
 }, { additionalProperties: false });
+const taskFields = {
+  title: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+  label: Type.Optional(Type.String({ minLength: 1, maxLength: taskLabelMaxLength, pattern: taskLabelPattern.source, description: "Optional 1–3-word label. Derived from title when omitted." })),
+  description: Type.Optional(Type.String({ maxLength: 16000, description: "Details and acceptance criteria. Defaults to title; include explicit criteria for substantial or delegated work." })),
+  dependencies: Type.Optional(Type.Array(id, { maxItems: 100, uniqueItems: true })),
+};
 export const TaskSchema = Type.Object({
   revision: Type.Optional(Type.Integer({ minimum: 1 })), acceptance: Type.Optional(Type.Boolean()),
   offset: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
   action: Type.Union(["create", "list", "read", "edit", "claim", "start", "release", "complete", "reopen"].map(v => Type.Literal(v))),
-  id: Type.Optional(id), title: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
-  label: Type.Optional(Type.String({ minLength: 1, maxLength: taskLabelMaxLength, pattern: taskLabelPattern.source, description: "A concise 1–3-word task label. Defaults to title only when title satisfies this limit." })),
-  description: Type.Optional(Type.String({ maxLength: 16000 })),
-  dependencies: Type.Optional(Type.Array(id, { maxItems: 100, uniqueItems: true })),
+  id: Type.Optional(id), ...taskFields,
+  tasks: Type.Optional(Type.Array(Type.Object({ ...taskFields, title: Type.String({ minLength: 1, maxLength: 500 }) }, { additionalProperties: false }), { minItems: 1, maxItems: 100, description: "Create several tasks atomically. Use instead of top-level task fields. Dependencies must refer to existing task IDs, not items in this batch." })),
 }, { additionalProperties: false });
 export const MessageSchema = Type.Object({
   action: Type.Union(["send", "history", "search"].map(v => Type.Literal(v))),
