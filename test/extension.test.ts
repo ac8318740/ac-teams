@@ -101,6 +101,33 @@ test("team navigation wraps editors installed by later session_start handlers", 
   } finally { await f.close(); }
 });
 
+test("footer snapshots omit history while the panel still loads messages and complete tasks", async t => {
+  const f = fixture();
+  const message = t.mock.method(Store.prototype, "message");
+  const statuses: string[] = [];
+  Object.assign(f.ctx, { mode: "tui" });
+  Object.assign(f.ctx.ui, {
+    setWidget() {}, setStatus(_key: string, value: string) { statuses.push(value); },
+    getEditorComponent() { return undefined; }, setEditorComponent() {},
+    async custom() {},
+  });
+  try {
+    await f.event("session_start");
+    await f.execute("team_task", { action: "create", title: "Keep full tasks", description: "Acceptance criteria" });
+    await f.execute("team_message", { action: "send", recipients: ["root"], text: "Keep this message" });
+    const before = message.mock.calls.length;
+    await f.event("resources_discover");
+    const end = Date.now() + 2000;
+    while (!statuses.length) { assert.ok(Date.now() < end); await delay(5); }
+    assert.match(statuses.at(-1)!, /0\/1 tasks done/);
+    assert.equal(message.mock.calls.length, before, "footer snapshot must not read history");
+    await f.commands.get("teams")!.handler("panel", f.ctx);
+    assert.equal(message.mock.calls.length, before + 1);
+    assert.equal(message.mock.calls.at(-1)!.arguments[1].action, "history");
+    assert.equal((message.mock.calls.at(-1)!.result as { text: string }[])[0].text, "Keep this message");
+  } finally { await f.close(); }
+});
+
 test("Main's question marker follows balanced attention signals without counting teammate relays twice", async () => {
   const f = fixture();
   const root = async () => (await f.execute("team_agent", { action: "list" }) as { members: { id: string; needsInput?: boolean }[] }).members.find(member => member.id === "root")!;
@@ -181,8 +208,9 @@ test("raising the root ceiling requires explicit host confirmation", async () =>
     await f.event("session_start");
     await assert.rejects(f.execute("team_agent", { action: "limits", limit: 11 }), /not explicitly approved/);
     f.approve(true);
-    const { sandbox, ...limits } = await f.execute("team_agent", { action: "limits", limit: 11 }) as { sandbox: { backend: string } };
+    const { sandbox, resources, ...limits } = await f.execute("team_agent", { action: "limits", limit: 11 }) as { sandbox: { backend: string }; resources: { scope: string } };
     assert.deepEqual(limits, { limit: 11, depth: 2 });
+    assert.equal(resources.scope, "host");
     assert.equal(sandbox.backend, "docker");
     assert.equal(f.confirmations, 2);
   } finally { await f.close(); }
@@ -198,6 +226,10 @@ test("team tools guide solo planning and task-backed delegation without tracking
       assert.match(guidelines, /include its ID in the member's brief/);
       assert.match(guidelines, /not create one task per teammate/);
     }
+    const agentGuidance = f.tools.get("team_agent")!.promptGuidelines!.join(" ");
+    assert.match(agentGuidance, /Check team_agent list resources before adding concurrency/);
+    assert.match(agentGuidance, /advisory, not a memory reservation or capacity guarantee/);
+    assert.match(agentGuidance, /stop unneeded idle members and resume their saved sessions/);
     const task = f.tools.get("team_task")!;
     assert.match(task.promptSnippet!, /multi-step/);
     assert.match(task.description, /solo and team/);

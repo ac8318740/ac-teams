@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { stateRoot } from "./config.ts";
 import { validatePolicy } from "./egress.ts";
 import { stripVTControlCharacters } from "node:util";
-import { isDescendant, isLive, isMain, memberNamePattern, memberNameMaxLength, taskLabelMaxLength, taskLabelPattern } from "./types.ts";
+import { isDescendant, isLive, isMain, memberName, memberNamePattern, memberNameMaxLength, taskLabelMaxLength, taskLabelPattern } from "./types.ts";
 import type { TeamState, TaskArgs, MessageArgs, Task, TaskView, Message, Worktree } from "./types.ts";
 
 // UI envelopes add task context after the public 16,000-character input limit.
@@ -181,6 +181,20 @@ export function readState(dir: string): TeamState {
     migrate(stored); validate(stored);
     return stored;
   } finally { closeSync(fd); }
+}
+
+/** Cache only display names, not histories; atomic snapshot replacements invalidate the cache. */
+export function createMemberLabels(): (dir: string) => Record<string, string> {
+  let key: string | undefined, labels: Record<string, string>;
+  return dir => {
+    const file = join(dir, "state.json"), stat = lstatSync(file, { bigint: true });
+    const next = `${file}:${stat.dev}:${stat.ino}:${stat.mtimeNs}:${stat.size}:${stat.mode}:${stat.uid}:${stat.nlink}`;
+    if (next !== key) {
+      labels = Object.fromEntries(Object.values(readState(dir).members).map(member => [member.id, memberName(member)]));
+      key = next;
+    }
+    return labels;
+  };
 }
 
 export class Store {

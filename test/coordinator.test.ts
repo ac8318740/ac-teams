@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, chmodSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, chmodSync, writeFileSync, existsSync, readFileSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { connect } from "node:net";
 import { once } from "node:events";
@@ -19,7 +19,7 @@ async function setup(limit = 10, depth = 2, interactive = false) {
   const home = mkdtempSync(join(tmpdir(), "at-"));
   const notices: number[] = [], warnings: string[] = [];
   const states: { kind: "busy" | "blocked"; active: boolean }[] = [];
-  const options: CoordinatorOptions = { status: (kind, active) => { states.push({ kind, active }); }, id: randomUUID(), cwd: home, limit, depth, interactive, extension: "unused", command: fixture, home, notice: (through: number) => { notices.push(through); }, warning: (message: string) => { warnings.push(message); } };
+  const options: CoordinatorOptions = { resources: () => ({ scope: "host", memory: { totalBytes: 10000, availableBytes: 5000, swapUsedBytes: 0 }, memoryPressure: { someAvg10: 0, fullAvg10: 0 }, warnings: [] }), status: (kind, active) => { states.push({ kind, active }); }, id: randomUUID(), cwd: home, limit, depth, interactive, extension: "unused", command: fixture, home, notice: (through: number) => { notices.push(through); }, warning: (message: string) => { warnings.push(message); } };
   const team = await Coordinator.open(options);
   return { team, home, options, notices, warnings, states, async close() { await team.close(); rmSync(home, { recursive: true, force: true }); } };
 }
@@ -85,6 +85,52 @@ test("team attention aggregates busy members and questions, and clears on settle
   } finally { await f.close(); }
 });
 
+test("unchanged events and notification cursors do not rewrite state; real changes remain durable", async () => {
+  const f = await setup();
+  const path = join(f.team.store.dir, "state.json");
+  try {
+    for (const event of [
+      { type: "activity", text: "Running read" },
+      { type: "telemetry", model: "test/model", modelName: "Test", contextUsage: { tokens: 1000, contextWindow: 100000, percent: 1 } },
+      { type: "blocked", active: true }, { type: "blocked", active: false },
+      { type: "summary", text: "Done" }, { type: "agent_start" }, { type: "agent_settled" },
+    ]) {
+      f.team.recordEvent("root", event);
+      const state = f.team.store.state;
+      const inode = statSync(path).ino;
+      f.team.recordEvent("root", structuredClone(event));
+      assert.equal(f.team.store.state, state, event.type);
+      assert.equal(statSync(path).ino, inode, event.type);
+    }
+    const previous = f.team.store.state;
+    f.team.recordEvent("root", { type: "activity", text: "Running edit" });
+    assert.notEqual(f.team.store.state.members.root.contextUsage, previous.members.root.contextUsage, "real updates keep snapshots isolated");
+    assert.equal(JSON.parse(readFileSync(path, "utf8")).members.root.activity, "Running edit");
+    await f.team.handle("root", "message", { action: "send", recipients: ["root"], text: "Keep this history" });
+    f.team.ack("root", 1);
+    const state = f.team.store.state;
+    f.team.ack("root", 1); f.team.ack("root", 0);
+    assert.equal(f.team.store.state, state);
+    assert.equal(JSON.parse(readFileSync(path, "utf8")).members.root.notified, 1);
+    assert.throws(() => f.team.ack("root", -1), /Invalid/);
+    assert.throws(() => f.team.ack("root", 2), /Invalid/);
+    assert.throws(() => f.team.recordEvent("root", { type: "blocked", active: "yes" }), /Invalid/);
+  } finally { await f.close(); }
+});
+
+test("repeated identical member errors still deliver separate durable parent messages", async () => {
+  const f = await setup();
+  try {
+    const member = await f.team.handle("root", "agent", launch) as { id: string };
+    await until(() => f.team.store.state.members[member.id].status === "idle");
+    const before = f.team.store.state.messages.length;
+    for (let i = 0; i < 2; i++) f.team.recordEvent(member.id, { type: "model_error", text: "Temporary failure" });
+    assert.equal(f.team.store.state.messages.length, before + 2);
+    assert.equal(JSON.parse(readFileSync(join(f.team.store.dir, "state.json"), "utf8")).messages.length, before + 2);
+    await until(() => f.notices.includes(f.team.store.state.messages.at(-1)!.seq));
+  } finally { await f.close(); }
+});
+
 test("teammates require unique descriptive names; legacy fallbacks remain stable", async () => {
   const f = await setup();
   try {
@@ -125,6 +171,48 @@ test("live idle members count; concurrency reserves slots and stop/resume keeps 
     assert.equal(resumed.sessionId, original.sessionId);
     assert.equal(resumed.sessionFile, original.sessionFile);
     assert.notEqual(resumed.token, original.token);
+  } finally { await f.close(); }
+});
+
+test("resource advisories reach launch, resume, list, and limits without changing ceilings or sessions", async () => {
+  const f = await setup(2);
+  try {
+    let reads = 0;
+    f.options.resources = () => { reads++; return { scope: "host", memory: null, memoryPressure: null, warnings: ["Headroom unavailable; sequence work"] }; };
+    const first = await f.team.handle("root", "agent", launch) as { id: string; resources: { warnings: string[]; liveMembers: number; startingMembers: number } };
+    assert.equal(reads, 1, "launch samples once before startup, not on every event");
+    assert.deepEqual(first.resources.warnings, ["Headroom unavailable; sequence work"]);
+    assert.equal(first.resources.liveMembers, 0);
+    assert.equal(f.warnings[0], "Headroom unavailable; sequence work");
+    for (const action of ["list", "limits"]) {
+      const result = await f.team.handle("root", "agent", { action }) as { limit: number; resources: typeof first.resources };
+      assert.equal(result.limit, 2, "advisory does not silently change policy");
+      assert.equal(result.resources.liveMembers, 1);
+      assert.match(result.resources.warnings[0], /unavailable/);
+    }
+    const original = f.team.store.state.members[first.id];
+    await f.team.handle("root", "agent", { action: "stop", id: first.id });
+    const resumed = await f.team.handle("root", "agent", { action: "resume", id: first.id, model: "test/model", brief: "again" }) as { sessionFile: string; resources: typeof first.resources };
+    assert.equal(resumed.sessionFile, original.sessionFile);
+    assert.equal(resumed.resources.liveMembers, 0);
+    assert.match(resumed.resources.warnings[0], /unavailable/);
+    assert.equal(reads, 4);
+    assert.equal("resources" in f.team.store.state.members[first.id], false, "do not persist stale headroom in history");
+  } finally { await f.close(); }
+});
+
+test("concurrent launch advisories include starting reservations before their processes consume memory", async () => {
+  const f = await setup(2);
+  try {
+    const results = await Promise.all([
+      f.team.handle("root", "agent", launch),
+      f.team.handle("root", "agent", { ...launch, name: "reviewer" }),
+    ]) as { resources: { liveMembers: number; startingMembers: number; warnings: string[] } }[];
+    assert.equal(results[0].resources.startingMembers, 0);
+    assert.equal(results[1].resources.liveMembers, 1);
+    assert.equal(results[1].resources.startingMembers, 1);
+    assert.match(results[1].resources.warnings.join(" "), /starting.*[Ss]equence/);
+    assert.equal(f.team.live().length, 2, "resource guidance is advisory, unlike the explicit ceiling");
   } finally { await f.close(); }
 });
 

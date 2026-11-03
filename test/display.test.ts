@@ -49,7 +49,8 @@ test("team widgets and status preserve other footers and statuses through toggle
   const statuses = new Map<string, string>([["another-extension", "keep this status"]]);
   let refreshes = 0, needsInput = true;
   const settings = { tasks: true, agents: true };
-  const host: PanelHost = { self: "root", child: false, promote: async () => {}, drafts: new Map(), snapshot: async () => {
+  const host: PanelHost = { self: "root", child: false, promote: async () => {}, drafts: new Map(), snapshot: async includeMessages => {
+    assert.equal(includeMessages, false, "footer never requests unused message history");
     refreshes++;
     return { members: [{ id: "worker", name: "reviewer", cwd: "/trial", depth: 1, status: "busy", notified: 0, needsInput },
       ...Array.from({ length: 5 }, (_, i) => ({ id: `stopped-${i}`, cwd: "/trial", depth: 1, status: "stopped" as const, notified: 0 })),

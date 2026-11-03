@@ -95,7 +95,7 @@ export function installTeamFooter(_pi: ExtensionAPI, ctx: ExtensionContext, host
         redraw();
         return;
       }
-      const next = await host.snapshot();
+      const next = await host.snapshot(false);
       if (disposed) return;
       members = next.members.filter(isLive); tasks = next.tasks;
       const count = ids().length;
