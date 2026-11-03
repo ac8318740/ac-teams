@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { Store, processAlive, processIdentity } from "../src/store.ts";
+import { Store, processAlive, processIdentity, createMemberLabels } from "../src/store.ts";
 import type { TeamState, Task, Message } from "../src/types.ts";
 
 function initial(): TeamState {
@@ -22,6 +22,29 @@ function fixture(t: test.TestContext) {
   t.after(() => store.close());
   return { home, store };
 }
+
+test("member labels reuse unchanged snapshots and refresh after writes, team switches, and unsafe replacements", t => {
+  const { store } = fixture(t);
+  const labels = createMemberLabels();
+  const first = labels(store.dir);
+  assert.equal(first.root, "Main");
+  assert.equal(labels(store.dir), first, "unchanged state reuses labels rather than rereading history");
+  store.update(state => { state.members.child.name = "reviewer"; });
+  const next = labels(store.dir);
+  assert.notEqual(next, first);
+  assert.equal(next.child, "reviewer");
+  assert.equal(labels(store.dir), next);
+  const other = new Store({ ...initial(), id: "other-team" }, join(store.dir, "other"));
+  t.after(() => other.close());
+  other.update(state => { state.members.child.name = "writer"; });
+  assert.equal(labels(other.dir).child, "writer");
+  assert.equal(labels(store.dir).child, "reviewer", "do not reuse labels across teams");
+  const file = join(store.dir, "state.json");
+  rmSync(file); symlinkSync(join(other.dir, "state.json"), file);
+  assert.throws(() => labels(store.dir), /ELOOP|Unsafe/);
+  rmSync(file); writeFileSync(file, "{}", { mode: 0o600 });
+  assert.throws(() => labels(store.dir), /state|snapshot|schema/i);
+});
 
 test("snapshot persists, locks exclude owners, and close is idempotent", t => {
   const { home, store } = fixture(t);

@@ -13,7 +13,7 @@ import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { promisify } from "node:util";
-import { readState, teamsHome } from "./store.ts";
+import { createMemberLabels, readState, teamsHome } from "./store.ts";
 import { teamEntryType, type TeamEntry } from "./mains.ts";
 import { isMain, memberName, taskName, type TeamState } from "./types.ts";
 import { Coordinator, assistantEvent, taskRequestGuidance } from "./coordinator.ts";
@@ -48,10 +48,11 @@ export default function teams(pi: ExtensionAPI) {
   const teamTools = ["team_agent", "team_task", "team_message"];
   const memberId = () => child ? environment[1]! : team?.member ?? "root";
   const teamId = (ctx: ExtensionContext) => team?.team ?? ctx.sessionManager.getSessionId();
+  const cachedLabels = createMemberLabels();
   function memberLabels(): Record<string, string> {
     try {
-      const members = coordinator?.store.state.members ?? readState(child ? dirname(environment[0]!) : join(teamsHome(), teamId(context!))).members;
-      return Object.fromEntries(Object.values(members).map(member => [member.id, memberName(member)]));
+      if (coordinator) return Object.fromEntries(Object.values(coordinator.store.state.members).map(member => [member.id, memberName(member)]));
+      return cachedLabels(child ? dirname(environment[0]!) : join(teamsHome(), teamId(context!)));
     } catch { return { root: "Main" }; } // A transcript can render before its team is available.
   }
   pi.registerMessageRenderer("ac-teams", teamMessageRenderer(memberLabels));
@@ -196,7 +197,7 @@ export default function teams(pi: ExtensionAPI) {
     }
     return coordinator!.handle(coordinator!.self, operation, args, authorized);
   }
-  async function snapshot(ctx: ExtensionContext): Promise<TeamSnapshot> {
+  async function snapshot(ctx: ExtensionContext, includeMessages = true): Promise<TeamSnapshot> {
     if (!child && !opening && !connection) return { members: [{ id: "root", cwd: ctx.cwd, depth: 0, status: ctx.isIdle() ? "idle" : "busy", notified: 0, needsInput: inputCount > 0 }], tasks: [], messages: [], limit: 10, depth: 2 };
     const status = await handle("agent", { action: "list" }, ctx) as Pick<TeamSnapshot, "members" | "limit" | "depth"> & { lastMessage: number };
     const tasks: TaskView[] = [];
@@ -206,7 +207,7 @@ export default function teams(pi: ExtensionAPI) {
       tasks.push(...page.tasks); total = page.total;
       if (!page.tasks.length) break;
     } while (tasks.length < total);
-    const messages = await handle("message", { action: "history", after: Math.max(0, status.lastMessage - 100), limit: 100 }, ctx) as Message[];
+    const messages = includeMessages ? await handle("message", { action: "history", after: Math.max(0, status.lastMessage - 100), limit: 100 }, ctx) as Message[] : [];
     return { members: status.members, limit: status.limit, depth: status.depth, tasks, messages };
   }
   function host(ctx: ExtensionContext): PanelHost {
@@ -217,7 +218,7 @@ export default function teams(pi: ExtensionAPI) {
       return await coordinator!.handle(coordinator!.self, "ui", value) as string;
     };
     const api: PanelHost = {
-      self: memberId(), child, drafts, snapshot: () => snapshot(ctx),
+      self: memberId(), child, drafts, snapshot: includeMessages => snapshot(ctx, includeMessages),
       visit: async id => {
         if (id === memberId()) return;
         if (!child) await link(ctx);
@@ -279,7 +280,7 @@ export default function teams(pi: ExtensionAPI) {
     if (change) report(ctx, change);
   });
   function output(data: unknown) { return { content: [{ type: "text" as const, text: JSON.stringify(data) }], details: data }; }
-  const guidance = "Team launches use real long-lived Pi sessions. Idle members count against the shared ceiling. Use teammate names for messaging and stable IDs for member control and tasks; query status and history instead of acknowledging notifications. Limits cover only ac-teams, not other launchers or shell commands.";
+  const guidance = "Team launches use real long-lived Pi sessions. Idle members count against the shared ceiling and retain their processes and extensions. Check team_agent list resources before adding concurrency; teammate launch/resume results include pre-launch host headroom. Resource warnings are advisory, not a memory reservation or capacity guarantee. Sequence launches while members are starting or memory is pressured; stop unneeded idle members and resume their saved sessions later. Use teammate names for messaging and stable IDs for member control and tasks; query status and history instead of acknowledging notifications. Limits cover only ac-teams, not other launchers or shell commands.";
   const taskTrackingGuidance = "Before delegating a deliverable through team_agent, create or reuse a team_task and include its ID in the member's brief. Use one shared task list for your own work and delegated work; do not create one task per teammate by default. Quick lookups and brief second opinions need no separate task unless their results need coordination or follow-up.";
   pi.registerTool({
     name: "team_agent", label: "Team agent", description: "Launch/resume Pi members, list/status, stop owned subtrees, change root limits, and explicitly clean stopped worktrees. Create or reuse team_task entries for delegated deliverables; quick lookups need no task unless results need coordination or follow-up.",

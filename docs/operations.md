@@ -31,6 +31,30 @@ pi --teams-limit 4 --teams-depth 1
 
 Other delegation tools remain outside these limits. See [companion tools](usage.md#companion-tools-add-guidance-or-terminal-management).
 
+### Check headroom before adding concurrency
+
+`team_agent list` and `limits` include a fresh `resources` advisory. Launch and teammate resume results include the sample taken before startup.
+
+It reports host available RAM, occupied swap, recent memory stalls, and live/starting member counts. Values are bytes; Linux pressure averages are percentages over the last ten seconds. Missing or invalid metrics are `null` with a warning, not zero or an all-clear.
+
+The check reads only `/proc/meminfo` and `/proc/pressure/memory` on demand. It adds no polling, process-tree scans, or subprocesses.
+
+Available RAM below 10% triggers a low-headroom warning (a heuristic, not a per-member budget). Any nonzero ten-second memory-stall average also warns. Occupied swap alone does not trigger a pressure warning.
+
+Starting members reserve count slots synchronously, but may not yet consume their full memory. Concurrent launch results warn about earlier starts.
+
+Sequence launches and recheck `list` after startup before adding more. These advisories never block a launch, change the configured ceiling, reserve RAM, or stop a member. Host figures do not account for a tighter container/cgroup limit or guarantee future capacity; other teams and non-team processes also consume resources.
+
+Idle members keep Pi and its extensions alive. Stop unneeded members to release their owned processes, then resume their saved sessions when needed.
+
+This preserves transcripts, tasks, messages, and worktrees. Extension-owned language servers and scanners can dominate memory; ac-teams does not disable them or share them across sessions.
+
+### Avoid repeated work without dropping updates
+
+The coordinator skips saves when member events leave the state unchanged or notification cursors do not advance. Real changes still use the same validated, atomic saves. Repeated model errors still deliver separate parent notifications.
+
+The footer refreshes at the same interval without fetching message history. The panel still loads messages and complete tasks. Connected sessions cache display names until the snapshot file changes; they do not retain a second copy of the history.
+
 ## Display preferences are global
 
 `/teams config` saves task-summary and agent-selector visibility to `~/.pi/ac-teams/display.json`:
