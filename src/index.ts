@@ -290,10 +290,18 @@ export default function teams(pi: ExtensionAPI) {
     async execute(_id, args, _signal, _update, ctx) { return output(await handle("task", args, ctx)); },
   });
   pi.registerTool({
-    name: "team_message", label: "Team message", description: "Send a persistent direct/team message or read cursor-paged history. New messages queue a compact follow-up notification for each recipient.",
+    name: "team_message", label: "Team message", description: "Send a persistent direct/team message or read cursor-paged history. Send returns a receipt; history and search return full messages. New messages queue a compact follow-up notification for each recipient.",
+    promptGuidelines: ["Do not poll team_message history while waiting for replies; notifications trigger a follow-up turn. On notification, read team_message history after your last read cursor and advance it through the returned messages. An empty result means no newer messages, not that a teammate has finished."],
     parameters: MessageSchema,
     ...teamToolRenderers("team_message"),
-    async execute(_id, args, _signal, _update, ctx) { return output(await handle("message", args, ctx)); },
+    async execute(_id, args, _signal, _update, ctx) {
+      const result = await handle("message", args, ctx);
+      if (args.action === "send") {
+        const { seq, id, recipients } = result as Message;
+        return output({ seq, id, recipients });
+      }
+      return output(result);
+    },
   });
   async function close() {
     exiting = true;
