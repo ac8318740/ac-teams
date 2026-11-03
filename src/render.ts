@@ -57,7 +57,7 @@ function toolSummary(data: unknown, theme: Theme): string {
   if (data && typeof data === "object") {
     const value = data as Record<string, unknown>;
     if (Array.isArray(value.members)) return preview(value.members, `${value.members.length} members`, theme);
-    if (Array.isArray(value.tasks)) return preview(value.tasks, `${value.tasks.length} of ${value.total} tasks`, theme);
+    if (Array.isArray(value.tasks)) return preview(value.tasks, value.total === undefined ? `${value.tasks.length} tasks` : `${value.tasks.length} of ${value.total} tasks`, theme);
     const label = value.title ?? value.name ?? value.brief ?? value.text ?? value.query ?? value.id;
     const status = value.status === undefined ? "" : inline(value.status);
     const color = status === "done" ? "success"

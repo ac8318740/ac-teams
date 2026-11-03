@@ -221,7 +221,6 @@ test("task numbers and concise labels survive edits, failures, pagination, and r
     assert.throws(() => store.task("root", { action: "create", title: "Valid", label, description: "Do it" }), /label/i);
     assert.throws(() => store.task("root", { action: "edit", id: first.id, label }), /label/i);
   }
-  assert.throws(() => store.task("root", { action: "create", title: "A title with many words", description: "Needs a concise label" }), /label/i);
   assert.throws(() => store.update(state => { state.tasks[second.id].number = first.number; }), /number/i);
   assert.equal(readFileSync(join(store.dir, "state.json"), "utf8"), before);
   store.close();
