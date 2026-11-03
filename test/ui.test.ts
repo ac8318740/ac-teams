@@ -147,9 +147,169 @@ test("panel keeps selected status color, dims done text, fits narrow terminals, 
     assert.match(empty.text(), /0\/4 live/, "Main must not consume a member slot");
     empty.component.handleInput("\t");
     assert.match(empty.text(), /● Main/);
+    assert.match(empty.text(150), /Model +Unknown/);
+    assert.match(empty.text(150), /Context +Unknown/);
+    assert.match(empty.text(150), /Directory +\/project/);
     empty.component.handleInput("\t");
     assert.match(empty.text(), /No activity yet/);
   } finally { empty.close(); await empty.running; }
+});
+
+test("teammate columns stay aligned and preserve status at narrow and split widths", async () => {
+  const data = snapshot();
+  data.members = [
+    { id: "scout", name: "marketplace-scout", status: "stopped", depth: 1, cwd: "/project", notified: 0 },
+    { id: "fix", name: "setup-fix", status: "busy", depth: 1, cwd: "/project", notified: 0 },
+    { id: "wide", name: "解析器👩‍💻".repeat(12), status: "idle", needsInput: true, depth: 1, cwd: "/project", notified: 0 },
+  ];
+  const f = await panelFixture(data);
+  try {
+    f.component.handleInput("\t");
+    for (const width of [40, 80, 100, 150]) {
+      const lines = f.component.render(width).map(cleanText);
+      const header = lines.find(line => /Member +Session/.test(line))!;
+      assert.ok(header, `column headings at width ${width}`);
+      const column = visibleWidth(header.slice(0, header.indexOf("Session")));
+      for (const status of ["Main conversation", "Stopped", "Busy", "Needs input"]) {
+        const line = lines.find(line => line.includes(status))!;
+        assert.ok(line, `${status} visible at width ${width}`);
+        assert.equal(visibleWidth(line.slice(0, line.indexOf(status))), column, `${status} aligned at width ${width}`);
+      }
+      assert.ok(lines.every(line => visibleWidth(line) <= width));
+    }
+    for (const width of [12, 24, 39, 82, 83]) {
+      assert.ok(f.component.render(width).every(line => visibleWidth(line) <= width), `fits width ${width}`);
+    }
+    f.component.handleInput("\x1b[B");
+    assert.match(f.text(80), /● marketplace-scout/);
+    f.component.handleInput("\x1b[C");
+    assert.match(f.text(80), /State +Stopped/);
+  } finally { f.close(); await f.running; }
+});
+
+test("teammate table adds task progress and directory only when they fit", async () => {
+  const data = snapshot();
+  data.members = [
+    { id: "worker", name: "marketplace-fix", status: "busy", depth: 1, cwd: "/work/marketplace/", notified: 0 },
+    { id: "other", name: "other", status: "idle", depth: 1, cwd: "/work/解析器", notified: 0 },
+  ];
+  data.tasks = data.tasks.map((task, i) => ({ ...task, owner: i < 3 ? "worker" : "other", status: i === 0 ? "done" : "todo" }));
+  const f = await panelFixture(data);
+  try {
+    f.component.handleInput("\t");
+    const wide = f.component.render(150).map(cleanText);
+    const header = wide.find(line => /Member +Session +Tasks +Directory/.test(line))!;
+    assert.ok(header);
+    const worker = wide.find(line => /marketplace-fix +Busy/.test(line))!;
+    assert.match(worker, /marketplace-fix {4,}Busy {4,}1\/3 {4,}marketplace/);
+    for (const [title, value] of [["Session", "Busy"], ["Tasks", "1/3"], ["Directory", "marketplace"]]) {
+      assert.equal(visibleWidth(header.slice(0, header.indexOf(title))), visibleWidth(worker.slice(0, worker.lastIndexOf(value))));
+    }
+    assert.ok(!worker.includes("/work/"));
+    assert.match(wide.find(line => /other +Idle/.test(line))!, /0\/1 +解析器/);
+    const columnAt = (width: number, title: string) => {
+      const heading = f.component.render(width).map(cleanText).find(line => /Member +Session/.test(line))!;
+      return visibleWidth(heading.slice(0, heading.indexOf(title)));
+    };
+    assert.ok(columnAt(180, "Session") > columnAt(150, "Session"), "Session moves with available width");
+    assert.ok(columnAt(180, "Tasks") > columnAt(150, "Tasks"), "Tasks moves with available width");
+    assert.ok(columnAt(180, "Directory") > columnAt(150, "Directory"), "Directory uses the right-hand space");
+    const medium = f.text(100).split("\n").find(line => /Member +Session/.test(line))!;
+    assert.match(medium, /Tasks/);
+    assert.ok(!medium.includes("Directory"));
+    const narrow = f.text(40).split("\n").find(line => /Member +Session/.test(line))!;
+    assert.ok(!narrow.includes("Tasks"));
+    assert.ok(!narrow.includes("Directory"));
+    for (let width = 12; width <= 180; width++) {
+      assert.ok(f.component.render(width).every(line => visibleWidth(line) <= width), `fits width ${width}`);
+    }
+    f.component.handleInput("\x1b[B"); f.component.handleInput("\x1b[C");
+    assert.match(f.text(100), /Tasks +1\/3/);
+    assert.match(f.text(100), /Completed \/ currently assigned/);
+    assert.match(f.text(100), /Directory +\/work\/marketplace\//);
+    data.tasks[1].owner = "other";
+    assert.match(f.text(100), /Tasks +1\/2/, "reassignment leaves the denominator");
+  } finally { f.close(); await f.running; }
+});
+
+test("teammate search and stopped filter affect only the visible roster and selected session", async () => {
+  const data = snapshot();
+  data.members = [
+    { id: "scout-id", name: "marketplace-scout", role: "member", status: "stopped", depth: 1, cwd: "/project", notified: 0 },
+    { id: "fix-id", name: "marketplace-fix", role: "member", status: "busy", depth: 1, cwd: "/project", notified: 0 },
+    { id: "test-id", name: "setup-tests", role: "member", status: "idle", needsInput: true, depth: 1, cwd: "/project", notified: 0 },
+    { id: "interrupted-id", name: "interrupted-review", role: "member", status: "interrupted", depth: 1, cwd: "/project", notified: 0 },
+  ];
+  const before = JSON.stringify(data);
+  const f = await panelFixture(data);
+  try {
+    f.component.handleInput("\t");
+    assert.match(f.text(150), /1 working · 0 idle · 1 stopped · 2 needs input/);
+    assert.match(f.text(150), /→ Details/);
+    const footer = () => { const text = f.text(150); return text.slice(text.lastIndexOf("├")); };
+    assert.match(footer(), /\/ Filter · H Hide stopped/);
+    const rows = f.component.render(150).map(cleanText);
+    const headingRow = rows.findIndex(line => /Member +Session/.test(line));
+    assert.match(rows[headingRow + 1], /● Main/, "headings sit directly above roster rows");
+    assert.ok(!rows.slice(0, rows.findLastIndex(line => line.includes("├"))).some(line => /Filter names|H Hide stopped/.test(line)));
+    f.component.handleInput("h");
+    assert.ok(!f.text(150).includes("marketplace-scout"));
+    assert.match(footer(), /Stopped: hidden/);
+    assert.match(f.text(150), /interrupted-review/, "interrupted sessions remain visible for recovery");
+    f.component.handleInput("/");
+    f.component.handleInput("MARKETPLACE");
+    assert.match(footer(), /Filter: MARKETPLACE▏/);
+    assert.match(footer(), /Stopped: hidden/);
+    assert.match(f.text(150), /● marketplace-fix/);
+    assert.ok(!f.text(150).includes("setup-tests"));
+    assert.deepEqual(f.sent, [], "search input must not trigger task or promotion shortcuts");
+    f.component.handleInput("\r");
+    assert.match(footer(), /Filter: MARKETPLACE/);
+    f.component.handleInput("\x1b[C");
+    assert.match(f.text(150), /Esc Back/);
+    assert.ok(!f.text(150).includes("No separate message composer"));
+    f.component.handleInput("\x1b");
+    f.component.handleInput("/");
+    f.component.handleInput("does-not-exist");
+    assert.match(f.text(150), /No matching teammates/);
+    f.component.handleInput("\r");
+    f.component.handleInput("\r");
+    await tick();
+    assert.deepEqual(f.visits, [], "empty search cannot open an unrelated member");
+    f.component.handleInput("/");
+    f.component.handleInput("\x1b");
+    assert.match(f.text(150), /setup-tests/);
+    f.component.handleInput("h");
+    assert.match(f.text(150), /marketplace-scout/);
+    assert.equal(JSON.stringify(data), before);
+    f.component.handleInput("/");
+    f.component.handleInput("\x1b[200~marketplace-fix😀\x1b[201~");
+    f.component.handleInput("\x7f");
+    assert.match(f.text(150), /● marketplace-fix/);
+    f.component.handleInput("\r");
+    f.component.handleInput("\r");
+    await tick(); await f.running;
+    assert.deepEqual(f.visits, ["fix-id"]);
+  } finally { f.close(); await f.running; }
+});
+
+test("panel summaries follow the active tab and details separate model from context", async () => {
+  const data = snapshot();
+  data.members = [{ id: "worker", name: "worker", status: "idle", depth: 1, cwd: "/project", notified: 0,
+    modelName: "Test model", contextUsage: { tokens: 12000, contextWindow: 100000, percent: 12 } }];
+  data.messages = [{ seq: 1, id: "M1", from: "root", recipients: ["worker"], text: "Hello", time: "2026-01-01T12:00:00Z" }];
+  const f = await panelFixture(data);
+  try {
+    assert.match(f.text(150), /4 tasks/);
+    f.component.handleInput("\t"); f.component.handleInput("\x1b[B");
+    assert.match(f.text(150), /1 teammate/);
+    assert.ok(!f.text(150).includes("4 tasks"));
+    assert.match(f.text(150), /Model +Test model/);
+    assert.match(f.text(150), /Context +12k \/ 100k \(12%\)/);
+    f.component.handleInput("\t");
+    assert.match(f.text(150), /1 message · newest first/);
+    assert.ok(!f.text(150).includes("4 tasks"));
+  } finally { f.close(); await f.running; }
 });
 
 test("composer retains failed/cancelled drafts, uses real receipts, and resumes before visiting", async () => {

@@ -24,7 +24,10 @@ Context shows Pi's reported token estimate, window size, and percentage, for exa
 - Ctrl+Shift+Left returns from a member to Main. Switching preserves the member's process, session, and draft. Returning does not stop it.
 - `/teams` opens three tabs. Tab moves between Tasks, Teammates, and Activity; Esc closes the panel.
     - **Tasks:** Arrow keys select nodes in the dependency graph. G toggles graph/list, and Enter shows full details. Green means Done, red Blocked, cyan Working, and neutral Ready; written labels remain visible. Large or unsupported graphs fall back to the list.
-    - **Teammates:** Enter opens a live member, or quietly resumes a stopped member's saved session before opening it. Root can open any member; member views can open their descendants.
+    - **Teammates:** Shows working, idle, stopped, and needs-input counts; interrupted sessions count as needing input. Enter opens a live member, or quietly resumes a stopped member's saved session before opening it. Right opens details; Esc returns to the roster. Model, context, and directory appear above session IDs and paths. Root can open any member; member views can open their descendants.
+        - Wider rosters also show Tasks (completed / currently assigned total) and the directory's final folder name. Reassigned tasks leave the previous owner's counts. Narrower views drop Directory first, then Tasks; full paths and counts remain in details.
+        - Press `/` to filter names (case-insensitive). Enter applies the filter; Esc while editing clears it. Backspace edits the query. Press `/` again to edit an applied filter.
+        - H hides or shows stopped members. Interrupted sessions remain visible for recovery. All members are visible by default; filters affect only this panel, not team state.
     - **Activity:** Shows the latest 100 persistent team messages rather than every tool update. Use `team_message history` to read older messages.
 - N composes a task request for Main. C on a task sends feedback to its creator. Enter sends; Shift+Enter adds a newline; Esc cancels without losing the draft. These messages do not directly edit the task graph. Feedback resumes a stopped creator when possible; otherwise, the receipt explicitly reports delivery to Main instead.
 

@@ -10,10 +10,13 @@ export function readTelemetry(ctx: ExtensionContext): Telemetry {
 
 export function modelContext(member: Pick<Member, "model" | "modelName" | "contextUsage">): string {
   const model = member.modelName || member.model?.slice(member.model.indexOf("/") + 1) || "Model unknown";
-  const usage = member.contextUsage;
+  return `${model} · ${contextSummary(member.contextUsage)}`;
+}
+
+export function contextSummary(usage: Member["contextUsage"]): string {
   const count = (value: number) => value >= 1000 ? `${(value / 1000).toFixed(1).replace(/\.0$/, "")}k` : String(value);
   const context = !usage ? "context unknown" : usage.tokens === null || usage.percent === null
     ? `context unknown / ${count(usage.contextWindow)}`
     : `${count(usage.tokens)} / ${count(usage.contextWindow)} (${usage.percent.toFixed(1).replace(/\.0$/, "")}%)`;
-  return `${model} · ${context}`;
+  return context;
 }
