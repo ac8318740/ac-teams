@@ -53,6 +53,10 @@ function taskView(state: TeamState, task: Task): TaskView {
   return structuredClone({ ...task, blockedBy: task.dependencies.filter(id => state.tasks[id]?.status !== "done") });
 }
 
+function taskLabel(title: string): string {
+  return stripVTControlCharacters(title).replace(/[\x00-\x1f\x7f-\x9f]/g, " ").trim().split(/\s+/).slice(0, 3).join(" ").slice(0, taskLabelMaxLength).trim();
+}
+
 function migrate(state: unknown): boolean {
   if (!object(state) || ![1, 2, 3].includes(state.version as number)) return false;
   if (state.version !== 3) migrateTasks(state);
@@ -78,7 +82,7 @@ function migrateTasks(state: Record<string, unknown>): void {
       else task.status = "done";
     }
     task.number = ++number;
-    task.label = stripVTControlCharacters(task.title).replace(/[\x00-\x1f\x7f-\x9f]/g, " ").trim().split(/\s+/).slice(0, 3).join(" ").slice(0, taskLabelMaxLength).trim() || "Task";
+    task.label = taskLabel(task.title) || "Task";
   }
 }
 
@@ -273,6 +277,7 @@ export class Store {
 
   task(actor: string, args: TaskArgs): TaskView | { tasks: TaskView[]; total: number } {
     requireValue(!this.closed && Object.hasOwn(this.state.members, actor), "Unknown actor or closed store");
+    requireValue(args.tasks === undefined || args.action === "create", "tasks is only valid for create");
     if (args.action === "list") {
       const tasks = Object.values(this.state.tasks);
       const offset = args.offset ?? 0, limit = args.limit ?? 100;
@@ -285,13 +290,24 @@ export class Store {
     }
     return this.update(state => {
       if (args.action === "create") {
-        requireValue(text(args.title, 500) && text(args.description), "Task requires a title (max 500) and description (max 16000)");
-        const label = args.label ?? args.title;
-        requireValue(text(label, taskLabelMaxLength) && taskLabelPattern.test(label), "Task requires a 1–3-word label (max 60 characters); a concise title can serve as the label");
-        const number = Object.values(state.tasks).reduce((max, task) => Math.max(max, task.number), 0) + 1;
-        const task: Task = { id: randomUUID(), number, label, revision: 1, creator: actor, title: args.title, description: args.description, dependencies: args.dependencies === undefined ? [] : structuredClone(args.dependencies), status: "todo" };
-        state.tasks[task.id] = task;
-        return taskView(state, task);
+        requireValue(args.tasks === undefined || (Array.isArray(args.tasks) && args.tasks.length > 0 && args.tasks.length <= 100), "Batch create requires 1-100 tasks");
+        requireValue(args.tasks === undefined || [args.title, args.label, args.description, args.dependencies].every(value => value === undefined), "Use tasks or top-level task fields, not both");
+        const inputs = args.tasks ?? [args];
+        let number = Object.values(state.tasks).reduce((max, task) => Math.max(max, task.number), 0);
+        const existing = new Set(Object.keys(state.tasks));
+        const created = inputs.map(input => {
+          requireValue(object(input) && text(input.title, 500), "Task requires a title (max 500)");
+          const description = input.description === undefined ? input.title : input.description;
+          requireValue(text(description), "Task requires a description (max 16000)");
+          const label = input.label === undefined ? taskLabel(input.title) : input.label;
+          requireValue(text(label, taskLabelMaxLength) && taskLabelPattern.test(label), "Task requires a 1–3-word label (max 60 characters)");
+          const dependencies = input.dependencies === undefined ? [] : structuredClone(input.dependencies);
+          requireValue(Array.isArray(dependencies) && dependencies.length <= 100 && dependencies.every(dep => existing.has(dep)), "Dependencies must refer to existing tasks");
+          const task: Task = { id: randomUUID(), number: ++number, label, revision: 1, creator: actor, title: input.title, description, dependencies, status: "todo" };
+          state.tasks[task.id] = task;
+          return taskView(state, task);
+        });
+        return args.tasks === undefined ? created[0] : { tasks: created, total: created.length };
       }
       requireValue(args.id && Object.hasOwn(state.tasks, args.id), "Unknown task");
       const task = state.tasks[args.id];
@@ -308,10 +324,11 @@ export class Store {
         requireValue(!task.owner, `Task is already owned by ${task.owner}`);
         task.owner = actor;
       } else if (args.action === "start") {
-        requireValue(task.owner === actor, "Only the owner can start this task; claim it first");
+        requireValue(!task.owner || task.owner === actor, "Only the owner can start this task");
         requireValue(task.status === "todo", "Only to-do tasks can be started");
         const blocked = taskView(state, task).blockedBy;
         requireValue(blocked.length === 0, `Task is blocked by unfinished dependencies: ${blocked.join(", ")}`);
+        task.owner = actor;
         task.status = "in_progress";
       } else if (args.action === "complete") {
         requireValue(task.owner === actor, "Only the owner can complete this task");

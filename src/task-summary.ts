@@ -9,8 +9,8 @@ export function summaryTasks(tasks: TaskView[]): TaskView[] {
     if (task.status !== "done") for (const id of task.blockedBy) dependents.set(id, (dependents.get(id) ?? 0) + 1);
   }
   const rank = (task: TaskView) => task.status === "in_progress" ? 0
-    : task.status === "done" ? 3 : task.blockedBy.length ? 2 : dependents.has(task.id) ? 1 : 4;
-  return tasks.filter(task => rank(task) < 4).sort((a, b) => rank(a) - rank(b)
+    : task.status === "done" ? 4 : task.blockedBy.length ? 3 : dependents.has(task.id) ? 1 : 2;
+  return [...tasks].sort((a, b) => rank(a) - rank(b)
     || (a.status === "done" && b.status === "done" ? (b.completedAt ?? -1) - (a.completedAt ?? -1) || b.number - a.number
       : (dependents.get(b.id) ?? 0) - (dependents.get(a.id) ?? 0) || a.number - b.number)).slice(0, 5);
 }

@@ -14,6 +14,8 @@ Restart Pi after installation. Use Pi's `/trust` command to save approval for ea
 
 ## Use it
 
+Use `team_task` for substantial solo work as well as team deliverables. Agents receive guidance to plan multi-step work, start tasks before working, and complete them after verification. Simple tasks need no list.
+
 Your Pi session is the root; its child agents are members. Ask Pi to delegate a bounded assignment, for example:
 
 > Launch a member to review src/parser.ts without editing, and have it send findings back to me.
@@ -21,7 +23,7 @@ Your Pi session is the root; its child agents are members. Ask Pi to delegate a 
 | Tool | Purpose |
 | --- | --- |
 | `team_agent` | Launch, inspect, stop, and resume members; manage limits and worktrees |
-| `team_task` | Track shared work, ownership, and dependencies |
+| `team_task` | Plan solo or team work, create tasks in batches, and track ownership and dependencies |
 | `team_message` | Send notifications and read or search team history |
 
 `/teams` or `/teams panel` opens Tasks, Teammates, and Activity. `/teams teammate <name-or-id>` opens a teammate directly; subcommands and teammate names autocomplete. Use the task graph or list, send feedback, and open a member's full live Pi session.

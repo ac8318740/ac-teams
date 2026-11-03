@@ -186,22 +186,44 @@ test("raising the root ceiling requires explicit host confirmation", async () =>
   } finally { await f.close(); }
 });
 
-test("team tools guide task-backed delegation without tracking every action", async () => {
+test("team tools guide solo planning and task-backed delegation without tracking every action", async () => {
   const f = fixture();
   try {
     for (const name of ["team_agent", "team_task"]) {
       const tool = f.tools.get(name)!;
-      assert.match(tool.description, /delegated deliverables/);
       const guidelines = tool.promptGuidelines!.join(" ");
       assert.match(guidelines, /Before delegating a deliverable through team_agent, create or reuse a team_task/);
       assert.match(guidelines, /include its ID in the member's brief/);
-      assert.match(guidelines, /independently owned outcomes/);
       assert.match(guidelines, /not create one task per teammate/);
-      assert.match(guidelines, /Skip tasks for quick lookups, clarification, and brief second opinions unless results need coordination or follow-up/);
-      assert.match(guidelines, /owners claim and start/);
-      assert.match(guidelines, /complete it after checking acceptance criteria or report blockers/);
     }
-    assert.ok(f.tools.get("team_task")!.promptGuidelines!.includes(taskRequestGuidance));
+    const task = f.tools.get("team_task")!;
+    assert.match(task.promptSnippet!, /multi-step/);
+    assert.match(task.description, /solo and team/);
+    assert.match(task.promptGuidelines!.join(" "), /3\+ steps/);
+    assert.match(task.promptGuidelines!.join(" "), /trivial/);
+    assert.ok(task.promptGuidelines!.includes(taskRequestGuidance));
+  } finally { await f.close(); }
+});
+
+test("task batches and lists keep model output compact while read and details retain full records", async () => {
+  const f = fixture();
+  const call = (args: unknown) => f.tools.get("team_task")!.execute(randomUUID(), args, new AbortController().signal, undefined, f.ctx);
+  try {
+    const result = await call({ action: "create", tasks: [{ title: "Inspect existing implementation", description: "Acceptance: " + "evidence ".repeat(1000) }, { title: "Run checks" }] });
+    const batch = result.details as { tasks: { id: string; description: string }[] };
+    const text = (value: typeof result) => value.content.filter(block => block.type === "text").map(block => block.text).join("\n");
+    assert.equal(batch.tasks.length, 2);
+    assert.ok(text(result).length < 1500);
+    assert.ok(!text(result).includes("evidence"));
+    const list = await call({ action: "list" });
+    assert.ok(text(list).includes(batch.tasks[0].id));
+    assert.ok(!text(list).includes("evidence"));
+    const read = await call({ action: "read", id: batch.tasks[0].id });
+    assert.ok(text(read).includes(batch.tasks[0].description));
+    await call({ action: "start", id: batch.tasks[0].id });
+    await assert.rejects(call({ action: "complete", id: batch.tasks[0].id }), /acceptance/);
+    await call({ action: "complete", id: batch.tasks[0].id, acceptance: true });
+    await assert.rejects(call({ action: "list", tasks: [{ title: "Wrong action" }] }), /create/);
   } finally { await f.close(); }
 });
 

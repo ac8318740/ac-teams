@@ -1,6 +1,6 @@
 # Use ac-teams
 
-ac-teams provides three tools with lightweight guidance for tracking delegated work. Your Pi session is a main session; the agents it launches are members. The first main session opens coordination state on the first team request. See [main sessions](#main-sessions-share-one-team) for adding more.
+ac-teams provides three tools for planning and tracking solo and delegated work. Your Pi session is a main session; the agents it launches are members. The first main session opens coordination state on the first team request. See [main sessions](#main-sessions-share-one-team) for adding more.
 
 | Tool | Actions | Main rule |
 | --- | --- | --- |
@@ -58,16 +58,33 @@ The task summary sits above the input editor; the agent selector sits below the 
 
 1. In-progress work
 2. Ready prerequisites blocking other tasks, with the most dependents first
-3. Blocked work, marked `⊘` with prerequisite numbers such as `blocked by #3`
-4. Recently completed work, newest first
+3. Other ready work
+4. Blocked work, marked `⊘` with prerequisite numbers such as `blocked by #3`
+5. Recently completed work, newest first
 
-Ordinary ready tasks remain in `/teams`; the summary is not the full task list. Completion time determines recent order for newly completed tasks. Older completed tasks without timestamps fall back to task-number order.
+The summary shows at most five tasks; `/teams` retains the full list. Completion time determines recent order for newly completed tasks. Older completed tasks without timestamps fall back to task-number order.
 
 ac-teams leaves your existing footer intact and publishes a compact summary under the `ac-teams` extension-status key. Custom footers must support extension statuses to show it. In Zentui, use `/zentui extensions` to choose a placement for `ac-teams` if statuses are hidden by default. Agent navigation remains available in its own row even when the footer hides statuses.
 
 Use `/teams config` to toggle **Task summary** and **Agent selector** independently. Up/Down select a setting; Space or Enter toggles it; Esc closes. Changes save immediately for the current and future sessions. Other running sessions are not updated automatically. Both displays default to On.
 
 Hiding a display does not stop agents, change tasks, or disable `/teams`. With the agent selector hidden, ordinary editor Down behavior returns. These global display preferences do not change the team's resource ceilings.
+
+## Plan solo and team work
+
+The tool guidance asks agents to use `team_task` for substantial work with three or more steps, explicit task lists, and coordinated deliverables, including solo research, design, implementation, and verification. Single trivial tasks and conversation need no list. This is guidance, not automatic task creation or enforcement.
+
+Create independent tasks in one call:
+
+```json
+{"action":"create","tasks":[{"title":"Review parser behavior","description":"Acceptance: identify malformed-input failures with reproduction steps."},{"title":"Review display ordering","description":"Acceptance: compare implementation and display tests, and report mismatches."}]}
+```
+
+A batch creates 1–100 tasks atomically: invalid input leaves no tasks created. Use either `tasks` or top-level task fields, not both. Existing single-task creation remains supported. A title is enough for a simple task; description defaults to title and label defaults to its first three words, capped at 60 characters. Supply explicit acceptance criteria for substantial or delegated work. Dependencies must reference existing task UUIDs, so create prerequisites before dependent tasks.
+
+Start a task before working and complete it immediately after checking the result. One agent normally works on one task at a time; teammates can work in parallel. Never complete partial work or work with unresolved failures.
+
+Task list and mutation responses give the model compact summaries, including UUIDs, revisions, owners, and dependencies. `read` returns full descriptions and acceptance criteria. Expanded tool responses retain full records for people to inspect.
 
 ## Give members bounded assignments
 
@@ -104,11 +121,11 @@ Children can delegate through the same coordinator, subject to depth and capacit
 
 ## Track progress separately from ownership
 
-Task owners claim and start their work, then complete it after checking acceptance criteria or report blockers. Claiming reserves a task; starting also requires its dependencies to be done.
+Start ready work directly; `start` claims an unowned task and begins it atomically. Use `claim` only to reserve work in advance. Complete work after checking acceptance criteria or report blockers. Starting requires every dependency to be done.
 
 Each task has a stable team-local `number` and a 1–3-word `label` (at most 60 characters). The graph and list show `#3 Parser review`; details retain the full title, description, and UUID.
 
-Numbers follow creation order. Editing, filtering, or reopening tasks never changes their numbers. A concise title can supply an omitted label; longer titles need an explicit label.
+Numbers follow creation order. Editing, filtering, or reopening tasks never changes their numbers. An omitted label is derived from the title's first three words, capped at 60 characters. An explicit label must satisfy the same limits.
 
 Interim and final goals are ordinary tasks. Use dependencies for real prerequisites, not to make the diagram connected. Independent tasks remain disconnected until they genuinely contribute to a dependent task.
 
@@ -123,12 +140,12 @@ Use the returned task ID with these actions:
 | Action | Effect |
 | --- | --- |
 | `claim` | Reserve an unowned to-do task, even if blocked. Progress stays `todo`. |
-| `start` | The owner moves `todo` to `in_progress`, only when every dependency is `done`. |
+| `start` | Claim unowned work and move `todo` to `in_progress` atomically, only when every dependency is `done`. An existing owner must be the caller. |
 | `complete` | The owner moves `in_progress` to `done`, with `acceptance: true`. Ownership remains. |
 | `release` | Clear ownership. In-progress work returns to `todo`; done work stays `done`. |
 | `reopen` | Explicitly move `done` to `todo`, retaining any owner. Refuse if a dependent is in progress or done. |
 
-Only the owner can start, complete, or release its work. An ancestor may explicitly release a stopped or interrupted descendant's ownership. The owner or root can reopen an owned task; any member can reopen an unowned one. Done tasks cannot be claimed until reopened.
+Starting never steals another owner's work. Only the owner can complete or release its work. An ancestor may explicitly release a stopped or interrupted descendant's ownership. The owner or root can reopen an owned task; any member can reopen an unowned one. Done tasks cannot be claimed until reopened.
 
 Include `dependencies` on creation or `edit`. Any member can edit unowned to-do work; only the owner can edit reserved to-do work. In-progress and done tasks cannot be edited. The coordinator rejects unknown dependencies and cycles. An optional `revision` rejects stale mutations.
 
