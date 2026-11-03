@@ -205,6 +205,30 @@ test("team tools guide task-backed delegation without tracking every action", as
   } finally { await f.close(); }
 });
 
+test("message sends return receipts while history and search preserve the full message", async () => {
+  const f = fixture();
+  try {
+    await f.event("session_start");
+    const tool = f.tools.get("team_message")!;
+    const sent = await tool.execute(randomUUID(), { action: "send", text: "unique message body" }, new AbortController().signal, undefined, f.ctx);
+    const receipt = sent.details as { seq: number; id: string; recipients: string[] };
+    assert.deepEqual(Object.keys(receipt).sort(), ["id", "recipients", "seq"]);
+    assert.equal(receipt.seq, 1);
+    assert.equal(typeof receipt.id, "string");
+    assert.deepEqual(receipt.recipients, []);
+    assert.deepEqual(sent.content, [{ type: "text", text: JSON.stringify(receipt) }]);
+    assert.match(tool.promptGuidelines!.join(" "), /Do not poll team_message history/);
+    const history = await f.execute("team_message", { action: "history" }) as { seq: number; id: string; text: string; from: string; time: string }[];
+    assert.equal(history[0].id, receipt.id);
+    assert.equal(history[0].seq, receipt.seq);
+    assert.equal(history[0].text, "unique message body");
+    assert.equal(typeof history[0].from, "string");
+    assert.equal(typeof history[0].time, "string");
+    assert.deepEqual(await f.execute("team_message", { action: "search", query: "unique message" }), history);
+    assert.deepEqual(await f.execute("team_message", { action: "history", after: receipt.seq, limit: 10 }), []);
+  } finally { await f.close(); }
+});
+
 test("tool wiring refuses malformed requests and preserves task acceptance checks", async () => {
   const f = fixture();
   try {
