@@ -17,13 +17,13 @@ const task = (number: number, extra: Partial<TaskView> = {}): TaskView => ({ id:
 const theme = { fg: (color: string, text: string) => color === "error" ? `\x1b[31m${text}\x1b[39m` : text, bold: (text: string) => text } as unknown as Theme;
 const tick = () => new Promise<void>(done => setImmediate(done));
 
-test("summary prioritizes working, ready blockers, blocked, then recent completions with stable ties", () => {
+test("summary prioritizes working, ready blockers, ready work, blocked, then recent completions", () => {
   const tasks = [task(20, { status: "done", completedAt: 200 }), task(2), task(1, { status: "in_progress" }), task(9),
     task(4, { dependencies: ["T2"], blockedBy: ["T2"] }), task(5, { dependencies: ["T2"], blockedBy: ["T2"] }),
     task(7), task(6, { dependencies: ["T7"], blockedBy: ["T7"] }), task(21, { status: "done", completedAt: 100 })];
-  assert.deepEqual(summaryTasks(tasks).map(task => task.number), [1, 2, 7, 4, 5]);
-  assert.deepEqual(summaryTasks([...tasks].reverse()).map(task => task.number), [1, 2, 7, 4, 5]);
-  assert.ok(!summaryTasks(tasks).some(task => task.number === 9), "ordinary ready work stays in /teams");
+  assert.deepEqual(summaryTasks(tasks).map(task => task.number), [1, 2, 7, 9, 4]);
+  assert.deepEqual(summaryTasks([...tasks].reverse()).map(task => task.number), [1, 2, 7, 9, 4]);
+  assert.deepEqual(summaryTasks([task(9)]).map(task => task.number), [9], "ordinary ready work remains visible");
   const completed = [task(99, { status: "done" }), task(10, { status: "done", completedAt: 200 }), task(11, { status: "done", completedAt: 100 })];
   assert.deepEqual(summaryTasks(completed).map(task => task.number), [10, 11, 99], "use actual completion time rather than creation order");
   assert.deepEqual(summaryTasks([task(1, { status: "in_progress" }), ...completed]).map(task => task.number), [1, 10, 11, 99]);

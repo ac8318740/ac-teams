@@ -97,7 +97,14 @@ export interface TeamState {
   tasks: Record<string, Task>;
   messages: Message[];
 }
+export interface TaskInput {
+  title: string;
+  label?: string;
+  description?: string;
+  dependencies?: string[];
+}
 export interface TaskArgs {
+  tasks?: TaskInput[];
   action: "create" | "list" | "read" | "edit" | "claim" | "start" | "release" | "complete" | "reopen";
   revision?: number;
   acceptance?: boolean;
