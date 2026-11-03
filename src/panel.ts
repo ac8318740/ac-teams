@@ -1,6 +1,7 @@
+import { basename } from "node:path";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Editor, indexedColor, matchesKey, sliceByColumn, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { modelContext } from "./telemetry.ts";
+import { contextSummary } from "./telemetry.ts";
 import { buildTaskGraph, moveTaskSelection, taskStatus } from "./graph.ts";
 import { cleanText as clean } from "./render.ts";
 import type { PanelHost } from "./ui-types.ts";
@@ -18,15 +19,22 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
   const destination = await ctx.ui.custom<string | undefined>((tui, theme, _kb, done) => {
     let tab = 0, taskIndex = 0, memberIndex = 0, eventIndex = 0;
     let graph = true, detail = false, scroll = 0, detailScroll = 0, columnScroll = 0;
-    let height = 30, bodyHeight = 21, receipt = "Select a task or teammate. N requests a task from Main.";
+    let height = 30, bodyHeight = 21, receipt = "";
     let compose: "new" | "feedback" | undefined;
     let sending = false, opening = false, disposed = false;
     let composeTask: TaskView | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let focused = true;
+    let memberQuery = "", searching = false, hideStopped = false;
     const tabs = ["Tasks", "Teammates", "Activity"];
     const selectedTask = () => tasks[taskIndex];
-    const memberIds = () => ["root", ...snapshot.members.filter(member => member.id !== "root").map(member => member.id)];
+    const memberIds = () => ["root", ...snapshot.members.filter(member => member.id !== "root").map(member => member.id)]
+      .filter(id => name(id).toLowerCase().includes(memberQuery.toLowerCase())
+        && (!hideStopped || snapshot.members.find(member => member.id === id)?.status !== "stopped"));
+    const taskProgress = (id: string) => {
+      const assigned = tasks.filter(task => task.owner === id);
+      return `${assigned.filter(task => task.status === "done").length}/${assigned.length}`;
+    };
     const refresh = () => { if (!disposed) tui.requestRender(); };
     async function poll() {
       try {
@@ -47,9 +55,12 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
     const statusText = (task: TaskView, text: string) => taskStatus(task) === "Ready" ? fg("muted", text)
       : theme.style(text, { fg: indexedColor(({ Done: 2, Blocked: 1, Working: 6, Ready: 7 })[taskStatus(task)]) });
     const stateLabel = (task: TaskView) => statusText(task, taskStatus(task));
-    const pad = (text: string, width: number) => truncateToWidth(text, width) + " ".repeat(Math.max(0, width - visibleWidth(text)));
+    const pad = (text: string, width: number) => {
+      const clipped = truncateToWidth(text, width);
+      return clipped + " ".repeat(Math.max(0, width - visibleWidth(clipped)));
+    };
     const heading = (text: string) => theme.bold(fg("text", text));
-    const label = (key: string, value: string) => fg("muted", key.padEnd(10)) + value;
+    const label = (key: string, value: string) => fg("muted", key.padEnd(9) + " ") + value;
     const wrap = (lines: string[], width: number) => lines.flatMap(line => wrapTextWithAnsi(line, Math.max(1, width)));
     const editor = new Editor(tui, {
       borderColor: text => fg("accent", text),
@@ -185,13 +196,38 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
         right = split ? taskDetails(rightWidth) : [];
         if (graph && !graphData && tasks.length) left[0] = fg("muted", "Graph unavailable or too large; showing list.");
       } else if (tab === 1) {
-        left = [fg("muted", "  Member       Session"), "", ...memberIds().map((id, index) => {
+        const ids = memberIds();
+        const sessionWidth = Math.min(17, Math.max(1, Math.floor(leftWidth / 2)));
+        const preferredNameWidth = Math.min(24, Math.max(18, ...ids.map(id => visibleWidth(name(id)))));
+        const tasksWidth = Math.max(5, ...ids.map(id => taskProgress(id).length));
+        const showTasks = leftWidth >= 2 + preferredNameWidth + 4 + sessionWidth + 4 + tasksWidth;
+        const directory = (id: string) => clean(basename(snapshot.members.find(member => member.id === id)?.cwd ?? (id === host.self ? ctx.cwd : ""))) || "—";
+        const directorySpace = showTasks ? leftWidth - (2 + preferredNameWidth + 4 + sessionWidth + 4 + tasksWidth + 4) : 0;
+        const showDirectory = directorySpace >= 10;
+        const directoryWidth = showDirectory ? Math.min(directorySpace, Math.max(10, ...ids.map(id => visibleWidth(directory(id))))) : 0;
+        let nameWidth = Math.max(1, Math.min(preferredNameWidth, leftWidth - sessionWidth - 6));
+        const gaps = 1 + Number(showTasks) + Number(showDirectory);
+        const spare = Math.max(0, leftWidth - (2 + nameWidth + sessionWidth + (showTasks ? tasksWidth : 0) + directoryWidth + 4 * gaps));
+        const nameExtra = Math.min(spare, Math.max(0, ...ids.map(id => visibleWidth(name(id)) - nameWidth)));
+        const gap = " ".repeat(4 + Math.floor((spare - nameExtra) / gaps));
+        nameWidth += nameExtra + (spare - nameExtra) % gaps;
+        left = [fg("muted", `  ${pad("Member", nameWidth)}${gap}${pad("Session", sessionWidth)}`
+          + (showTasks ? `${gap}${pad("Tasks", tasksWidth)}` : "") + (showDirectory ? `${gap}Directory` : "")), ...ids.map((id, index) => {
           const member = snapshot.members.find(member => member.id === id);
-          const description = id === "root" ? "Main conversation" : member?.status ?? "Unavailable";
-          return fg(index === memberIndex ? "accent" : "text", `${index === memberIndex ? "●" : " "} ${name(id).padEnd(12)} `)
-            + (member?.needsInput ? fg("error", "Needs input") : fg(index === memberIndex ? "accent" : "text", clean(description)));
+          const selected = index === memberIndex;
+          const stopped = member && ["stopped", "interrupted"].includes(member.status);
+          const description = member?.needsInput ? "Needs input" : id === "root" ? "Main conversation"
+            : clean(member?.status ?? "Unavailable").replace(/^./, char => char.toUpperCase());
+          const color = member?.needsInput || member?.status === "interrupted" ? "error"
+            : member?.status === "busy" ? "accent" : "muted";
+          const memberName = fg(selected ? "accent" : stopped ? "dim" : "text", pad(name(id), nameWidth));
+          return fg(selected ? "accent" : "dim", `${selected ? "●" : " "} `)
+            + (selected ? theme.bold(memberName) : memberName) + gap + fg(color, pad(description, sessionWidth))
+            + (showTasks ? fg("muted", `${gap}${pad(taskProgress(id), tasksWidth)}`) : "")
+            + (showDirectory ? fg("muted", `${gap}${pad(directory(id), directoryWidth)}`) : "");
         })];
-        selectedRow = memberIndex + 2;
+        if (!ids.length) left.push(fg("muted", "No matching teammates."));
+        selectedRow = memberIndex + 1;
         right = split ? memberDetails(rightWidth) : [];
       } else {
         left = events.length ? [fg("muted", "  Recent messages · newest first"), "", ...events.flatMap((event, index) => [
@@ -226,20 +262,23 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
     function memberDetails(width: number) {
       if (tab === 2) return eventDetails(width);
       const id = memberIds()[memberIndex];
+      if (!id) return wrap([heading("No matching teammates"), "Change the name filter or show stopped members."], width);
       const member = snapshot.members.find(member => member.id === id);
       const assigned = tasks.filter(task => task.owner === id);
-      return wrap([heading(name(id)), "", label("State", member?.needsInput ? fg("error", "Needs input") : clean(member?.status ?? (id === "root" ? "Main conversation" : "Unavailable"))),
-        label("ID", id), label("Model / context", clean(modelContext(member ?? {}))),
-        label("Cwd", clean(member?.cwd ?? (id === host.self ? ctx.cwd : "Unavailable"))),
-        label("Session", clean(member?.sessionFile ?? member?.sessionId ?? "Unavailable")),
-        label("Worktree", member?.worktree ? clean(`${member.worktree.path} (${member.worktree.branch})`) : "None"),
+      return wrap([heading(name(id)), "", label("State", member?.needsInput ? fg("error", "Needs input") : clean(member?.status ?? (id === "root" ? "Main conversation" : "Unavailable")).replace(/^./, char => char.toUpperCase())),
+        label("Model", clean(member?.modelName || member?.model?.slice(member.model.indexOf("/") + 1) || "Unknown")),
+        label("Context", clean(contextSummary(member?.contextUsage).replace(/^context unknown/, "Unknown"))),
+        label("Directory", clean(member?.cwd ?? (id === host.self ? ctx.cwd : "Unavailable"))),
+        label("Tasks", taskProgress(id)), fg("muted", "Completed / currently assigned"),
         ...(member?.error ? [label("Error", clean(member.error))] : []), "", heading("Assigned tasks"),
         ...assigned.map(task => `${clean(taskName(task))} · ${taskStatus(task)}`),
         ...(assigned.length ? [] : [fg("muted", "No assigned tasks.")]), "",
-        heading("Message with full context"), "Open the native Pi session to read its conversation and type your message there.", "",
-        fg("accent", member && ["stopped", "interrupted"].includes(member.status) ? "Enter  Resume and open" : "Enter  Open full session"),
-        fg("muted", "No separate message composer."),
-        ...(!host.child && member?.role === "member" ? ["", fg("accent", "P  Promote to main session"), fg("muted", "Stops it and reopens its transcript as a main session in its own terminal.")] : []),
+        fg("accent", member && ["stopped", "interrupted"].includes(member.status) ? "Enter  Resume and open" : "Enter  Open session"),
+        ...(!detail ? [fg("muted", "→  Details")] : []),
+        ...(!host.child && member?.role === "member" ? [fg("accent", "P  Promote to main session"), fg("muted", "Stops member; reopens transcript as a main session.")] : []),
+        "", heading("Session details"), label("ID", id),
+        label("Session", clean(member?.sessionFile ?? member?.sessionId ?? "Unavailable")),
+        label("Worktree", member?.worktree ? clean(`${member.worktree.path} (${member.worktree.branch})`) : "None"),
       ], width);
     }
 
@@ -253,13 +292,24 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
         const row = (text: string) => fg("dim", "│ ") + pad(text, inner) + fg("dim", " │");
         const title = heading("Teams") + fg("muted", ` · ${name(host.self)} · ${snapshot.members.filter(member => member.id !== "root" && ["starting", "busy", "idle", "stopping"].includes(member.status)).length}/${snapshot.limit} live · depth ${snapshot.depth}`);
         const tabLine = tabs.map((text, index) => index === tab ? theme.bold(fg("accent", `[${text}]`)) : fg("muted", ` ${text} `)).join("  ") + (tab === 0 && inner >= 78 ? fg("muted", `    ${graph ? "Graph · prerequisites above · G List" : "List · G Graph"}`) : "");
-        const help = compose ? "Enter Send · Shift+Enter Newline · Esc Keep draft"
-          : detail ? tab === 0 ? "↑↓ Scroll · C Feedback · O Open owner · Esc Back" : "↑↓ Scroll · O Open related session · Esc Back"
+        const filters = `${searching || memberQuery ? `/ Filter: ${memberQuery}${searching ? "▏" : ""}` : "/ Filter"} · H ${hideStopped ? "Stopped: hidden" : "Hide stopped"}`;
+        const help = searching ? `${filters} · Enter Apply · Esc Clear`
+          : compose ? "Enter Send · Shift+Enter Newline · Esc Keep draft"
+          : detail ? tab === 0 ? "↑↓ Scroll · C Feedback · O Open owner · Esc Back"
+            : tab === 1 ? "↑↓ Scroll · Enter Open session · Esc Back" : "↑↓ Scroll · O Open related session · Esc Back"
           : tab === 0 ? `${graph ? "↑↓←→" : "↑↓"} Select · Enter Details · G Graph/List · C Feedback · N New task · Tab Next · Esc Close`
-          : tab === 1 ? "↑↓ Select · → Details · Enter Open session · N New task · Tab Next · Esc Close"
+          : tab === 1 ? `${filters} · ↑↓ Select · → Details · Enter Open session · N New task · Tab Next · Esc Close`
           : "↑↓ Select · Enter Details · O Open related session · Tab Next · Esc Close";
-        const summary = wrapTextWithAnsi(fg("muted", `${tasks.length} tasks · ${["Working", "Ready", "Blocked", "Done"].map(state => `${tasks.filter(task => taskStatus(task) === state).length} ${state.toLowerCase()}`).join(" · ")}`), inner);
-        const receipts = wrapTextWithAnsi(fg("muted", receipt), inner);
+        const teammates = snapshot.members.filter(member => member.id !== "root");
+        const memberStates = teammates.map(member => member.needsInput || member.status === "interrupted" ? "needs input"
+          : ["starting", "busy", "stopping"].includes(member.status) ? "working"
+          : member.status === "stopped" ? "stopped" : "idle");
+        const summaryText = tab === 0
+          ? `${tasks.length} tasks · ${["Working", "Ready", "Blocked", "Done"].map(state => `${tasks.filter(task => taskStatus(task) === state).length} ${state.toLowerCase()}`).join(" · ")}`
+          : tab === 1 ? `${teammates.length} teammate${teammates.length === 1 ? "" : "s"} · ${["working", "idle", "stopped", "needs input"].map(state => `${memberStates.filter(value => value === state).length} ${state}`).join(" · ")}`
+          : `${events.length} message${events.length === 1 ? "" : "s"} · newest first`;
+        const summary = wrapTextWithAnsi(fg("muted", summaryText), inner);
+        const receipts = receipt ? wrapTextWithAnsi(fg("muted", receipt), inner) : [];
         const hints = wrapTextWithAnsi(fg("dim", help), inner);
         bodyHeight = Math.max(1, height - 6 - summary.length - receipts.length - hints.length);
         const content = body(inner);
@@ -281,6 +331,21 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
           refresh(); return;
         }
         if (opening) return;
+        if (searching) {
+          if (matchesKey(data, "escape")) { memberQuery = ""; searching = false; }
+          else if (matchesKey(data, "enter")) searching = false;
+          else if (matchesKey(data, "backspace")) memberQuery = Array.from(memberQuery).slice(0, -1).join("");
+          else {
+            const text = data.replace(/^\x1b\[200~|\x1b\[201~$/g, "");
+            if (!/[\x00-\x1f\x7f-\x9f]/.test(text)) memberQuery += clean(text);
+          }
+          memberIndex = 0; scroll = 0; refresh(); return;
+        }
+        if (tab === 1 && !detail && (data === "/" || data.toLowerCase() === "h")) {
+          if (data === "/") searching = true;
+          else hideStopped = !hideStopped;
+          memberIndex = 0; scroll = 0; refresh(); return;
+        }
         const direction = (["up", "down", "left", "right"] as const).find(key => matchesKey(data, key));
         if (matchesKey(data, "escape")) { if (detail) { detail = false; detailScroll = 0; } else done(undefined); }
         else if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) { tab = (tab + (matchesKey(data, "shift+tab") ? 2 : 1)) % 3; detail = false; scroll = 0; detailScroll = 0; }
