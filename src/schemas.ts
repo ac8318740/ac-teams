@@ -36,7 +36,7 @@ export const TaskSchema = Type.Object({
 }, { additionalProperties: false });
 export const MessageSchema = Type.Object({
   action: Type.Union(["send", "history", "search"].map(v => Type.Literal(v))),
-  recipients: Type.Optional(Type.Array(id, { minItems: 1, maxItems: 100, uniqueItems: true })),
+  recipients: Type.Optional(Type.Array(id, { minItems: 1, maxItems: 100, uniqueItems: true, description: "Exact teammate names or member IDs. Each must resolve to a different live member. Omit to notify all other live members." })),
   text: Type.Optional(text), query: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
   after: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
 }, { additionalProperties: false });

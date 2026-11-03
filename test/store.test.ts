@@ -93,6 +93,24 @@ test("messages validate recipient sets atomically and provide bounded literal cu
   assert.throws(() => store.message("root", { action: "history", limit: 101 }));
 });
 
+test("message aliases resolve to durable IDs and reject invalid sets atomically", t => {
+  const { store } = fixture(t);
+  store.update(s => { s.members.child.name = "oom-review"; s.members.other.name = "tests"; });
+  const sent = store.message("root", { action: "send", recipients: ["oom-review", "other"], text: "Review" }) as Message;
+  assert.deepEqual(sent.recipients, ["child", "other"]);
+  assert.deepEqual(store.state.messages[0], sent);
+  assert.deepEqual(JSON.parse(readFileSync(join(store.dir, "state.json"), "utf8")).messages[0].recipients, ["child", "other"]);
+  assert.deepEqual((store.message("child", { action: "send", recipients: ["root"], text: "Done" }) as Message).recipients, ["root"]);
+  const before = readFileSync(join(store.dir, "state.json"), "utf8");
+  for (const recipients of [["child", "oom-review"], ["oom-review", "oom-review"], ["oom-review", "missing"], ["OOM-review"], ["toString"], []]) {
+    assert.throws(() => store.message("root", { action: "send", recipients, text: "No" }), /Recipients/);
+    assert.equal(readFileSync(join(store.dir, "state.json"), "utf8"), before);
+  }
+  store.update(s => { s.members.child.status = "stopped"; });
+  assert.throws(() => store.message("root", { action: "send", recipients: ["oom-review"], text: "No" }), /Recipients/);
+  assert.deepEqual((store.message("root", { action: "send", text: "Broadcast" }) as Message).recipients, ["other"]);
+});
+
 test("paths and process locks fail closed", t => {
   const { home, store } = fixture(t);
   assert.throws(() => new Store({ ...initial(), id: "../escape" }, home));
