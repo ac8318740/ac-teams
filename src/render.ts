@@ -46,26 +46,30 @@ function entry(title: string, value: unknown, expanded: boolean, theme: Theme, e
   };
 }
 
-function preview(items: unknown[], count: string, theme: Theme): string {
-  const entries = items.slice(0, 3).map(item => toolSummary(item, theme)).filter(Boolean);
+type MemberLabels = () => Readonly<Record<string, string>>;
+const defaultLabels: MemberLabels = () => ({ root: "Main" });
+const memberLabel = (id: unknown, labels: Readonly<Record<string, string>>) => inline(typeof id === "string" && Object.hasOwn(labels, id) ? labels[id] : id);
+
+function preview(items: unknown[], count: string, theme: Theme, labels: Readonly<Record<string, string>>): string {
+  const entries = items.slice(0, 3).map(item => toolSummary(item, theme, labels)).filter(Boolean);
   if (items.length > 3) entries.push(`+${items.length - 3} more`);
   return [count, ...entries].join(" · ");
 }
 
-function toolSummary(data: unknown, theme: Theme): string {
-  if (Array.isArray(data)) return preview(data, `${data.length} messages`, theme);
+function toolSummary(data: unknown, theme: Theme, labels: Readonly<Record<string, string>>): string {
+  if (Array.isArray(data)) return preview(data, `${data.length} messages`, theme, labels);
   if (data && typeof data === "object") {
     const value = data as Record<string, unknown>;
-    if (Array.isArray(value.members)) return preview(value.members, `${value.members.length} members`, theme);
-    if (Array.isArray(value.tasks)) return preview(value.tasks, value.total === undefined ? `${value.tasks.length} tasks` : `${value.tasks.length} of ${value.total} tasks`, theme);
-    const label = value.title ?? value.name ?? value.brief ?? value.text ?? value.query ?? value.id;
+    if (Array.isArray(value.members)) return preview(value.members, `${value.members.length} members`, theme, labels);
+    if (Array.isArray(value.tasks)) return preview(value.tasks, value.total === undefined ? `${value.tasks.length} tasks` : `${value.tasks.length} of ${value.total} tasks`, theme, labels);
+    const label = value.title ?? value.name ?? value.brief ?? value.text ?? value.query ?? (Array.isArray(value.recipients) ? undefined : value.id === undefined ? undefined : memberLabel(value.id, labels));
     const status = value.status === undefined ? "" : inline(value.status);
     const color = status === "done" ? "success"
       : status === "interrupted" ? "error"
       : status === "busy" || status === "in_progress" ? "accent"
       : status === "todo" || status === "starting" || status === "stopping" ? "warning" : "muted";
     const parts = [status ? theme.fg(color, theme.bold(`[${status}]`)) : "", label === undefined ? "" : inline(label)];
-    if (Array.isArray(value.recipients)) parts.push(`to ${value.recipients.map(inline).join(", ")}`);
+    if (Array.isArray(value.recipients)) parts.push(`${value.from === undefined ? "to" : `${memberLabel(value.from, labels)} →`} ${value.recipients.map(id => memberLabel(id, labels)).join(", ")}`);
     for (const key of ["seq", "limit", "depth"]) {
       if (value[key] !== undefined) parts.push(`${key}: ${inline(value[key])}`);
     }
@@ -74,13 +78,13 @@ function toolSummary(data: unknown, theme: Theme): string {
   return data === undefined || data === null ? "" : inline(data);
 }
 
-export function teamToolRenderers(name: string): ToolRenderers {
+export function teamToolRenderers(name: string, getLabels: MemberLabels = defaultLabels): ToolRenderers {
   return {
     renderShell: "self",
     renderCall(args, theme, context) {
       if (!context.isPartial) return new Container();
       const { action, ...fields } = (args ?? {}) as Record<string, unknown>;
-      const request = toolSummary(fields, theme);
+      const request = toolSummary(fields, theme, getLabels());
       const text = `${theme.fg("warning", "●")} ${theme.fg("toolTitle", name)} · ${inline(action ?? "...")} → running${request ? ` · ${request}` : ""}`;
       return new TruncatedText(text, context.outputPad, 0);
     },
@@ -92,8 +96,9 @@ export function teamToolRenderers(name: string): ToolRenderers {
       if (data === undefined) {
         try { data = JSON.parse(text); } catch { data = text; }
       }
-      const outcome = context.isError ? `error · ${inline(text)}` : toolSummary(data, theme) || "done";
-      const request = toolSummary(fields, theme);
+      const labels = getLabels();
+      const outcome = context.isError ? `error · ${inline(text)}` : toolSummary(data, theme, labels) || "done";
+      const request = toolSummary(fields, theme, labels);
       const heading = `${theme.fg(context.isError ? "error" : "success", "●")} ${theme.fg("toolTitle", name)} · ${inline(action ?? "...")} → ${outcome}${request && !outcome.includes(request) ? ` · ${request}` : ""}`;
       const requestJSON = cleanText(JSON.stringify(context.args, null, 2));
       const responseJSON = cleanText(result.details === undefined ? text : JSON.stringify(result.details, null, 2));
@@ -122,10 +127,15 @@ export function teamToolRenderers(name: string): ToolRenderers {
   };
 }
 
-export const renderTeamMessage: MessageRenderer = (message, { expanded }, theme) => {
-  const details = message.details as { through?: number; messages?: { from: string; text: string; recipients: string[] }[] } | undefined;
-  const recent = details?.messages?.at(-1);
-  const name = (id: string) => id === "root" ? "Main" : id;
-  const preview = recent ? `${name(recent.from)} → ${recent.recipients.map(name).join(", ")} · ${recent.text.split("\n")[0]}` : `Updates through ${details?.through ?? "unknown"}`;
-  return entry("Team message", details ?? { content: message.content }, expanded, theme, false, preview);
-};
+export function teamMessageRenderer(getLabels: MemberLabels = defaultLabels): MessageRenderer {
+  return (message, { expanded }, theme) => {
+    const details = message.details as { through?: number; messages?: { from: string; text: string; recipients: string[] }[] } | undefined;
+    const recent = details?.messages?.at(-1);
+    const labels = getLabels();
+    const name = (id: string) => memberLabel(id, labels);
+    const preview = recent ? `${name(recent.from)} → ${recent.recipients.map(name).join(", ")} · ${recent.text.split("\n")[0]}` : `Updates through ${details?.through ?? "unknown"}`;
+    return entry("Team message", details ?? { content: message.content }, expanded, theme, false, preview);
+  };
+}
+
+export const renderTeamMessage = teamMessageRenderer();

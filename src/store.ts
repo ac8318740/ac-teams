@@ -360,8 +360,11 @@ export class Store {
     if (args.action === "send") return this.update(state => {
       const limit = enveloped ? maxMessageText : 16000;
       requireValue(text(args.text, limit), `Message text must be nonempty and at most ${limit} characters`);
-      const recipients = args.recipients === undefined ? Object.values(state.members).filter(member => member.id !== actor && isLive(member)).map(member => member.id) : args.recipients;
-      requireValue(Array.isArray(recipients) && (args.recipients === undefined || recipients.length > 0) && new Set(recipients).size === recipients.length && recipients.every(recipient => typeof recipient === "string" && Object.hasOwn(state.members, recipient) && isLive(state.members[recipient])), "Recipients must be unique live member IDs");
+      const members = Object.values(state.members);
+      requireValue(args.recipients === undefined || Array.isArray(args.recipients), "Recipients must be unique live member names or IDs");
+      const recipients = args.recipients === undefined ? members.filter(member => member.id !== actor && isLive(member)).map(member => member.id)
+        : args.recipients.map(recipient => typeof recipient === "string" ? members.find(member => member.id === recipient || member.name === recipient)?.id : undefined);
+      requireValue((args.recipients === undefined || recipients.length > 0) && new Set(recipients).size === recipients.length && recipients.every((recipient): recipient is string => recipient !== undefined && isLive(state.members[recipient])), "Recipients must be unique live member names or IDs");
       const message = { seq: (state.messages.at(-1)?.seq ?? 0) + 1, id: randomUUID(), from: actor, recipients: [...recipients], text: args.text, time: new Date().toISOString() };
       state.messages.push(message);
       return structuredClone(message);
