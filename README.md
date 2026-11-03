@@ -7,7 +7,7 @@ Persistent agent teams for [Pi](https://github.com/earendil-works/pi): shared ta
 Requires Linux, Node 22.19 or newer, and an authenticated `pi` executable on `PATH`. Interactive teams also require `tmux` on `PATH`. Tested with Pi 1.4.0 and 1.5.0.
 
 ```sh
-pi install npm:ac-teams@0.0.4
+pi install npm:ac-teams
 ```
 
 Restart Pi after installation. Use Pi's `/trust` command to save approval for each project directory before launching members there; headless children cannot answer the initial trust prompt.
