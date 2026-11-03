@@ -12,7 +12,7 @@ export interface PanelHost {
   self: string;
   /** True in a member session; false in a main session. */
   child: boolean;
-  snapshot(): Promise<TeamSnapshot>;
+  snapshot(includeMessages?: boolean): Promise<TeamSnapshot>;
   visit(id: string): Promise<void>;
   requestTask(text: string): Promise<string>;
   feedback(task: TaskView, text: string): Promise<string>;

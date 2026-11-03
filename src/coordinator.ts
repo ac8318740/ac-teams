@@ -1,6 +1,6 @@
 import { createServer, type Server, type Socket } from "node:net";
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { isDeepStrictEqual, promisify } from "node:util";
 import { chmodSync, closeSync, constants, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, lstatSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
@@ -12,6 +12,7 @@ import { Egress, egressPort, providerRoutes, type Credentials } from "./egress.t
 import { Store, processAlive, processIdentity } from "./store.ts";
 import { stateRoot } from "./config.ts";
 import { RpcAgent } from "./rpc-agent.ts";
+import { hostResources, type HostResources } from "./resources.ts";
 import { TerminalAgent, tmux } from "./terminal-agent.ts";
 import { authentic, isRecord, readLines, send } from "./connection.ts";
 import { validate } from "./schemas.ts";
@@ -52,6 +53,8 @@ export interface CoordinatorOptions {
   interactive?: boolean; model?: string; thinking?: string;
   /** Version of the running Pi; members use the image built for it. Defaults to the `pi` on PATH. */
   piVersion?: string;
+  /** Test hook: samples host headroom without depending on the test machine's load. */
+  resources?: () => HostResources;
   /** Test hook: provider token refresh interval (default one minute). */
   refreshMs?: number;
   /** Test hook: runs after a member container passes all checks and before it starts. */
@@ -270,21 +273,22 @@ export class Coordinator {
     const event = value as { type: string; active?: boolean; text?: string; model?: string; modelName?: string; contextUsage?: ContextUsage | null };
     const member = this.store.state.members[actor];
     if (!member || !isLive(member) || (member.status === "stopping" && event.type !== "model_error")) return;
-    this.store.update(next => {
-      const current = next.members[actor];
-      if (event.type === "blocked") { if (event.active) current.needsInput = true; else delete current.needsInput; }
-      else if (event.type === "telemetry") {
-        current.model = event.model ?? current.model;
-        current.modelName = event.modelName;
-        current.contextUsage = event.contextUsage ?? undefined;
-      }
-      else if (event.type === "agent_start") { current.status = "busy"; current.activity = "Working"; delete current.error; delete current.summary; }
-      else if (event.type === "agent_settled") { delete current.needsInput; current.status = "idle"; current.activity = current.error ? "Model request failed" : current.summary || "Available for follow-up"; }
-      else if (event.type === "activity") current.activity = event.text;
-      else if (event.type === "summary") current.summary = event.text?.slice(0, 500);
-      else if (event.type === "model_error") current.error = event.text || "Model request failed";
-    });
-    this.publishStatus();
+    const current = { ...member };
+    if (event.type === "blocked") { if (event.active) current.needsInput = true; else delete current.needsInput; }
+    else if (event.type === "telemetry") {
+      current.model = event.model ?? current.model;
+      current.modelName = event.modelName;
+      current.contextUsage = event.contextUsage ?? undefined;
+    }
+    else if (event.type === "agent_start") { current.status = "busy"; current.activity = "Working"; delete current.error; delete current.summary; }
+    else if (event.type === "agent_settled") { delete current.needsInput; current.status = "idle"; current.activity = current.error ? "Model request failed" : current.summary || "Available for follow-up"; }
+    else if (event.type === "activity") current.activity = event.text;
+    else if (event.type === "summary") current.summary = event.text?.slice(0, 500);
+    else if (event.type === "model_error") current.error = event.text || "Model request failed";
+    if (!isDeepStrictEqual(member, current)) {
+      this.store.update(next => { next.members[actor] = structuredClone(current); });
+      this.publishStatus();
+    }
     if (event.type === "model_error" && !isMain(member) && member.status !== "stopping") {
       const recipient = member.parent && isLive(this.store.state.members[member.parent]) ? member.parent : this.self;
       this.store.message(actor, { action: "send", recipients: [recipient], text: `Member ${actor} model error: ${event.text || "Model request failed"}` });
@@ -347,10 +351,20 @@ export class Coordinator {
   }
   /** Live members this coordinator runs; main sessions run in their own terminals and never count. */
   live(): Member[] { return Object.values(this.store.state.members).filter(member => !isMain(member) && isLive(member)); }
+  private resources() {
+    const sample = (this.options.resources ?? hostResources)();
+    const live = this.live();
+    const startingMembers = live.filter(member => member.status === "starting").length;
+    const warnings = [...sample.warnings];
+    if (startingMembers) warnings.push(`${startingMembers} teammate(s) still starting; their full memory cost is not yet reflected. Sequence launches and recheck team_agent list after startup.`);
+    return { ...sample, liveMembers: live.length, startingMembers, warnings };
+  }
   ack(id: string, through: number): void {
     const last = this.store.state.messages.at(-1)?.seq ?? 0;
     if (!Number.isSafeInteger(through) || through < 0 || through > last) throw new Error("Invalid notification cursor");
-    this.store.update(state => { state.members[id].notified = Math.max(state.members[id].notified, through); });
+    if (this.closed) throw new Error("Team is stopping");
+    if (through <= this.store.state.members[id].notified) return;
+    this.store.update(state => { state.members[id].notified = through; });
   }
   private notify(id: string): void {
     if (this.closed || this.notices.has(id)) return;
@@ -388,12 +402,12 @@ export class Coordinator {
   }
   private async agent(actor: string, args: AgentArgs, authorizedLimit: boolean): Promise<unknown> {
     const state = this.store.state;
-    if (args.action === "list") return { team: state.id, limit: state.limit, depth: state.depth, sandbox: this.sandboxStatus(), lastMessage: state.messages.at(-1)?.seq ?? 0, members: Object.values(state.members).map(member => this.publicMember(member)) };
+    if (args.action === "list") return { team: state.id, limit: state.limit, depth: state.depth, sandbox: this.sandboxStatus(), resources: this.resources(), lastMessage: state.messages.at(-1)?.seq ?? 0, members: Object.values(state.members).map(member => this.publicMember(member)) };
     if (args.action === "limits") {
       if (!isMain(state.members[actor])) throw new Error("Only a main session can change team limits");
       if ((args.limit ?? state.limit) > 10 && !authorizedLimit) throw new Error("A ceiling above 10 requires explicit user confirmation or --teams-limit");
       this.store.update(next => { next.limit = args.limit ?? next.limit; next.depth = args.depth ?? next.depth; });
-      return { limit: this.store.state.limit, depth: this.store.state.depth, sandbox: this.sandboxStatus() };
+      return { limit: this.store.state.limit, depth: this.store.state.depth, sandbox: this.sandboxStatus(), resources: this.resources() };
     }
     if (args.action === "launch" || args.action === "resume") {
       const launch = this.launch(actor, args);
@@ -455,6 +469,8 @@ export class Coordinator {
     const locked = resumed ? resumed.provider : parent.access?.network.allow ? parent.provider : undefined;
     if (access?.network.allow && locked && provider !== locked) throw new Error(`A member with restricted network access can only use ${locked} models`);
     const member: Member = resumed ? { ...resumed, token: randomUUID(), status: "starting", error: undefined, contextUsage: undefined, modelName: undefined, handover: undefined } : { id, name: args.name, role: "member", parent: actor, depth, token: randomUUID(), cwd, status: "starting", notified: 0, access, provider: access ? provider : undefined };
+    const resources = this.resources();
+    for (const warning of resources.warnings) this.options.warning(warning);
     // Reserve synchronously before the first await so concurrent launches cannot oversubscribe.
     this.store.update(next => { next.members[id] = member; });
     this.publishStatus();
@@ -531,7 +547,7 @@ export class Coordinator {
       this.store.update(next => { if (next.members[id].status === "starting") next.members[id].status = prompt ? "busy" : "idle"; });
       this.publishStatus();
       if (prompt) await agent.request("prompt", { message: args.brief, streamingBehavior: "followUp" });
-      return this.publicMember(this.store.state.members[id]);
+      return { ...this.publicMember(this.store.state.members[id]), resources };
     } catch (error) {
       clearTimeout(timer); this.ready.delete(id);
       if (agent) await agent.stop();
