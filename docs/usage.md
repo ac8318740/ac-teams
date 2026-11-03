@@ -39,7 +39,7 @@ Each team tool call uses one line with a status dot, tool name, action, and resu
 
 The `+N lines` hint shows the hidden detail count. Ctrl+O expands the full request and response JSON; mouse-enabled Pi views also support clicking the row.
 
-Team notification messages remain compact; Ctrl+O expands their labeled fields. UI state colors do not replace the underlying progress, ownership, or dependency fields.
+Tool summaries and team notification previews prefer teammate names over IDs. Message receipt IDs stay out of compact summaries. Ctrl+O expands the original request and response, including IDs. Unknown members fall back to their IDs. UI state colors do not replace the underlying progress, ownership, or dependency fields.
 
 ## Main sessions share one team
 
@@ -159,7 +159,11 @@ Example `team_message` arguments:
 {"action":"send","recipients":["root"],"text":"Parser review complete. No edits; two malformed-input cases need tests."}
 ```
 
-Omit `recipients` to notify all other live members. Explicit sets must contain unique live member IDs; an invalid set rejects the whole send. All team members can read the full history, including direct messages.
+Use exact teammate names (such as `"oom-review"`) or member IDs in `recipients`; IDs remain valid. Omit `recipients` to notify all other live members.
+
+Each recipient must resolve to a different live member. An unknown name, a stopped member, or two entries for the same member rejects the whole send.
+
+Receipts and stored history retain resolved IDs. All team members can read the full history, including direct messages.
 
 ```json
 {"action":"history","after":0,"limit":20}

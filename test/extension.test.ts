@@ -7,7 +7,9 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI, ExtensionContext, ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { initTheme, type ExtensionAPI, type ExtensionContext, type ExtensionToolContext, type ToolDefinition, type ToolRenderers } from "@earendil-works/pi-coding-agent";
+import { cleanText } from "../src/render.ts";
+import { theme } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import teams from "../src/index.ts";
 import { taskRequestGuidance } from "../src/coordinator.ts";
 import { Store, teamsHome } from "../src/store.ts";
@@ -248,6 +250,25 @@ test("message sends return receipts while history and search preserve the full m
     assert.equal(typeof history[0].time, "string");
     assert.deepEqual(await f.execute("team_message", { action: "search", query: "unique message" }), history);
     assert.deepEqual(await f.execute("team_message", { action: "history", after: receipt.seq, limit: 10 }), []);
+  } finally { await f.close(); }
+});
+
+test("message tool accepts aliases and renders resolved recipients by name", async () => {
+  const f = fixture();
+  try {
+    initTheme("dark", false);
+    await f.event("session_start");
+    const member = await f.execute("team_agent", { action: "launch", name: "oom-review", brief: "WAIT" }) as { id: string };
+    const tool = f.tools.get("team_message")!;
+    const args = { action: "send", recipients: ["oom-review"], text: "Please review" };
+    const sent = await tool.execute(randomUUID(), args, new AbortController().signal, undefined, f.ctx);
+    assert.deepEqual((sent.details as { recipients: string[] }).recipients, [member.id]);
+    const context = { args, outputPad: 0, isError: false } as Parameters<NonNullable<ToolRenderers["renderResult"]>>[3];
+    const compact = tool.renderResult!(sent, { expanded: false, isPartial: false }, theme, context).render(1000).map(cleanText).join("\n");
+    assert.match(compact, /to oom-review/);
+    assert.ok(!compact.includes(member.id));
+    assert.ok(!compact.includes((sent.details as { id: string }).id));
+    await assert.rejects(f.execute("team_message", { ...args, recipients: ["oom-review", member.id] }), /Recipients/);
   } finally { await f.close(); }
 });
 

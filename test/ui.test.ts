@@ -4,7 +4,7 @@ import { initTheme, type ExtensionContext, type Theme, type ToolRenderers } from
 import { foregroundAnsi, indexedColor, setKeybindings, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 import { buildTaskGraph, moveTaskSelection, taskStatus } from "../src/graph.ts";
-import { cleanText, renderTeamMessage, teamToolRenderers } from "../src/render.ts";
+import { cleanText, renderTeamMessage, teamMessageRenderer, teamToolRenderers } from "../src/render.ts";
 import { showTeamsPanel } from "../src/panel.ts";
 import type { PanelHost, TeamSnapshot } from "../src/ui-types.ts";
 import type { TaskView } from "../src/types.ts";
@@ -99,6 +99,39 @@ test("tool renderers expand full JSON without mutating payloads or exposing term
   const message = renderTeamMessage({ role: "custom", customType: "team", content: "hello\x1b]0;bad\x07", display: true, timestamp: 0 }, { expanded: true, outputPad: 0 }, theme)!;
   assert.match(plain(message), /Content: hello/);
   assert.equal(cleanText("x\x1b]0;title\x07\x1b[31my\x00\r\nz"), "xy\nz");
+});
+
+test("compact tool rows prefer aliases while expanded JSON retains IDs", () => {
+  initTheme("dark", false);
+  setKeybindings(new KeybindingsManager());
+  const labels = () => ({ root: "Main", "member-uuid": "oom-review" });
+  for (const [tool, args, data, expected] of [
+    ["team_message", { action: "send", recipients: ["member-uuid"], text: "Review" }, { id: "message-uuid", seq: 7, recipients: ["member-uuid"] }, /to oom-review.*seq: 7/],
+    ["team_agent", { action: "status", id: "member-uuid" }, { id: "member-uuid", name: "oom-review", status: "idle" }, /\[idle\] oom-review/],
+    ["team_message", { action: "history" }, [{ id: "message-uuid", from: "member-uuid", recipients: ["root"], text: "Done" }], /oom-review → Main/],
+  ] as const) {
+    const renderers = teamToolRenderers(tool, labels);
+    const context = { ...renderContext(), args };
+    const result = { content: [{ type: "text" as const, text: JSON.stringify(data) }], details: data };
+    const compact = plain(renderers.renderResult!(result, { expanded: false, isPartial: false }, theme, context), 1000);
+    assert.match(compact, expected);
+    assert.doesNotMatch(compact, /member-uuid|message-uuid/);
+    const expanded = plain(renderers.renderResult!(result, { expanded: true, isPartial: false }, theme, context), 2000);
+    assert.ok(expanded.includes(JSON.stringify(data, null, 2)));
+    const pending = plain(renderers.renderCall!(args, theme, { ...context, isPartial: true }), 1000);
+    assert.doesNotMatch(pending, /member-uuid/);
+  }
+});
+
+test("notification previews use aliases and fall back to unknown IDs", () => {
+  const render = teamMessageRenderer(() => ({ root: "Main", "member-uuid": "oom-review\x1b[2J" }));
+  const message = { role: "custom" as const, customType: "ac-teams", content: "Notice", display: true, timestamp: 0,
+    details: { through: 3, messages: [{ from: "member-uuid", recipients: ["root", "legacy-id"], text: "Done\nDetails" }] } };
+  const compact = plain(render(message, { expanded: false, outputPad: 0 }, theme)!, 1000);
+  assert.match(compact, /oom-review → Main, legacy-id · Done/);
+  assert.doesNotMatch(compact, /member-uuid|Details/);
+  assert.ok(!compact.includes("\x1b"));
+  assert.match(plain(render(message, { expanded: true, outputPad: 0 }, theme)!, 1000), /member-uuid/);
 });
 
 async function panelFixture(snapshot: TeamSnapshot) {

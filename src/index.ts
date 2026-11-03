@@ -7,8 +7,8 @@ import { installTeamFooter, visitMember, showDisplayConfig } from "./terminal-ui
 import { readTelemetry } from "./telemetry.ts";
 import { resolveTeammate, teamsCompletions } from "./commands.ts";
 import { showTeamsPanel } from "./panel.ts";
-import { teamToolRenderers, renderTeamMessage, cleanText } from "./render.ts";
-import { join } from "node:path";
+import { teamToolRenderers, teamMessageRenderer, cleanText } from "./render.ts";
+import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
@@ -48,7 +48,13 @@ export default function teams(pi: ExtensionAPI) {
   const teamTools = ["team_agent", "team_task", "team_message"];
   const memberId = () => child ? environment[1]! : team?.member ?? "root";
   const teamId = (ctx: ExtensionContext) => team?.team ?? ctx.sessionManager.getSessionId();
-  pi.registerMessageRenderer("ac-teams", renderTeamMessage);
+  function memberLabels(): Record<string, string> {
+    try {
+      const members = coordinator?.store.state.members ?? readState(child ? dirname(environment[0]!) : join(teamsHome(), teamId(context!))).members;
+      return Object.fromEntries(Object.values(members).map(member => [member.id, memberName(member)]));
+    } catch { return { root: "Main" }; } // A transcript can render before its team is available.
+  }
+  pi.registerMessageRenderer("ac-teams", teamMessageRenderer(memberLabels));
   const warn = (message: string) => context?.ui.notify(message, "warning");
   const notify = (through: number, messages: Message[] = []) => {
     pi.sendMessage({ customType: "ac-teams", content: `New team messages through sequence ${through}. Read team_message history after your last cursor. Reply only with useful updates, not acknowledgements.`, display: true, details: { through, messages } }, { deliverAs: "followUp", triggerTurn: true });
@@ -273,13 +279,13 @@ export default function teams(pi: ExtensionAPI) {
     if (change) report(ctx, change);
   });
   function output(data: unknown) { return { content: [{ type: "text" as const, text: JSON.stringify(data) }], details: data }; }
-  const guidance = "Team launches use real long-lived Pi sessions. Idle members count against the shared ceiling. Use stable member/task IDs; query status and history instead of acknowledging notifications. Limits cover only ac-teams, not other launchers or shell commands.";
+  const guidance = "Team launches use real long-lived Pi sessions. Idle members count against the shared ceiling. Use teammate names for messaging and stable IDs for member control and tasks; query status and history instead of acknowledging notifications. Limits cover only ac-teams, not other launchers or shell commands.";
   const taskTrackingGuidance = "Before delegating a deliverable through team_agent, create or reuse a team_task and include its ID in the member's brief. Use one shared task list for your own work and delegated work; do not create one task per teammate by default. Quick lookups and brief second opinions need no separate task unless their results need coordination or follow-up.";
   pi.registerTool({
     name: "team_agent", label: "Team agent", description: "Launch/resume Pi members, list/status, stop owned subtrees, change root limits, and explicitly clean stopped worktrees. Create or reuse team_task entries for delegated deliverables; quick lookups need no task unless results need coordination or follow-up.",
     promptGuidelines: [guidance, taskTrackingGuidance, "Delegation needs the user's authorization. Give each new member a unique descriptive name (one or two lowercase words, hyphenated if two), plus a bounded brief. Names remain stable on resume. Avoid concurrent writers in the same cwd. Worktrees are opt-in."],
     parameters: AgentSchema,
-    ...teamToolRenderers("team_agent"),
+    ...teamToolRenderers("team_agent", memberLabels),
     async execute(_id, args, _signal, _update, ctx) { return output(await handle("agent", args, ctx)); },
   });
   pi.registerTool({
@@ -294,7 +300,7 @@ export default function teams(pi: ExtensionAPI) {
       "team_task start refuses another owner's task or unfinished dependencies. Complete requires ownership, in-progress work, and acceptance=true. Release clears ownership, returns in-progress work to todo, and leaves done work done. Reopen is explicit and cannot invalidate active or done dependents.",
     ],
     parameters: TaskSchema,
-    ...teamToolRenderers("team_task"),
+    ...teamToolRenderers("team_task", memberLabels),
     async execute(_id, args, _signal, _update, ctx) {
       const data = await handle("task", args, ctx) as TaskView | { tasks: TaskView[]; total: number };
       const compact = (task: TaskView) => ({ id: task.id, number: task.number, label: task.label, title: task.title, status: task.status, owner: task.owner, revision: task.revision, dependencies: task.dependencies, blockedBy: task.blockedBy });
@@ -303,10 +309,10 @@ export default function teams(pi: ExtensionAPI) {
     },
   });
   pi.registerTool({
-    name: "team_message", label: "Team message", description: "Send a persistent direct/team message or read cursor-paged history. Send returns a receipt; history and search return full messages. New messages queue a compact follow-up notification for each recipient.",
+    name: "team_message", label: "Team message", description: "Send a persistent direct/team message to teammate names or IDs, or read cursor-paged history. Send returns a receipt with resolved IDs; history and search return full messages. New messages queue a compact follow-up notification for each recipient.",
     promptGuidelines: ["Do not poll team_message history while waiting for replies; notifications trigger a follow-up turn. On notification, read team_message history after your last read cursor and advance it through the returned messages. An empty result means no newer messages, not that a teammate has finished."],
     parameters: MessageSchema,
-    ...teamToolRenderers("team_message"),
+    ...teamToolRenderers("team_message", memberLabels),
     async execute(_id, args, _signal, _update, ctx) {
       const result = await handle("message", args, ctx);
       if (args.action === "send") {
