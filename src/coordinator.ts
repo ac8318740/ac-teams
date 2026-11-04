@@ -491,7 +491,7 @@ export class Coordinator {
       if (assigned) Object.assign(next.tasks[assigned.id], { owner: id, delegator: actor, revision: next.tasks[assigned.id].revision + 1 });
     });
     this.analysisPolicies.set(id, policy);
-    const brief = assigned ? `${args.brief}\n\nYou own team task ${taskName(assigned)} [${assigned.id}], delegated by ${memberName(parent)}. Start it, and finish with team_task complete and an outcome summary; that one call reports back.` : args.brief;
+    const brief = assigned ? `${args.brief}\n\nYou own team task ${taskName(assigned)} [${assigned.id}], delegated by ${memberName(parent)}. Start it only when its prerequisites are done, and finish with team_task complete and an outcome summary; that one call reports back.` : args.brief;
     this.publishStatus();
     member.model = args.model; member.thinking = args.thinking ?? "off";
     member.terminal = this.options.interactive === true;

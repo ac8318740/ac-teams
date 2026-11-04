@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { initTheme, type ExtensionContext, type Theme, type ToolRenderers } from "@earendil-works/pi-coding-agent";
-import { foregroundAnsi, indexedColor, setKeybindings, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { foregroundAnsi, indexedColor, setKeybindings, sliceByColumn, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
-import { buildTaskGraph, moveTaskSelection, shortenTitle, taskStatus } from "../src/graph.ts";
+import { buildTaskFocus, buildTaskGraph, moveTaskSelection, shortenTitle, taskStatus } from "../src/graph.ts";
 import { cleanText, renderTeamMessage, teamMessageRenderer, teamToolRenderers } from "../src/render.ts";
 import { showTeamsPanel } from "../src/panel.ts";
 import type { PanelHost, TeamSnapshot } from "../src/ui-types.ts";
@@ -71,6 +71,117 @@ test("graph sanitizes labels, handles wide text, and safely falls back", () => {
   for (const direction of ["up", "down", "left", "right"] as const) assert.equal(moveTaskSelection(single.bounds, "T03", direction), "T03");
 });
 
+test("graph bounds scan each Unicode row once instead of rescanning it per box", t => {
+  let segmented = 0;
+  const segment = Intl.Segmenter.prototype.segment;
+  t.mock.method(Intl.Segmenter.prototype, "segment", function (this: Intl.Segmenter, input: string) {
+    segmented += input.length;
+    return segment.call(this, input);
+  });
+  const graph = buildTaskGraph(Array.from({ length: 40 }, (_, i) => task(`T${i + 1}`, {
+    title: `Review 解析器 👩‍💻 e\u0301 ${i + 1}`,
+  })));
+  assert.ok(graph);
+  assert.equal(graph.bounds.size, 40);
+  const area = graph.art.plain.reduce((size, row) => size + row.length, 0);
+  assert.ok(segmented < area * 20, `${segmented} characters segmented for ${area} characters of graph`);
+  for (const [id, box] of graph.bounds) {
+    for (const [y, x, corner] of [[box.top, box.left, "┌"], [box.top, box.right, "┐"], [box.bottom, box.left, "└"], [box.bottom, box.right, "┘"]] as const) {
+      assert.equal(sliceByColumn(graph.art.plain[y], x, 1), corner, id);
+    }
+    assert.match(sliceByColumn(graph.art.plain[box.top + 1], box.left + 1, box.right - box.left - 1), /Review 解析器 👩‍💻 e\u0301/);
+  }
+});
+
+test("focus stacks multiple parents and shared dependents without hiding original blockers", () => {
+  const data = [task("T1", { title: "解析器 👩‍💻 e\u0301 contracts", status: "done" }), task("T2", { dependencies: ["T1"] }),
+    task("T3", { dependencies: ["T1", "T2"], blockedBy: ["T2"] }),
+    task("T4", { dependencies: ["T3", "T2", "T5"], blockedBy: ["T3", "T2", "T5"] }), task("T5")];
+  const before = JSON.stringify(data);
+  for (const width of [26, 40, 75]) {
+    const graph = buildTaskFocus(data, "T3", width, 80);
+    assert.ok(graph);
+    assert.deepEqual([...graph.bounds.keys()], ["T1", "T2", "T3", "T4"]);
+    assert.ok(graph.art.plain.every(row => visibleWidth(row) <= width));
+    assert.equal(graph.art.width, width);
+    const content = (id: string) => {
+      const box = graph.bounds.get(id)!;
+      return graph.art.plain.slice(box.top + 1, box.bottom).map(row => sliceByColumn(row, box.left + 1, box.right - box.left - 1).trim()).join(" ");
+    };
+    assert.match(content("T1"), /解析器 👩‍💻 e\u0301 contracts · Done/);
+    assert.match(content("T2"), /Needs #1/);
+    assert.match(content("T3"), /Blocked$/);
+    assert.match(content("T4"), /Also needs #2, #5 · Blocked/);
+    assert.ok(graph.bounds.get("T2")!.bottom < graph.bounds.get("T3")!.top);
+    assert.ok(graph.bounds.get("T3")!.bottom < graph.bounds.get("T4")!.top);
+    for (const box of graph.bounds.values()) {
+      assert.equal(sliceByColumn(graph.art.plain[box.top], box.left, 1), "┌");
+      assert.equal(sliceByColumn(graph.art.plain[box.bottom], box.right, 1), "┘");
+    }
+  }
+  assert.equal(JSON.stringify(data), before);
+  assert.equal(buildTaskFocus(data, "missing", 40, 80), null);
+  assert.equal(buildTaskFocus(data, "T3", 15, 80), null);
+  assert.equal(buildTaskFocus([task("T1", { dependencies: ["missing"] })], "T1", 40, 80), null);
+  assert.equal(buildTaskFocus([task("T1", { dependencies: ["T1"] })], "T1", 40, 80), null);
+  assert.equal(buildTaskFocus([task("T1"), task("T1")], "T1", 40, 80), null);
+});
+
+test("focus keeps every high-fanout neighbor selectable at bounded width", () => {
+  const data = Array.from({ length: 80 }, (_, i) => task(`T${i + 1}`, { dependencies: i ? ["T1"] : [] }));
+  const graph = buildTaskFocus(data, "T1", 40, 1000);
+  assert.ok(graph);
+  assert.equal(graph.bounds.size, 80);
+  assert.ok(graph.art.plain.every(row => visibleWidth(row) <= 40));
+  assert.equal(moveTaskSelection(graph.bounds, "T1", "down"), "T2");
+  assert.equal(moveTaskSelection(graph.bounds, "T79", "down"), "T80");
+  assert.equal(moveTaskSelection(graph.bounds, "T80", "up"), "T79");
+});
+
+test("focus anchors the selected box and bounds neighbor overflow independently", () => {
+  const data = [task("T1"), task("T2", { title: "A long prerequisite title that wraps across several lines", dependencies: ["T1"] }),
+    task("T3", { dependencies: ["T1", "T2"], blockedBy: ["T2"] }), task("T4", { dependencies: ["T3"] })];
+  for (const id of ["T1", "T2", "T3", "T4"]) {
+    const graph = buildTaskFocus(data, id, 40, 36);
+    assert.ok(graph);
+    assert.equal(graph.bounds.get(id)?.top, 18, "selection must not move when neighbor heights/counts change");
+    assert.equal(graph.bounds.get(id)?.left, 4);
+    assert.equal(graph.art.plain.length, 36);
+    assert.match(graph.art.plain[0], /Prerequisites/);
+    assert.match(graph.art.plain[17], /Focused task/);
+    assert.match(graph.art.plain.join("\n"), /Dependents/);
+    assert.ok(graph.art.plain.every(line => visibleWidth(line) <= 40));
+    if (id === "T1") assert.match(graph.art.plain[1], /No prerequisites/, "empty state belongs directly below its section header");
+    if (id === "T4") assert.match(graph.art.plain.join("\n"), /No dependents/);
+  }
+  const many = Array.from({ length: 80 }, (_, i) => task(`T${i + 1}`, { dependencies: i ? ["T1"] : [] }));
+  const graph = buildTaskFocus(many, "T1", 40, 30)!;
+  assert.equal(graph.bounds.get("T1")?.top, 15);
+  const hidden = graph.art.plain.join("\n").match(/(\d+) more dependents/);
+  assert.ok(hidden);
+  assert.equal(Number(hidden[1]) + graph.bounds.size, 80);
+  for (const box of graph.bounds.values()) {
+    assert.ok(box.top >= 0 && box.bottom < 30);
+    assert.equal(sliceByColumn(graph.art.plain[box.top], box.left, 1), "┌");
+    assert.equal(sliceByColumn(graph.art.plain[box.bottom], box.right, 1), "┘");
+  }
+  const prerequisites = many.map((item, i) => ({ ...item, dependencies: i === 79 ? many.slice(0, 79).map(parent => parent.id) : [], blockedBy: i === 79 ? ["T1"] : [] }));
+  const parentGraph = buildTaskFocus(prerequisites, "T80", 40, 30)!;
+  const hiddenParents = parentGraph.art.plain.join("\n").match(/(\d+) more prerequisites/);
+  assert.ok(hiddenParents);
+  assert.equal(Number(hiddenParents[1]) + parentGraph.bounds.size, 80);
+  assert.equal(parentGraph.bounds.get("T80")?.top, 15);
+  assert.match(parentGraph.art.plain.join("\n"), /Blocked/);
+  for (const width of [16, 18, 26]) {
+    const narrow = buildTaskFocus([task("T1")], "T1", width, 40)!;
+    assert.ok(narrow.art.plain.every(line => visibleWidth(line) <= width));
+    assert.match(narrow.art.plain.join("\n"), /Ready/);
+  }
+  for (const height of [8, 0, 2001, NaN, 30.5]) {
+    assert.equal(buildTaskFocus(data, "T2", 40, height), null, "invalid/short viewports must not hide selected status");
+  }
+});
+
 test("tool renderers expand full JSON without mutating payloads or exposing terminal controls", () => {
   initTheme("dark", false);
   setKeybindings(new KeybindingsManager());
@@ -134,7 +245,7 @@ test("notification previews use aliases and fall back to unknown IDs", () => {
   assert.match(plain(render(message, { expanded: true, outputPad: 0 }, theme)!, 1000), /member-uuid/);
 });
 
-async function panelFixture(snapshot: TeamSnapshot) {
+async function panelFixture(snapshot: TeamSnapshot, view?: { graph: boolean }) {
   let component: Component & { dispose?(): void; handleInput(data: string): void };
   let close: (id?: string) => void = () => {};
   const visits: string[] = [], resumes: string[] = [], sent: string[] = [];
@@ -149,7 +260,7 @@ async function panelFixture(snapshot: TeamSnapshot) {
       component = factory(tui, theme, {}, close);
     }),
   } } as unknown as ExtensionContext;
-  const running = showTeamsPanel(ctx, host);
+  const running = showTeamsPanel(ctx, host, view);
   await tick();
   return { host, tui, component: component!, visits, resumes, sent, running, close: () => close(),
     text: (width = 100) => plain(component!, width) };
@@ -157,7 +268,7 @@ async function panelFixture(snapshot: TeamSnapshot) {
 const snapshot = (): TeamSnapshot => ({ members: [], tasks: tasks.map(item => ({ ...item })), messages: [], limit: 4, depth: 2 });
 
 test("panel keeps selected status color, dims done text, fits narrow terminals, and has empty states", async () => {
-  const f = await panelFixture(snapshot());
+  const f = await panelFixture(snapshot(), { graph: true });
   try {
     const lines = f.component.render(150);
     assert.match(lines.join("\n"), new RegExp(foregroundAnsi(indexedColor(2), "256color").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -188,12 +299,164 @@ test("panel keeps selected status color, dims done text, fits narrow terminals, 
   } finally { empty.close(); await empty.running; }
 });
 
+test("go to task validates task numbers and selects in list and graph views", async () => {
+  for (const graph of [false, true]) {
+    const f = await panelFixture(snapshot(), { graph });
+    try {
+      f.text(150);
+      f.component.handleInput("J");
+      assert.match(f.text(150), /Go to task:/);
+      f.component.handleInput("999"); f.component.handleInput("\r");
+      assert.match(f.text(150), /Task #999 does not exist/);
+      assert.match(f.text(150), /● #3 Task T03/);
+      for (let i = 0; i < 3; i++) f.component.handleInput("\x7f");
+      f.component.handleInput("abc"); f.component.handleInput("\r");
+      assert.match(f.text(150), /Enter a positive task number/);
+      f.component.handleInput("\x1b");
+      assert.doesNotMatch(f.text(150), /Go to task:/);
+      f.component.handleInput("J"); f.component.handleInput("21"); f.component.handleInput("\r");
+      assert.doesNotMatch(f.text(150), /Go to task:/);
+      assert.match(f.text(150), /● #21 Task T21/);
+      f.component.handleInput("\r");
+      assert.match(f.text(150), /ID +T21/);
+    } finally { f.close(); await f.running; }
+  }
+});
+
+test("task shortcuts fit one line at 132 columns and wrap completely in smaller terminals", async () => {
+  for (const graph of [true, false]) {
+    const f = await panelFixture(snapshot(), { graph });
+    const footer = (width: number) => {
+      const lines = f.component.render(width).map(cleanText);
+      return lines.slice(lines.findLastIndex(line => line.startsWith("├")) + 1, -1);
+    };
+    try {
+      const wide = footer(132);
+      assert.equal(wide.length, 1, "laptop-width shortcuts occupy one row");
+      assert.match(wide[0], /Shift\+J Jump/);
+      assert.ok(wide[0].includes(graph ? "G List" : "G Graph"));
+      for (const label of ["Enter Details", "C Feedback", "N New", "Tab Next", "Esc Close", ...(graph ? ["A All/Focus", "+/- Zoom", "F Fit"] : [])]) assert.ok(wide[0].includes(label), label);
+      if (graph) { f.component.handleInput("a"); assert.equal(footer(132).length, 1, "full-map shortcuts also fit"); }
+      const narrow = footer(70);
+      assert.ok(narrow.length > 1, "narrow viewports wrap rather than hide shortcuts");
+      assert.match(narrow.join(" "), /Esc Close/);
+      assert.ok(narrow.every(line => visibleWidth(line) <= 70));
+    } finally { f.close(); await f.running; }
+  }
+});
+
+test("Vim keys mirror arrows across views without consuming text entry", async () => {
+  for (const graph of [false, true]) {
+    const vim = await panelFixture(snapshot(), { graph }), arrows = await panelFixture(snapshot(), { graph });
+    try {
+      assert.equal(vim.text(150), arrows.text(150));
+      for (const [letter, key] of [["j", "\x1b[B"], ["k", "\x1b[A"], ["l", "\x1b[C"], ["h", "\x1b[D"]]) {
+        vim.component.handleInput(letter); arrows.component.handleInput(key);
+        assert.equal(vim.text(150), arrows.text(150), `${letter} mirrors its arrow`);
+        assert.doesNotMatch(vim.text(150), /Go to task:/);
+      }
+      vim.component.handleInput("\t"); arrows.component.handleInput("\t");
+      vim.component.handleInput("h"); arrows.component.handleInput("\x1b[D");
+      assert.equal(vim.text(150), arrows.text(150), "h does not toggle the stopped-member filter");
+      vim.component.handleInput("l"); arrows.component.handleInput("\x1b[C");
+      assert.equal(vim.text(150), arrows.text(150));
+      vim.component.handleInput("h"); arrows.component.handleInput("\x1b[D");
+      assert.equal(vim.text(150), arrows.text(150));
+      assert.match(vim.text(150), /Filter.*Hide stopped/);
+      vim.component.handleInput("/"); vim.component.handleInput("hjkl");
+      assert.match(vim.text(150), /Filter: hjkl/);
+      vim.component.handleInput("\x1b"); vim.component.handleInput("\x1b[Z");
+      vim.component.handleInput("J"); vim.component.handleInput("hjkl");
+      assert.match(vim.text(150), /Go to task: hjkl/);
+      vim.component.handleInput("\x1b"); vim.component.handleInput("n"); vim.component.handleInput("hjkl");
+      assert.match(vim.text(150), /hjkl/);
+    } finally { vim.close(); arrows.close(); await Promise.all([vim.running, arrows.running]); }
+  }
+});
+
+test("page keys move a viewport of entries, clamp boundaries, and scroll the correct details", async () => {
+  const data = snapshot();
+  data.tasks = Array.from({ length: 60 }, (_, i) => task(`T${i + 1}`, { owner: "root", description: "Long task description. ".repeat(500) }));
+  data.members = Array.from({ length: 60 }, (_, i) => ({ id: `worker${i + 1}`, cwd: "/project", depth: 1, status: "idle", notified: 0 }));
+  data.messages = Array.from({ length: 60 }, (_, i) => ({ seq: i + 1, id: `M${i + 1}`, from: "root", recipients: [], summary: `Post ${i + 1}`, detail: "Long board evidence. ".repeat(500), time: "2026-01-01T12:00:00Z" }));
+  const f = await panelFixture(data);
+  const page = (headerRows: number) => {
+    const lines = f.component.render(160).map(cleanText), separators = lines.flatMap((line, i) => line.startsWith("├") ? [i] : []);
+    return separators[1] - separators[0] - 1 - headerRows;
+  };
+  try {
+    const step = page(2);
+    f.component.handleInput("\x1b[6~");
+    assert.match(f.text(160), new RegExp(`● #${step + 1} Task T${step + 1}\\b`));
+    f.component.handleInput("\x1b[5~"); assert.match(f.text(160), /● #1 Task T1\b/);
+    for (let i = 0; i < 6; i++) f.component.handleInput("\x1b[6~");
+    assert.match(f.text(160), /● #60 Task T60\b/);
+    for (let i = 0; i < 6; i++) f.component.handleInput("\x1b[5~");
+    f.component.handleInput("l"); const detail = f.text(160);
+    assert.match(detail, /#1 Task T1 · Ready/);
+    f.component.handleInput("\x1b[6~"); assert.notEqual(f.text(160), detail);
+    f.component.handleInput("\x1b[5~"); assert.equal(f.text(160), detail);
+    f.component.handleInput("h"); f.component.handleInput("g"); const graphStep = page(2);
+    f.component.handleInput("\x1b[6~"); assert.match(f.text(160), new RegExp(`#${graphStep + 1} Task T${graphStep + 1}\\b`));
+    f.component.handleInput("\x1b[5~"); assert.match(f.text(160), /#1 Task T1\b/);
+    f.component.handleInput("g"); f.component.handleInput("\t");
+    const memberStep = page(1);
+    f.component.handleInput("\x1b[6~"); assert.match(f.text(160), new RegExp(`● worker${memberStep}\\b`));
+    f.component.handleInput("\x1b[5~"); assert.match(f.text(160), /● Main\b/);
+    f.component.handleInput("l"); const member = f.text(160);
+    f.component.handleInput("\x1b[6~"); assert.notEqual(f.text(160), member);
+    f.component.handleInput("\x1b[5~"); assert.equal(f.text(160), member);
+    f.component.handleInput("h"); f.component.handleInput("\t"); const boardStep = page(1);
+    f.component.handleInput("\x1b[6~"); assert.match(f.text(160), new RegExp(`● Main.*Post ${60 - boardStep}\\b`));
+    f.component.handleInput("\x1b[5~"); f.component.handleInput("l");
+    const post = f.text(160);
+    assert.match(post, /Post 60/); assert.match(post, /Long board evidence/);
+    f.component.handleInput("\x1b[6~"); assert.notEqual(f.text(160), post);
+    f.component.handleInput("\x1b[5~"); assert.equal(f.text(160), post);
+    f.component.handleInput("h"); assert.match(f.text(160), /● Main.*Post 60/);
+  } finally { f.close(); await f.running; }
+});
+
+test("list opening and background refreshes do no graph work until a graph is rendered", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let graphScans = 0;
+  const segment = Intl.Segmenter.prototype.segment;
+  t.mock.method(Intl.Segmenter.prototype, "segment", function (this: Intl.Segmenter, input: string) {
+    if (input.includes("┌")) graphScans++;
+    return segment.call(this, input);
+  });
+  const data = snapshot(), view = { graph: false };
+  const f = await panelFixture(data, view);
+  try {
+    assert.doesNotMatch(f.text(150), /Zoom \d+%/);
+    assert.equal(graphScans, 0);
+    f.host.snapshot = async () => ({ ...data, tasks: data.tasks.map(item => ({ ...item, title: "Updated task" })) });
+    t.mock.timers.tick(2000); await tick();
+    assert.match(f.text(150), /Updated task/);
+    assert.equal(graphScans, 0, "list refresh must not build a graph");
+    f.component.handleInput("g");
+    assert.equal(view.graph, true);
+    assert.equal(graphScans, 0, "graph construction waits for rendering");
+    assert.match(f.text(150), /Zoom \d+%/);
+    assert.ok(graphScans > 0);
+    f.component.handleInput("\t"); f.component.handleInput("\t");
+    const previous = graphScans;
+    f.host.snapshot = async () => ({ ...data, tasks: data.tasks.map(item => ({ ...item, title: "Changed again" })) });
+    t.mock.timers.tick(2000); await tick();
+    f.text(150);
+    assert.equal(graphScans, previous, "board refresh must not rebuild an invisible graph");
+    f.component.handleInput("\t");
+    assert.match(f.text(150), /Changed again/);
+    assert.ok(graphScans > previous, "returning to the graph rebuilds it from the new tasks");
+  } finally { f.close(); await f.running; }
+});
+
 test("graph renders many independent tasks without multiplying ANSI sequences", async () => {
   const data = snapshot();
   data.tasks = Array.from({ length: 24 }, (_, index) => task(`demo-${index}`, {
     number: index + 1, title: `Demo ${index + 1} ${"Long scheduling title ".repeat(6)}`, dependencies: [],
   }));
-  const f = await panelFixture(data);
+  const f = await panelFixture(data, { graph: true });
   try {
     for (const width of [40, 100, 132, 180]) {
       const lines = f.component.render(width);
@@ -208,7 +471,6 @@ test("task list aligns statuses for short, long, and wide titles", async () => {
   data.tasks = data.tasks.map((item, index) => ({ ...item, title: ["Short", "Long title ".repeat(30), "解析器 👩‍💻".repeat(20), "Blocked task"][index] }));
   const f = await panelFixture(data);
   try {
-    f.component.handleInput("g");
     for (const width of [40, 80, 100, 150]) {
       const lines = f.component.render(width).map(cleanText).map(line => line.split(" │ ")[0].replace(/ │$/, ""));
       const header = lines.find(line => /Task +State/.test(line));
@@ -232,7 +494,6 @@ test("all table headers use bold underlined accent styling", async () => {
   data.messages = [{ seq: 1, id: "M1", from: "root", recipients: [], summary: "Update", time: "2026-01-01T12:00:00Z" }];
   const f = await panelFixture(data);
   try {
-    f.component.handleInput("g");
     for (const label of ["Task", "Member", "From"]) {
       const header = f.component.render(150).find(line => cleanText(line).includes(`  ${label} `));
       assert.ok(header, `${label} header exists`);
@@ -341,7 +602,7 @@ test("teammate search and stopped filter affect only the visible roster and sele
     const headingRow = rows.findIndex(line => /Member +State/.test(line));
     assert.match(rows[headingRow + 1], /● Main/, "headings sit directly above roster rows");
     assert.ok(!rows.slice(0, rows.findLastIndex(line => line.includes("├"))).some(line => /Filter names|H Hide stopped/.test(line)));
-    f.component.handleInput("h");
+    f.component.handleInput("H");
     assert.ok(!f.text(150).includes("marketplace-scout"));
     assert.match(footer(), /Stopped: hidden/);
     assert.match(f.text(150), /interrupted-review/, "interrupted sessions remain visible for recovery");
@@ -368,7 +629,7 @@ test("teammate search and stopped filter affect only the visible roster and sele
     f.component.handleInput("/");
     f.component.handleInput("\x1b");
     assert.match(f.text(150), /setup-tests/);
-    f.component.handleInput("h");
+    f.component.handleInput("H");
     assert.match(f.text(150), /marketplace-scout/);
     assert.equal(JSON.stringify(data), before);
     f.component.handleInput("/");
@@ -434,7 +695,6 @@ test("polling preserves task identity, never overlaps, and stops after disposal"
   let calls = 0;
   let resolve: (value: TeamSnapshot) => void = () => {};
   try {
-    f.component.handleInput("g");
     f.component.handleInput("\x1b[B"); f.component.handleInput("\x1b[B");
     assert.match(f.text(), /● #21 Task T21/);
     f.host.snapshot = () => { calls++; return new Promise(done => { resolve = done; }); };
@@ -458,7 +718,7 @@ test("fallback does not overwrite delivery receipts and Activity uses persistent
   const data = snapshot();
   data.tasks = [task("T1", { dependencies: ["missing"] })];
   data.messages = [{ seq: 1, id: "M1", from: "root", recipients: ["worker"], summary: "Real persistent message", time: "2026-01-01T12:00:00Z" }];
-  const f = await panelFixture(data);
+  const f = await panelFixture(data, { graph: true });
   try {
     assert.match(f.text(), /Graph unavailable or too large/);
     f.component.handleInput("n"); f.component.handleInput("Describe outcome"); f.component.handleInput("\r");
@@ -500,10 +760,124 @@ test("Board shows headline, full title, time, and detail tiers for outcomes and 
   } finally { f.close(); await f.running; }
 });
 
+test("dense graphs focus on real neighbors, retain blocked status, and toggle the full map", async () => {
+  const data = snapshot();
+  data.tasks = Array.from({ length: 60 }, (_, i) => task(`T${i + 1}`, {
+    title: `Implement readable task ${i + 1}`,
+    dependencies: i ? [`T${i}`] : [], blockedBy: i ? [`T${i}`] : [],
+  }));
+  const before = JSON.stringify(data);
+  const f = await panelFixture(data, { graph: true });
+  try {
+    assert.match(f.text(100), /Focus: 2 of 60 tasks/);
+    assert.match(f.text(100), /● #1 Implement readable task 1/);
+    assert.doesNotMatch(f.text(100), /Zoom 0%|\(fit\)/);
+    f.component.handleInput("\x1b[B");
+    const next = f.text(100);
+    assert.match(next, /Focus: 3 of 60 tasks/);
+    assert.match(next, /● #2 Implement readable task 2/);
+    assert.match(next, /Blocked/);
+    f.component.handleInput("a");
+    assert.match(f.text(100), /Full map: 60 tasks/);
+    assert.match(f.text(100), /pan to explore/);
+    assert.doesNotMatch(f.text(100), /\(fit\)/);
+    f.component.handleInput("a");
+    assert.match(f.text(100), /Focus: 3 of 60 tasks/);
+    f.component.handleInput("\r");
+    assert.match(f.text(100), /Dependencies/);
+    f.component.handleInput("\x1b");
+    assert.match(f.text(100), /Focus: 3 of 60 tasks/);
+    assert.equal(JSON.stringify(data), before);
+    for (const width of [40, 60, 150]) {
+      assert.ok(f.component.render(width).every(line => visibleWidth(line) <= width));
+    }
+  } finally { f.close(); await f.running; }
+});
+
+test("full maps show verified crossing legends and short focus viewports explicitly fall back", async () => {
+  const data = snapshot();
+  data.tasks = Array.from({ length: 6 }, (_, i) => task(`T${i + 1}`, {
+    title: `Task ${i + 1}`, dependencies: i < 3 ? [] : ["T1", "T2", "T3"], blockedBy: i < 3 ? [] : ["T1", "T2", "T3"],
+  }));
+  const f = await panelFixture(data, { graph: true });
+  try {
+    for (const rows of [20, 21, 22, 23, 24, 25, 26, 32]) {
+      f.tui.terminal.rows = rows;
+      const automatic = f.text(160);
+      if (automatic.includes("Full map:")) assert.doesNotMatch(automatic, /pan to explore/, "automatic fit includes the bridge spacer rows");
+    }
+    let full = f.text(160);
+    if (!full.includes("Full map:")) { f.component.handleInput("a"); full = f.text(160); }
+    assert.match(full, /Full map: 6 tasks/);
+    assert.match(full, /Rounded bridges \(1\); other overlaps unchanged/);
+    assert.match(full, /╭─╮/, "the displayed diagram uses connected rounded bridge strokes");
+    assert.doesNotMatch(full, /┼.*junction/);
+    f.component.handleInput("a");
+    assert.match(f.text(160), /Focused task/);
+    assert.doesNotMatch(f.text(160), /Rounded bridges|Line jumps unavailable/);
+    f.tui.terminal.rows = 18;
+    assert.match(f.text(100), /Graph unavailable or too large; showing list/);
+    assert.match(f.text(100), /#1 Task 1/);
+  } finally { f.close(); await f.running; }
+});
+
+test("focus navigation keeps the selected task fixed and styles all three section headers", async () => {
+  const data = snapshot();
+  data.tasks = Array.from({ length: 40 }, (_, i) => task(`T${i + 1}`, {
+    title: i === 1 ? "Long wrapping prerequisite title for a stable focus anchor" : `Work ${i + 1}`,
+    dependencies: i ? Array.from({ length: Math.min(i, 3) }, (_, j) => `T${i - j}`) : [],
+  }));
+  const f = await panelFixture(data, { graph: true });
+  try {
+    f.tui.terminal.rows = 44;
+    const anchor = (number: number) => {
+      const lines = f.component.render(100);
+      const row = lines.findIndex(line => cleanText(line).includes(`● #${number} `));
+      assert.ok(row >= 0);
+      for (const header of ["Prerequisites", "Focused task", "Dependents"]) {
+        const line = lines.find(line => line.includes(header));
+        assert.ok(line?.includes("\x1b[95m"), `${header} needs the existing purple accent`);
+        assert.ok(cleanText(line!).includes("─"), `${header} needs a divider`);
+      }
+      return row;
+    };
+    const initial = anchor(1);
+    for (let i = 2; i <= 6; i++) { f.component.handleInput("\x1b[C"); assert.equal(anchor(i), initial); }
+    f.component.handleInput("\x1b[A"); assert.equal(anchor(5), initial);
+    f.component.handleInput("\x1b[B"); assert.equal(anchor(6), initial);
+    f.component.handleInput("\r"); f.component.handleInput("\x1b"); assert.equal(anchor(6), initial);
+    f.tui.terminal.rows = 32;
+    assert.ok(f.component.render(40).every(line => visibleWidth(line) <= 40));
+  } finally { f.close(); await f.running; }
+});
+
+test("focused refresh retains the selected UUID and rebuilds changed relationships", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const data = snapshot();
+  data.tasks = Array.from({ length: 40 }, (_, i) => task(`T${i + 1}`, {
+    title: `Work ${i + 1}`, dependencies: i ? [`T${i}`] : [], blockedBy: i ? [`T${i}`] : [],
+  }));
+  const f = await panelFixture(data, { graph: true });
+  try {
+    f.text(100);
+    f.component.handleInput("\x1b[B");
+    assert.match(f.text(100), /● #2 Work 2/);
+    f.host.snapshot = async () => ({ ...data, tasks: data.tasks.map(item => item.id === "T2" ? { ...item, dependencies: ["T4"], blockedBy: ["T4"] } : item.id === "T4" ? { ...item, dependencies: [], blockedBy: [] } : item).reverse() });
+    t.mock.timers.tick(2000); await tick();
+    const text = f.text(100);
+    assert.match(text, /Focus: 3 of 40 tasks/);
+    assert.match(text, /● #2 Work 2/);
+    assert.match(text, /○ #4 Work 4/);
+    assert.match(text, /○ #3 Work 3/);
+    f.component.handleInput("\x1b[C");
+    assert.match(f.text(100), /● #1 Work 1/, "horizontal navigation can reach an unrelated task in current list order");
+  } finally { f.close(); await f.running; }
+});
+
 test("task graph starts fitted and zooms by shortening titles, never dropping number or status", async () => {
   const data = snapshot();
   data.tasks = ["a", "b", "c"].map((x, i) => task(`T${x}`, { number: i + 1, title: `Count lines in ${x}.txt` }));
-  const f = await panelFixture(data);
+  const f = await panelFixture(data, { graph: true });
   const graph = () => f.text(200);
   try {
     assert.match(graph(), /Zoom 100% \(fit\)/);
@@ -520,7 +894,44 @@ test("task graph starts fitted and zooms by shortening titles, never dropping nu
     assert.match(graph(), /Zoom 100%/);
     f.component.handleInput("f");
     assert.match(graph(), /\(fit\)/);
-    assert.ok(f.component.render(60).join("\n").includes("(fit)"), "fit at a narrow width still renders");
+    assert.match(f.text(60), /Focus: 1 of 3 tasks/, "a narrow pane uses readable focus instead of hiding titles to claim a fit");
+    assert.doesNotMatch(f.text(60), /\(fit\)/);
+  } finally { f.close(); await f.running; }
+});
+
+test("panel formats only visible graph rows and reveals off-screen tasks on navigation", async t => {
+  const data = snapshot();
+  data.tasks = Array.from({ length: 30 }, (_, i) => task(`T${i + 1}`, {
+    title: `Task ${i + 1}`, dependencies: i ? [`T${i}`] : [],
+  }));
+  const f = await panelFixture(data, { graph: true });
+  const fg = theme.fg.bind(theme);
+  let formattedBottom = false, formattedRows = 0;
+  t.mock.method(theme, "fg", (color: Parameters<Theme["fg"]>[0], text: string) => {
+    if (text.includes("┌")) formattedRows++;
+    if (text.includes("#30")) formattedBottom = true;
+    return fg(color, text);
+  });
+  try {
+    f.text(75);
+    f.component.handleInput("a");
+    f.component.invalidate();
+    f.text(75);
+    assert.equal(formattedBottom, false, "off-screen boxes must not be formatted");
+    const firstPass = formattedRows;
+    assert.ok(firstPass > 0);
+    f.text(75);
+    assert.equal(formattedRows, firstPass, "unchanged rows should reuse formatting");
+    f.component.invalidate();
+    f.text(75);
+    assert.ok(formattedRows > firstPass, "theme invalidation must discard styled rows");
+    for (let i = 1; i < 30; i++) f.component.handleInput("\x1b[B");
+    assert.match(f.text(75), /● #30 Task 30 · Ready/);
+    assert.equal(formattedBottom, true);
+    f.component.handleInput("\x1b[A");
+    assert.match(f.text(75), /● #29 Task 29 · Ready/);
+    f.tui.terminal.rows = 50;
+    assert.ok(f.component.render(120).every(line => visibleWidth(line) <= 120));
   } finally { f.close(); await f.running; }
 });
 
