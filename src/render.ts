@@ -1,6 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import { keyHint, type MessageRenderer, type Theme, type ToolRenderers } from "@earendil-works/pi-coding-agent";
-import { Container, Text, TruncatedText, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { Box, Container, Text, TruncatedText, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
 export const cleanText = (text: string): string => stripVTControlCharacters(text).replaceAll("\t", " ").replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
 const inline = (value: unknown) => cleanText(String(value)).replace(/[\n\r\t]/g, " ");
@@ -125,7 +125,7 @@ export function teamToolRenderers(name: string, getLabels: MemberLabels = defaul
 }
 
 export function teamMessageRenderer(getLabels: MemberLabels = defaultLabels): MessageRenderer {
-  return (message, { expanded }, theme) => {
+  return (message, { expanded, outputPad }, theme) => {
     const details = message.details as { through?: number; messages?: { from: string; summary: string; recipients: string[]; task?: string; kind?: string }[] } | undefined;
     const posts = details?.messages ?? [], recent = posts.at(-1);
     const more = posts.length > 1 ? ` (+${posts.length - 1} more)` : "";
@@ -134,7 +134,9 @@ export function teamMessageRenderer(getLabels: MemberLabels = defaultLabels): Me
     // Lead with what happened: "count-a completed #1 Count lines · 37 lines", or "count-a → Main · #1 … · question".
     const what = recent && (recent.kind === "outcome" && recent.task ? `${name(recent.from)} completed ${name(recent.task)}` : `${name(recent.from)} → ${recent.recipients.map(name).join(", ")}${recent.task ? ` · ${name(recent.task)}` : ""}`);
     const preview = recent ? `${what} · ${recent.summary.split("\n")[0]}${more}` : `Updates through ${details?.through ?? "unknown"}`;
-    return entry("ac-teams", details ?? { content: message.content }, expanded, theme, false, preview);
+    const box = new Box(outputPad, 0);
+    box.addChild(entry("ac-teams", details ?? { content: message.content }, expanded, theme, false, preview));
+    return box;
   };
 }
 
