@@ -5,6 +5,8 @@ import { initTheme, type ExtensionAPI, type ToolDefinition } from "@earendil-wor
 import { visibleWidth, setKeybindings, type TUI } from "@earendil-works/pi-tui";
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 import { ToolExecutionComponent } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/tool-execution.js";
+import { CustomMessageComponent } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/custom-message.js";
+import { teamMessageRenderer } from "../src/render.ts";
 import teams from "../src/index.ts";
 import { theme } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 
@@ -25,6 +27,26 @@ function lines(component: ToolExecutionComponent, width = 120) {
 function finish(component: ToolExecutionComponent, data: unknown, isError = false) {
   component.updateResult({ content: [{ type: "text", text: JSON.stringify(data) }], details: data, isError });
 }
+
+test("team notices follow transcript padding in collapsed and expanded views", () => {
+  const message = { role: "custom" as const, customType: "ac-teams", content: "Notice", display: true, timestamp: 0,
+    details: { through: 1, messages: [{ from: "root", recipients: ["worker"], summary: "Working\nMore detail" }] } };
+  const component = new CustomMessageComponent(message, teamMessageRenderer());
+  for (const expanded of [false, true]) {
+    component.setExpanded(expanded);
+    for (const padding of [0, 1, 3]) {
+      component.setOutputPad(padding);
+      const rendered = component.render(100).map(stripVTControlCharacters);
+      const header = rendered.find(line => line.includes("ac-teams"))!;
+      assert.equal(header.indexOf("ac-teams"), padding, `padding ${padding}, expanded ${expanded}`);
+      assert.ok(rendered.every(line => !line.trim() || line.startsWith(" ".repeat(padding))));
+      for (const width of [12, 40, 80]) {
+        assert.ok(component.render(width).every(line => visibleWidth(line) <= width), `fits width ${width}`);
+      }
+      if (expanded) assert.match(rendered.join("\n"), /More detail/);
+    }
+  }
+});
 
 test("each team tool uses one row with a dot, action, arguments, and result", () => {
   for (const [name, args, result, expected] of [
