@@ -356,7 +356,7 @@ export class Coordinator {
     const live = this.live();
     const startingMembers = live.filter(member => member.status === "starting").length;
     const warnings = [...sample.warnings];
-    if (startingMembers) warnings.push(`${startingMembers} teammate(s) still starting; their full memory cost is not yet reflected. Sequence launches and recheck team_agent list after startup.`);
+    if (startingMembers) warnings.push(`${startingMembers} teammate(s) still starting; their full memory cost is not yet reflected in host headroom.`);
     return { ...sample, liveMembers: live.length, startingMembers, warnings };
   }
   ack(id: string, through: number): void {

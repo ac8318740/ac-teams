@@ -19,7 +19,7 @@ async function setup(limit = 10, depth = 2, interactive = false) {
   const home = mkdtempSync(join(tmpdir(), "at-"));
   const notices: number[] = [], warnings: string[] = [];
   const states: { kind: "busy" | "blocked"; active: boolean }[] = [];
-  const options: CoordinatorOptions = { resources: () => ({ scope: "host", memory: { totalBytes: 10000, availableBytes: 5000, swapUsedBytes: 0 }, memoryPressure: { someAvg10: 0, fullAvg10: 0 }, warnings: [] }), status: (kind, active) => { states.push({ kind, active }); }, id: randomUUID(), cwd: home, limit, depth, interactive, extension: "unused", command: fixture, home, notice: (through: number) => { notices.push(through); }, warning: (message: string) => { warnings.push(message); } };
+  const options: CoordinatorOptions = { resources: () => ({ scope: "host", memory: { totalBytes: 10000, availableBytes: 5000, swapUsedBytes: 0 }, memoryPressure: { someAvg10: 0, fullAvg10: 0, fullAvg60: 0 }, warnings: [] }), status: (kind, active) => { states.push({ kind, active }); }, id: randomUUID(), cwd: home, limit, depth, interactive, extension: "unused", command: fixture, home, notice: (through: number) => { notices.push(through); }, warning: (message: string) => { warnings.push(message); } };
   const team = await Coordinator.open(options);
   return { team, home, options, notices, warnings, states, async close() { await team.close(); rmSync(home, { recursive: true, force: true }); } };
 }
@@ -211,7 +211,8 @@ test("concurrent launch advisories include starting reservations before their pr
     assert.equal(results[0].resources.startingMembers, 0);
     assert.equal(results[1].resources.liveMembers, 1);
     assert.equal(results[1].resources.startingMembers, 1);
-    assert.match(results[1].resources.warnings.join(" "), /starting.*[Ss]equence/);
+    assert.match(results[1].resources.warnings.join(" "), /starting.*memory cost/);
+    assert.doesNotMatch(results[1].resources.warnings.join(" "), /sequence|sequential/i);
     assert.equal(f.team.live().length, 2, "resource guidance is advisory, unlike the explicit ceiling");
   } finally { await f.close(); }
 });
