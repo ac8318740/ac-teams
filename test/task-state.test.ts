@@ -9,7 +9,7 @@ import type { TaskView, TeamState } from "../src/types.ts";
 function fixture(t: test.TestContext) {
   const home = mkdtempSync(join(tmpdir(), "ac-task-state-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
-  const initial: TeamState = { version: 4, id: "team", key: "key", limit: 3, depth: 1, tasks: {}, messages: [], members: {
+  const initial: TeamState = { version: 5, id: "team", key: "key", limit: 3, depth: 1, tasks: {}, messages: [], members: {
     root: { id: "root", role: "main", depth: 0, token: "r", cwd: home, status: "idle", notified: 0 },
     a: { id: "a", role: "member", parent: "root", depth: 1, token: "a", cwd: home, status: "idle", notified: 0 },
     b: { id: "b", role: "member", parent: "root", depth: 1, token: "b", cwd: home, status: "idle", notified: 0 },
@@ -35,7 +35,7 @@ test("checkout reserves blocked to-do work without starting it; readiness is der
     store.task("b", { action: "claim", id: prerequisite.id });
     store.task("b", { action: "start", id: prerequisite.id });
     assert.ok((store.task("a", { action: "read", id: task.id }) as TaskView).blockedBy.includes(prerequisite.id));
-    store.task("b", { action: "complete", id: prerequisite.id, acceptance: true });
+    store.task("b", { action: "complete", id: prerequisite.id, acceptance: true, summary: "Done" });
   }
   const ready = store.task("a", { action: "read", id: task.id }) as TaskView;
   assert.equal(ready.status, "todo");
@@ -96,7 +96,7 @@ test("start atomically claims ready work without stealing or reserving blocked w
   assert.equal(started.revision, 2);
   assert.throws(() => store.task("b", { action: "start", id: prerequisite.id }), /owner/i);
   assert.throws(() => store.task("a", { action: "complete", id: prerequisite.id }), /acceptance/i);
-  store.task("a", { action: "complete", id: prerequisite.id, acceptance: true });
+  store.task("a", { action: "complete", id: prerequisite.id, acceptance: true, summary: "Done" });
   store.task("b", { action: "start", id: blocked.id });
   assert.equal(store.state.tasks[blocked.id].owner, "b");
   assert.throws(() => store.task("a", { action: "start", id: prerequisite.id }), /to.do/i);
@@ -108,7 +108,7 @@ test("completion time persists for summary ordering and is cleared on reopen", t
   store.task("a", { action: "claim", id: task.id });
   store.task("a", { action: "start", id: task.id });
   t.mock.method(Date, "now", () => 400);
-  store.task("a", { action: "complete", id: task.id, acceptance: true });
+  store.task("a", { action: "complete", id: task.id, acceptance: true, summary: "Done" });
   assert.equal(store.state.tasks[task.id].completedAt, 400);
   assert.throws(() => store.update(state => { state.tasks[task.id].completedAt = NaN; }), /completion time/);
   store.close();
@@ -124,7 +124,7 @@ test("release clears reservations, resets active work, and never reopens done wo
   const { store, create } = fixture(t);
   const task = create();
   store.task("a", { action: "claim", id: task.id });
-  assert.throws(() => store.task("a", { action: "complete", id: task.id, acceptance: true }), /in.progress/i);
+  assert.throws(() => store.task("a", { action: "complete", id: task.id, acceptance: true, summary: "Done" }), /in.progress/i);
   assert.throws(() => store.task("b", { action: "release", id: task.id }), /owner/i);
   store.task("a", { action: "release", id: task.id });
   assert.equal(store.state.tasks[task.id].status, "todo");
@@ -137,7 +137,7 @@ test("release clears reservations, resets active work, and never reopens done wo
   store.task("a", { action: "claim", id: task.id });
   store.task("a", { action: "start", id: task.id });
   assert.throws(() => store.task("a", { action: "complete", id: task.id }), /acceptance/i);
-  store.task("a", { action: "complete", id: task.id, acceptance: true });
+  store.task("a", { action: "complete", id: task.id, acceptance: true, summary: "Done" });
   store.task("a", { action: "release", id: task.id });
   assert.equal(store.state.tasks[task.id].status, "done");
   assert.equal(store.state.tasks[task.id].owner, undefined);
@@ -164,17 +164,17 @@ test("reopening is explicit and cannot invalidate active or completed dependents
   const prerequisite = create();
   store.task("a", { action: "claim", id: prerequisite.id });
   store.task("a", { action: "start", id: prerequisite.id });
-  store.task("a", { action: "complete", id: prerequisite.id, acceptance: true });
+  store.task("a", { action: "complete", id: prerequisite.id, acceptance: true, summary: "Done" });
   assert.throws(() => store.task("b", { action: "reopen", id: prerequisite.id }), /owner/i);
   const task = create([prerequisite.id]);
   store.task("b", { action: "claim", id: task.id });
   store.task("a", { action: "reopen", id: prerequisite.id });
   assert.throws(() => store.task("b", { action: "start", id: task.id }), /blocked/i);
   store.task("a", { action: "start", id: prerequisite.id });
-  store.task("a", { action: "complete", id: prerequisite.id, acceptance: true });
+  store.task("a", { action: "complete", id: prerequisite.id, acceptance: true, summary: "Done" });
   store.task("b", { action: "start", id: task.id });
   assert.throws(() => store.task("root", { action: "reopen", id: prerequisite.id }), /dependent/i);
-  store.task("b", { action: "complete", id: task.id, acceptance: true });
+  store.task("b", { action: "complete", id: task.id, acceptance: true, summary: "Done" });
   assert.throws(() => store.task("a", { action: "reopen", id: prerequisite.id }), /dependent/i);
 });
 
@@ -184,7 +184,7 @@ test("new transitions honor revisions and survive restart with independent owner
   const claimed = store.task("a", { action: "claim", id: task.id }) as TaskView;
   assert.throws(() => store.task("a", { action: "start", id: task.id, revision: task.revision }), /revision/i);
   store.task("a", { action: "start", id: task.id, revision: claimed.revision });
-  store.task("a", { action: "complete", id: task.id, acceptance: true });
+  store.task("a", { action: "complete", id: task.id, acceptance: true, summary: "Done" });
   const done = store.task("a", { action: "release", id: task.id }) as TaskView;
   assert.throws(() => store.task("root", { action: "reopen", id: task.id, revision: done.revision - 1 }), /revision/i);
   const reserved = create([task.id]);
@@ -211,7 +211,7 @@ test("legacy progress migrates durably without losing owners, dependencies, or r
   } };
   writeFileSync(path, JSON.stringify(legacy));
   const reopened = new Store(initial, home);
-  assert.equal(reopened.state.version, 4);
+  assert.equal(reopened.state.version, 5);
   assert.deepEqual(Object.values(reopened.state.tasks).map(t => [t.status, t.owner, t.revision]), [["done", "a", 4], ["in_progress", "b", 2], ["todo", undefined, 1]]);
   assert.deepEqual(reopened.state.tasks.next.dependencies, ["first"]);
   assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), reopened.state);

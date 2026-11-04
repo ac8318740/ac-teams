@@ -2,17 +2,22 @@ import { basename } from "node:path";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Editor, indexedColor, matchesKey, sliceByColumn, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { contextSummary } from "./telemetry.ts";
-import { buildTaskGraph, moveTaskSelection, taskStatus } from "./graph.ts";
+import { buildTaskGraph, moveTaskSelection, taskStatus, type TaskGraph } from "./graph.ts";
 import { cleanText as clean } from "./render.ts";
 import type { PanelHost } from "./ui-types.ts";
-import { taskName, type TaskView } from "./types.ts";
+import { taskName, type Message, type TaskView } from "./types.ts";
 
 export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Promise<void> {
   if (ctx.mode !== "tui") throw new Error("Teams panel requires interactive terminal mode");
   let snapshot = await host.snapshot();
   let tasks = snapshot.tasks;
   let events = snapshot.messages.slice().reverse();
-  let taskGraph = buildTaskGraph(tasks);
+  // Zoom is the title width each box gets, from the longest title (100%) down to none (number and status only).
+  const longest = () => Math.max(1, ...tasks.map(task => visibleWidth(clean(task.title))));
+  let graphs = new Map<number, TaskGraph | null>();
+  const graphAt = (budget: number) => { if (!graphs.has(budget)) graphs.set(budget, buildTaskGraph(tasks, budget)); return graphs.get(budget)!; };
+  let zoom: number | "fit" = "fit", shownZoom = longest();
+  let taskGraph = graphAt(shownZoom);
   const drafts = host.drafts;
   const name = (id: string | undefined) => id === "root" ? "Main" : clean(snapshot.members.find(member => member.id === id)?.name ?? id ?? "Unassigned");
   const creator = (task: TaskView) => (task as TaskView & { creator?: string }).creator ?? "root";
@@ -26,7 +31,7 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
     let timer: ReturnType<typeof setTimeout> | undefined;
     let focused = true;
     let memberQuery = "", searching = false, hideStopped = false;
-    const tabs = ["Tasks", "Teammates", "Activity"];
+    const tabs = ["Tasks", "Teammates", "Board"];
     const selectedTask = () => tasks[taskIndex];
     const memberIds = () => ["root", ...snapshot.members.filter(member => member.id !== "root").map(member => member.id)]
       .filter(id => name(id).toLowerCase().includes(memberQuery.toLowerCase())
@@ -46,7 +51,7 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
         taskIndex = Math.max(0, tasks.findIndex(task => task.id === taskId));
         memberIndex = Math.max(0, memberIds().indexOf(memberId));
         eventIndex = Math.max(0, events.findIndex(event => event.id === eventId));
-        if (changed) taskGraph = buildTaskGraph(tasks);
+        if (changed) { graphs = new Map(); taskGraph = graphAt(Math.min(shownZoom, longest())); }
       } catch (error) { if (!disposed) receipt = `Refresh failed: ${clean(String(error))}`; }
       finally { if (!disposed) { refresh(); timer = setTimeout(() => void poll(), 2000); } }
     }
@@ -115,23 +120,36 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
       const task = selectedTask();
       if (!task) return wrap([heading("No tasks yet"), "Request a task with N. Main creates and organizes it."], width);
       const unlocked = tasks.filter(other => other.dependencies.includes(task.id));
+      const outcome = task.outcome ? snapshot.messages.find(message => message.id === task.outcome) : undefined;
+      const [first = "", ...rest] = outcome ? clean(outcome.summary).split("\n") : [];
+      const prerequisites = task.dependencies.map(id => {
+        const parent = tasks.find(item => item.id === id);
+        return parent ? `${taskTitle(parent.id)} · ${stateLabel(parent)}` : `${clean(id)} · Unavailable`;
+      });
       return wrap([
-        heading(clean(taskName(task))), label("Title", clean(task.title)), label("ID", task.id), "",
-        label("State", stateLabel(task)), label("Owner", name(task.owner)), label("Creator", name(creator(task))), "",
-        heading("Description"), clean(task.description), "",
-        heading("Prerequisites"),
-        ...(task.dependencies.length ? task.dependencies.map(id => {
-          const parent = tasks.find(item => item.id === id);
-          return parent ? `${clean(taskName(parent))} · ${taskStatus(parent)}` : `${clean(id)} · Unavailable`;
-        }) : [fg("muted", "None; this task can start independently.")]), "",
-        heading("Unlocks"), ...(unlocked.length ? unlocked.map(item => clean(taskName(item))) : [fg("muted", "No dependent tasks.")]),
-        "",
-        fg("accent", "C  Give feedback to creator"), fg("accent", "O  Open owner's full session"),
-        ...(!detail ? [fg("muted", "Enter  Full details")] : []),
+        heading(taskTitle(task.id)) + fg("muted", " · ") + stateLabel(task), "",
+        label("Owner", name(task.owner)), ...(task.delegator ? [label("Delegator", name(task.delegator))] : []),
+        label("Creator", name(creator(task))), "",
+        ...(outcome ? [section(`Outcome from ${name(outcome.from)}`, width), theme.bold(first), ...rest, ...(outcome.detail ? ["", fg("muted", clean(outcome.detail))] : []), ""] : []),
+        section("Description", width), clean(task.description), "",
+        section("Dependencies", width),
+        label("Needs", prerequisites.length ? prerequisites.join(", ") : fg("muted", "Nothing; can start now")),
+        label("Unlocks", unlocked.length ? unlocked.map(item => taskTitle(item.id)).join(", ") : fg("muted", "No other tasks")), "",
+        section("Actions", width), fg("accent", "C") + "  Give feedback to creator", fg("accent", "O") + "  Open owner's session", "",
+        fg("dim", `ID ${task.id}`),
       ], width);
     }
 
     function graphLines(width: number) {
+      if (zoom === "fit") {
+        // Largest title width that still fits the pane (binary search; graphs are cached per width).
+        const fits = (budget: number) => { const g = graphAt(budget); return !!g && g.art.width <= width && g.art.plain.length <= bodyHeight - 1; };
+        let low = 0, high = longest();
+        if (fits(high)) low = high;
+        else while (low < high - 1) { const mid = (low + high) >> 1; if (fits(mid)) low = mid; else high = mid; }
+        shownZoom = low;
+      } else shownZoom = zoom;
+      taskGraph = graphAt(shownZoom);
       if (!taskGraph) return undefined;
       const { art, bounds } = taskGraph;
       const selected = bounds.get(selectedTask()?.id ?? "");
@@ -150,10 +168,12 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
           if (active && y === box.top + 1) text = text.replace("○ ", "● ");
           const border = y === box.top || y === box.bottom;
           const content = sliceByColumn(text, 1, box.right - box.left - 1), status = taskStatus(task);
-          const color = status === "Done" ? "dim" : "text";
+          const color = active ? "accent" : status === "Done" ? "dim" : "text";
           const index = y === box.bottom - 1 && content.trimEnd().endsWith(status) ? content.lastIndexOf(status) : -1;
           const interior = index < 0 ? fg(color, content) : fg(color, content.slice(0, index)) + stateLabel(task) + fg(color, content.slice(index + status.length));
-          const styled = border ? statusText(task, text) : statusText(task, "│") + (active ? theme.bold(interior) : interior) + statusText(task, "│");
+          // The selected box keeps its status colour but gets a heavy border and bold text, so selection never competes with status.
+          const edge = (part: string) => statusText(task, active ? part.replace(/[┌┐└┘─│┬┴]/g, ch => ({ "┌": "┏", "┐": "┓", "└": "┗", "┘": "┛", "─": "━", "│": "┃", "┬": "┯", "┴": "┷" })[ch]!) : part);
+          const styled = border ? edge(text) : edge("│") + (active ? theme.bold(interior) : interior) + edge("│");
           row = sliceByColumn(row, 0, box.left) + styled + sliceByColumn(row, box.right + 1, art.width);
         }
         const indent = " ".repeat(Math.max(0, Math.floor((width - art.width) / 2)));
@@ -184,9 +204,9 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
       let selectedHeight = 1, graphWidth = 0;
       if (tab === 0) {
         const graphData = graph ? graphLines(leftWidth) : undefined;
-        left = graphData ? graphData.rows : tasks.length ? [fg("muted", "  Task / State"), "",
+        left = graphData ? graphData.rows : tasks.length ? [fg("muted", "  Task"), "",
           ...tasks.map((task, index) => {
-            const text = `${index === taskIndex ? "●" : " "} ${clean(taskName(task))}`;
+            const text = `${index === taskIndex ? "●" : " "} ${taskTitle(task.id)}`;
             const body = fg(taskStatus(task) === "Done" ? "dim" : "text", truncateToWidth(text, Math.max(1, leftWidth - 10)));
             return (index === taskIndex ? theme.bold(body) : body) + " · " + stateLabel(task);
           })] : [heading("No tasks yet"), "N  Request a task from Main"];
@@ -211,8 +231,8 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
         const nameExtra = Math.min(spare, Math.max(0, ...ids.map(id => visibleWidth(name(id)) - nameWidth)));
         const gap = " ".repeat(4 + Math.floor((spare - nameExtra) / gaps));
         nameWidth += nameExtra + (spare - nameExtra) % gaps;
-        left = [fg("muted", `  ${pad("Member", nameWidth)}${gap}${pad("Session", sessionWidth)}`
-          + (showTasks ? `${gap}${pad("Tasks", tasksWidth)}` : "") + (showDirectory ? `${gap}Directory` : "")), ...ids.map((id, index) => {
+        left = [fg("muted", `  ${pad("Member", nameWidth)}${gap}${pad("State", sessionWidth)}`
+          + (showTasks ? `${gap}${pad("Done", tasksWidth)}` : "") + (showDirectory ? `${gap}Directory` : "")), ...ids.map((id, index) => {
           const member = snapshot.members.find(member => member.id === id);
           const selected = index === memberIndex;
           const stopped = member && ["stopped", "interrupted"].includes(member.status);
@@ -230,11 +250,19 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
         selectedRow = memberIndex + 1;
         right = split ? memberDetails(rightWidth) : [];
       } else {
-        left = events.length ? [fg("muted", "  Recent messages · newest first"), "", ...events.flatMap((event, index) => [
-          `${index === eventIndex ? "●" : " "} ${name(event.from)} → ${event.recipients.map(name).join(", ") || "Team"}`,
-          fg("muted", `  ${clean(event.time)} · ${clean(event.text).split("\n")[0]}`), "",
-        ])] : [heading("No activity yet"), fg("muted", "Recent persistent team messages appear here.")];
-        selectedRow = eventIndex * 3 + 2;
+        // One row per post: who, what kind, its summary headline, then task and time as quieter context.
+        const fromWidth = Math.min(16, Math.max(4, ...events.map(event => visibleWidth(name(event.from)))));
+        const taskWidth = Math.min(5, Math.max(4, ...events.map(event => event.task ? visibleWidth(taskRef(event.task)) : 0)));
+        const summaryWidth = Math.max(1, leftWidth - (2 + fromWidth + 2 + 7 + 2 + 2 + taskWidth + 2 + 5));
+        left = events.length ? [fg("muted", `  ${pad("From", fromWidth)}  ${pad("Kind", 7)}  ${pad("Summary", summaryWidth)}  ${pad("Task", taskWidth)}  Time`),
+          ...events.map((event, index) => {
+            const selected = index === eventIndex;
+            const from = pad(name(event.from), fromWidth), summary = pad(headline(event), summaryWidth);
+            return fg(selected ? "accent" : "dim", `${selected ? "●" : " "} `) + (selected ? theme.bold(fg("accent", from)) : from) + "  "
+              + kindLabel(event) + "  " + (selected ? theme.bold(summary) : summary) + "  "
+              + fg("muted", pad(event.task ? taskRef(event.task) : "", taskWidth)) + "  " + fg("dim", clock(event.time).slice(0, 5));
+          })] : [heading("No posts yet"), fg("muted", "Updates, questions, replies, and outcomes appear here.")];
+        selectedRow = eventIndex + 1;
         right = split ? eventDetails(rightWidth) : [];
       }
 
@@ -243,8 +271,12 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
       if (selectedRow + selectedHeight > scroll + viewHeight) scroll = selectedRow + selectedHeight - viewHeight;
       scroll = Math.max(0, Math.min(scroll, Math.max(0, left.length - viewHeight)));
       const viewport = left.slice(scroll, scroll + viewHeight);
-      if (graphWidth) viewport.unshift(fg("muted", `↑ ${scroll} rows above · ↓ ${Math.max(0, left.length - scroll - viewHeight)} below`
-        + (graphWidth > leftWidth ? ` · ← ${columnScroll} cols · ${Math.max(0, graphWidth - columnScroll - leftWidth)} →` : "")));
+      if (graphWidth) {
+        const hidden = scroll || left.length > scroll + viewHeight || graphWidth > leftWidth;
+        viewport.unshift(fg("muted", `Zoom ${Math.round(100 * shownZoom / longest())}%${zoom === "fit" ? " (fit)" : ""}`
+          + (hidden ? ` · ↑ ${scroll} rows · ↓ ${Math.max(0, left.length - scroll - viewHeight)} rows` : "")
+          + (graphWidth > leftWidth ? ` · ← ${columnScroll} cols · ${Math.max(0, graphWidth - columnScroll - leftWidth)} cols →` : "")));
+      }
       return Array.from({ length: bodyHeight }, (_, index) => {
         let row = viewport[index] ?? "";
         if (!graphWidth && index === 0 && scroll > 0) row = fg("muted", `↑ ${scroll} rows above`);
@@ -253,10 +285,39 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
       });
     }
 
+    /** Task number and full title; labels are too short to say what a post is about. */
+    function taskTitle(id: string) {
+      const task = tasks.find(item => item.id === id);
+      return task ? clean(`#${task.number} ${task.title}`) : clean(id);
+    }
+
+    const headline = (event: Message) => clean(event.summary).split("\n")[0];
+    const taskRef = (id: string) => { const task = tasks.find(item => item.id === id); return task ? `#${task.number}` : "#?"; };
+    const kindLabel = (event: Message) => event.kind === "outcome" ? fg("success", pad("Outcome", 7))
+      : event.replyTo ? fg("accent", pad("Reply", 7)) : fg("muted", pad("Post", 7));
+    // A labelled rule separates tiers more clearly than bold text alone.
+    const section = (title: string, width: number) => theme.bold(fg("accent", title)) + " " + fg("dim", "─".repeat(Math.max(0, width - visibleWidth(title) - 1)));
+    const post = (id: string | undefined) => snapshot.messages.find(message => message.id === id);
+    const clock = (time: string) => { const date = new Date(time); return isNaN(+date) ? clean(time) : date.toTimeString().slice(0, 8); };
+
+    // Tiers: headline (first summary line), the rest of the summary, then optional detail and the thread around it.
     function eventDetails(width: number) {
       const event = events[eventIndex];
-      if (!event) return wrap([heading("No activity yet"), "Recent persistent team messages appear here."], width);
-      return wrap([heading("Team message"), "", label("From", name(event.from)), label("To", event.recipients.map(name).join(", ") || "Team"), label("Time", clean(event.time)), "", clean(event.text)], width);
+      if (!event) return wrap([heading("No posts yet"), "Updates, questions, replies, and outcomes appear here."], width);
+      const [first = "", ...rest] = clean(event.summary).split("\n");
+      const parent = post(event.replyTo), task = event.task ? tasks.find(item => item.id === event.task) : undefined;
+      const replies = snapshot.messages.filter(message => message.replyTo === event.id);
+      const date = new Date(event.time);
+      return wrap([
+        kindLabel(event).trimEnd() + fg("muted", ` from ${name(event.from)}`),
+        label("To", event.recipients.map(name).join(", ") || "Team"),
+        ...(event.task ? [label("Task", `${taskTitle(event.task)}${task ? ` · ${stateLabel(task)}` : ""}`)] : []),
+        ...(parent ? [label("Reply to", `${name(parent.from)}: ${headline(parent)}`)] : []),
+        label("Time", isNaN(+date) ? clean(event.time) : date.toLocaleString()), "",
+        section("Summary", width), theme.bold(first), ...rest,
+        ...(event.detail ? ["", section("Detail", width), clean(event.detail)] : []),
+        ...(replies.length ? ["", section(`Replies (${replies.length})`, width), ...replies.map(reply => `${name(reply.from)}: ${headline(reply)}`)] : []),
+      ], width);
     }
 
     function memberDetails(width: number) {
@@ -265,20 +326,21 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
       if (!id) return wrap([heading("No matching teammates"), "Change the name filter or show stopped members."], width);
       const member = snapshot.members.find(member => member.id === id);
       const assigned = tasks.filter(task => task.owner === id);
-      return wrap([heading(name(id)), "", label("State", member?.needsInput ? fg("error", "Needs input") : clean(member?.status ?? (id === "root" ? "Main conversation" : "Unavailable")).replace(/^./, char => char.toUpperCase())),
+      const stopped = member && ["stopped", "interrupted"].includes(member.status);
+      return wrap([
+        heading(name(id)) + fg("muted", " · ") + (member?.needsInput ? fg("error", "Needs input") : clean(member?.status ?? (id === "root" ? "Main conversation" : "Unavailable")).replace(/^./, char => char.toUpperCase())), "",
         label("Model", clean(member?.modelName || member?.model?.slice(member.model.indexOf("/") + 1) || "Unknown")),
         label("Context", clean(contextSummary(member?.contextUsage).replace(/^context unknown/, "Unknown"))),
         label("Directory", clean(member?.cwd ?? (id === host.self ? ctx.cwd : "Unavailable"))),
-        label("Tasks", taskProgress(id)), fg("muted", "Completed / currently assigned"),
-        ...(member?.error ? [label("Error", clean(member.error))] : []), "", heading("Assigned tasks"),
-        ...assigned.map(task => `${clean(taskName(task))} · ${taskStatus(task)}`),
-        ...(assigned.length ? [] : [fg("muted", "No assigned tasks.")]), "",
-        fg("accent", member && ["stopped", "interrupted"].includes(member.status) ? "Enter  Resume and open" : "Enter  Open session"),
-        ...(!detail ? [fg("muted", "→  Details")] : []),
-        ...(!host.child && member?.role === "member" ? [fg("accent", "P  Promote to main session"), fg("muted", "Stops member; reopens transcript as a main session.")] : []),
-        "", heading("Session details"), label("ID", id),
-        label("Session", clean(member?.sessionFile ?? member?.sessionId ?? "Unavailable")),
-        label("Worktree", member?.worktree ? clean(`${member.worktree.path} (${member.worktree.branch})`) : "None"),
+        ...(member?.error ? [label("Error", fg("error", clean(member.error)))] : []), "",
+        section(`Tasks (${assigned.filter(task => task.status === "done").length} of ${assigned.length} done)`, width),
+        ...(assigned.length ? assigned.map(task => `${taskTitle(task.id)} · ${stateLabel(task)}`) : [fg("muted", "No assigned tasks.")]), "",
+        section("Actions", width), fg("accent", "Enter") + (stopped ? "  Resume and open session" : "  Open session"),
+        ...(!host.child && member?.role === "member" ? [fg("accent", "P") + "  Promote to main session " + fg("muted", "(stops the member, reopens its transcript as a main session)")] : []), "",
+        section("Session", width),
+        fg("muted", label("ID", id)),
+        fg("muted", label("File", clean(member?.sessionFile ?? member?.sessionId ?? "Unavailable"))),
+        fg("muted", label("Worktree", member?.worktree ? clean(`${member.worktree.path} (${member.worktree.branch})`) : "None")),
       ], width);
     }
 
@@ -297,7 +359,7 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
           : compose ? "Enter Send · Shift+Enter Newline · Esc Keep draft"
           : detail ? tab === 0 ? "↑↓ Scroll · C Feedback · O Open owner · Esc Back"
             : tab === 1 ? "↑↓ Scroll · Enter Open session · Esc Back" : "↑↓ Scroll · O Open related session · Esc Back"
-          : tab === 0 ? `${graph ? "↑↓←→" : "↑↓"} Select · Enter Details · G Graph/List · C Feedback · N New task · Tab Next · Esc Close`
+          : tab === 0 ? `${graph ? "↑↓←→" : "↑↓"} Select · Enter Details · G Graph/List${graph ? " · +/- Zoom · F Fit" : ""} · C Feedback · N New task · Tab Next · Esc Close`
           : tab === 1 ? `${filters} · ↑↓ Select · → Details · Enter Open session · N New task · Tab Next · Esc Close`
           : "↑↓ Select · Enter Details · O Open related session · Tab Next · Esc Close";
         const teammates = snapshot.members.filter(member => member.id !== "root");
@@ -307,7 +369,7 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
         const summaryText = tab === 0
           ? `${tasks.length} tasks · ${["Working", "Ready", "Blocked", "Done"].map(state => `${tasks.filter(task => taskStatus(task) === state).length} ${state.toLowerCase()}`).join(" · ")}`
           : tab === 1 ? `${teammates.length} teammate${teammates.length === 1 ? "" : "s"} · ${["working", "idle", "stopped", "needs input"].map(state => `${memberStates.filter(value => value === state).length} ${state}`).join(" · ")}`
-          : `${events.length} message${events.length === 1 ? "" : "s"} · newest first`;
+          : `${events.length} post${events.length === 1 ? "" : "s"} · ${events.filter(event => event.kind === "outcome").length} outcomes · ${events.filter(event => event.replyTo).length} replies`;
         const summary = wrapTextWithAnsi(fg("muted", summaryText), inner);
         const receipts = receipt ? wrapTextWithAnsi(fg("muted", receipt), inner) : [];
         const hints = wrapTextWithAnsi(fg("dim", help), inner);
@@ -360,6 +422,13 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
           else if (tab === 1) memberIndex = Math.max(0, Math.min(memberIds().length - 1, memberIndex + delta));
           else eventIndex = Math.max(0, Math.min(events.length - 1, eventIndex + delta));
         } else if (data.toLowerCase() === "g" && tab === 0 && !detail) { graph = !graph; scroll = 0; }
+        else if (tab === 0 && graph && !detail && ["+", "=", "-"].includes(data)) {
+          // Steps of 1.25x title width, like a smooth zoom; always at least one column so each press shows a change.
+          const at = zoom === "fit" ? shownZoom : zoom;
+          zoom = data === "-" ? Math.max(0, Math.min(at - 1, Math.floor(at / 1.25)))
+            : Math.min(longest(), Math.max(at + 1, Math.ceil(at * 1.25)));
+          scroll = 0; columnScroll = 0;
+        } else if (tab === 0 && graph && !detail && data.toLowerCase() === "f") { zoom = "fit"; scroll = 0; columnScroll = 0; }
         else if (data.toLowerCase() === "n") begin("new");
         else if (data.toLowerCase() === "c" && tab === 0) begin("feedback");
         else if (data.toLowerCase() === "p" && tab === 1 && !host.child) {

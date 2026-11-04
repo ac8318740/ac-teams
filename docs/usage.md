@@ -6,7 +6,7 @@ ac-teams provides three tools for planning and tracking solo and delegated work.
 | --- | --- | --- |
 | `team_agent` | `launch`, `list`, `status`, `stop`, `resume`, `limits`, `cleanup` | A parent controls its descendants, not peers or ancestors |
 | `team_task` | `create`, `list`, `read`, `edit`, `claim`, `start`, `release`, `complete`, `reopen` | Claim reserves work; dependencies gate starting, not ownership |
-| `team_message` | `send`, `history`, `search` | Recipients select who receives notification, not who can read |
+| `team_message` | `send`, `history`, `search`, `wait` | Routing selects who is notified, not who can read |
 
 In interactive Pi, `/teams` or `/teams panel` opens the team panel. `/teams teammate <name-or-id>` opens a live teammate directly; autocomplete suggests subcommands and teammate names. You can also enter an exact teammate ID. The older `/teams open <id>` form remains supported. Headless roots retain the status listing. `/teams stop` stops every member; main sessions keep running. `/teams join` and `/teams leave` change which team this session belongs to. See [operations](operations.md) for limits, recovery, and worktree cleanup.
 
@@ -22,13 +22,13 @@ Context shows Pi's reported token estimate, window size, and percentage, for exa
 
 - Press Down from an empty editor to focus Main in the agent selector. Up/Down select members; Enter opens the selected live session; Esc returns to editing.
 - Ctrl+Shift+Left returns from a member to Main. Switching preserves the member's process, session, and draft. Returning does not stop it.
-- `/teams` opens three tabs. Tab moves between Tasks, Teammates, and Activity; Esc closes the panel.
-    - **Tasks:** Arrow keys select nodes in the dependency graph. G toggles graph/list, and Enter shows full details. Green means Done, red Blocked, cyan Working, and neutral Ready; written labels remain visible. Large or unsupported graphs fall back to the list.
+- `/teams` opens three tabs. Tab moves between Tasks, Teammates, and Board; Esc closes the panel.
+    - **Tasks:** Arrow keys select nodes in the dependency graph. G toggles graph/list, and Enter shows full details. The graph opens fitted to the pane; `-` and `+` shorten or restore titles gradually (number and status always stay), and F returns to fit. The selected box has a heavy border and accent text. Green means Done, red Blocked, cyan Working, and neutral Ready; written labels remain visible. Large or unsupported graphs fall back to the list.
     - **Teammates:** Shows working, idle, stopped, and needs-input counts; interrupted sessions count as needing input. Enter opens a live member, or quietly resumes a stopped member's saved session before opening it. Right opens details; Esc returns to the roster. Model, context, and directory appear above session IDs and paths. Root can open any member; member views can open their descendants.
         - Wider rosters also show Tasks (completed / currently assigned total) and the directory's final folder name. Reassigned tasks leave the previous owner's counts. Narrower views drop Directory first, then Tasks; full paths and counts remain in details.
         - Press `/` to filter names (case-insensitive). Enter applies the filter; Esc while editing clears it. Backspace edits the query. Press `/` again to edit an applied filter.
         - H hides or shows stopped members. Interrupted sessions remain visible for recovery. All members are visible by default; filters affect only this panel, not team state.
-    - **Activity:** Shows the latest 100 persistent team messages rather than every tool update. Use `team_message history` to read older messages.
+    - **Board:** Shows the latest 100 posts, one row each with sender, kind (post, reply, or outcome), summary, task, and time. The details pane shows recipients, task, summary, detail, and replies. Use `team_message history` to read older posts.
 - N composes a task request for Main. C on a task sends feedback to its creator. Enter sends; Shift+Enter adds a newline; Esc cancels without losing the draft. These messages do not directly edit the task graph. Feedback resumes a stopped creator when possible; otherwise, the receipt explicitly reports delivery to Main instead.
 
 A task request is a proposal, not an instruction to create a task. Main receives guidance to review the agreed scope and existing work first: reuse a task that already covers the request, extend one when coherent and permitted, or create distinct in-scope work. It should clarify unresolved scope conflicts and explain its decision with task references.
@@ -37,9 +37,9 @@ The send receipt confirms delivery, not acceptance or task creation. This is age
 
 Each team tool call uses one line with a status dot, tool name, action, and result preview. Bold, colored badges such as `[todo]` separate statuses from titles and names.
 
-The `+N lines` hint shows the hidden detail count. Ctrl+O expands the full request and response JSON; mouse-enabled Pi views also support clicking the row.
+The `+N lines` hint shows the hidden detail count. Ctrl+O expands the full response JSON; mouse-enabled Pi views also support clicking the row.
 
-Tool summaries and team notification previews prefer teammate names over IDs. Message receipt IDs stay out of compact summaries. Ctrl+O expands the original request and response, including IDs. Unknown members fall back to their IDs. UI state colors do not replace the underlying progress, ownership, or dependency fields.
+Tool summaries and team notification previews prefer teammate names over IDs. Message receipt IDs stay out of compact summaries. Ctrl+O expands the response, including IDs. Unknown members fall back to their IDs. UI state colors do not replace the underlying progress, ownership, or dependency fields.
 
 ## Main sessions share one team
 
@@ -88,7 +88,7 @@ Task list and mutation responses give the model compact summaries, including UUI
 
 ## Give members bounded assignments
 
-Before delegating a deliverable, create or reuse a shared task and include its ID in the member's brief. Track independently owned outcomes, not every agent, tool call, or procedural step. For example:
+Before delegating a deliverable, create or reuse a shared task and pass it as the launch `task`. The new member owns it, you become its delegator, and its posts and completion outcome reach you. Track independently owned outcomes, not every agent, tool call, or procedural step. For example:
 
 - A fix and an independently owned test assignment need separate tasks.
 - A diagnosis others need for follow-up needs a task, even if the investigation is read-only.
@@ -101,13 +101,13 @@ Review the current task list and relevant details first. Reuse an existing task 
 {"action":"create","label":"Parser review","title":"Review parser errors and malformed input","description":"Read-only review of src/parser.ts. Acceptance: report concrete malformed-input failures with reproduction steps, or report that none were found."}
 ```
 
-Put the returned task UUID in the brief in place of `<task-id>`. Example `team_agent` arguments:
+Pass the returned task UUID as `task`. Example `team_agent` arguments:
 
 ```json
-{"action":"launch","name":"parser-review","brief":"Task <task-id>: claim and start it, then review src/parser.ts. Read only; do not delegate or edit. Send findings to root through team_message. Complete the task after checking its acceptance criteria, or report blockers."}
+{"action":"launch","name":"parser-review","task":"<task-id>","brief":"Review src/parser.ts for malformed-input failures. Read only; do not delegate or edit."}
 ```
 
-These are prompt guidelines, not launch requirements. ac-teams neither creates tasks automatically nor blocks launches without tasks.
+The launch task must be a to-do task that is unowned or yours; a failed launch returns it. ac-teams neither creates tasks automatically nor blocks launches without tasks. After delegating, do distinct work or `wait`; do not repeat the delegated work.
 
 Every launch needs a unique descriptive `name`: one or two lowercase words, hyphenated if two, at most 40 characters. For example, `parser-review` or `research`. `main`, `root`, and names matching an existing member's ID are reserved. Names remain stable across stop/resume; IDs remain the API references.
 
@@ -141,9 +141,9 @@ Use the returned task ID with these actions:
 | --- | --- |
 | `claim` | Reserve an unowned to-do task, even if blocked. Progress stays `todo`. |
 | `start` | Claim unowned work and move `todo` to `in_progress` atomically, only when every dependency is `done`. An existing owner must be the caller. |
-| `complete` | The owner moves `in_progress` to `done`, with `acceptance: true`. Ownership remains. |
+| `complete` | The owner moves `in_progress` to `done`, with `acceptance: true` and an outcome `summary` (optional `detail`). One atomic step records the outcome post and the done state; an identical retry returns the original. Ownership remains. |
 | `release` | Clear ownership. In-progress work returns to `todo`; done work stays `done`. |
-| `reopen` | Explicitly move `done` to `todo`, retaining any owner. Refuse if a dependent is in progress or done. |
+| `reopen` | Explicitly move `done` to `todo`, retaining any owner and clearing the outcome reference; the outcome post stays. Refuse if a dependent is in progress or done. |
 
 Starting never steals another owner's work. Only the owner can complete or release its work. An ancestor may explicitly release a stopped or interrupted descendant's ownership. The owner or root can reopen an owned task; any member can reopen an unowned one. Done tasks cannot be claimed until reopened.
 
@@ -151,27 +151,27 @@ Include `dependencies` on creation or `edit`. Any member can edit unowned to-do 
 
 `acceptance: true` asserts that the agent checked the acceptance criteria; it is not an independent test runner. Stop/crash retains ownership and progress. There is no automatic reassignment.
 
-## Send messages instead of polling
+## Post to the board instead of polling
 
-Example `team_message` arguments:
+Every post has a one-line `summary` that stands alone, optional `detail`, and an existing `task` or a `replyTo` post. Example `team_message` arguments:
 
 ```json
-{"action":"send","recipients":["root"],"text":"Parser review complete. No edits; two malformed-input cases need tests."}
+{"action":"send","task":"<task-id>","summary":"Parser rejects empty input with a clear error; two malformed cases still crash.","detail":"Repro: ..."}
 ```
 
-Use exact teammate names (such as `"oom-review"`) or member IDs in `recipients`; IDs remain valid. Omit `recipients` to notify all other live members.
+Use exact teammate names (such as `"oom-review"`) or member IDs in `recipients`; IDs remain valid. A post reaches its named `recipients`, the linked task's owner and delegator (the creator when there is none), the author of a replied-to post, and members waiting on that task, never the sender. A reply inherits its post's task. Posts are never broadcast: one with no recipients, task, or reply is rejected, as are unknown member IDs. All team members can read the full history.
 
-Each recipient must resolve to a different live member. An unknown name, a stopped member, or two entries for the same member rejects the whole send.
-
-Receipts and stored history retain resolved IDs. All team members can read the full history, including direct messages.
+Receipts and stored history retain resolved IDs.
 
 ```json
 {"action":"history","after":0,"limit":20}
 ```
 
-Use the last returned `seq` as the next `after` cursor. `search` adds a case-sensitive literal `query`; results remain cursor-paged. Reads never consume messages. Task and message result pages are limited to 100 items.
+Use the last returned `seq` as the next `after` cursor. `search` adds a case-sensitive literal `query` over summaries and detail; results remain cursor-paged. Reads never consume posts. Task and message result pages are limited to 100 items.
 
-New messages queue a compact Pi follow-up: an idle member wakes, while a busy member finishes its current work first. Notifications batch for 50 ms and reference history rather than copying every message into context. Notification acknowledgement means queued, not read or acted on.
+Notices carry each post's summary and steer into the recipient's next safe point: an idle member wakes, a busy one sees them after its current tool batch. Read history only for detail your own work needs. A notice is acknowledged once it is persisted in the recipient's session, so a crash before that redelivers it.
+
+`wait` with `tasks` yields: if a post is already waiting it returns at once; otherwise the turn ends without another model request, and the next post addressed to you or on those tasks starts a new one. Starting any turn clears the wait.
 
 Messages survive crashes; exactly-once delivery or model execution does not. Avoid acknowledgement-only replies.
 

@@ -1,3 +1,4 @@
+import { bindNoticeGroups } from "./group.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "node:url";
 import { AgentSchema, TaskSchema, MessageSchema, validate } from "./schemas.ts";
@@ -13,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { promisify } from "node:util";
-import { createMemberLabels, readState, teamsHome } from "./store.ts";
+import { createMemberLabels, readState, stateLabels, teamsHome } from "./store.ts";
 import { teamEntryType, type TeamEntry } from "./mains.ts";
 import { isMain, memberName, taskName, type TeamState } from "./types.ts";
 import { Coordinator, assistantEvent, taskRequestGuidance } from "./coordinator.ts";
@@ -51,14 +52,31 @@ export default function teams(pi: ExtensionAPI) {
   const cachedLabels = createMemberLabels();
   function memberLabels(): Record<string, string> {
     try {
-      if (coordinator) return Object.fromEntries(Object.values(coordinator.store.state.members).map(member => [member.id, memberName(member)]));
+      if (coordinator) return stateLabels(coordinator.store.state);
       return cachedLabels(child ? dirname(environment[0]!) : join(teamsHome(), teamId(context!)));
     } catch { return { root: "Main" }; } // A transcript can render before its team is available.
   }
   pi.registerMessageRenderer("ac-teams", teamMessageRenderer(memberLabels));
-  const warn = (message: string) => context?.ui.notify(message, "warning");
+  /** Warnings this extension showed, so a folded team block can absorb its own (Pi prints them as "Warning: ..."). */
+  const ownWarnings = new Set<string>();
+  const warn = (message: string) => { ownWarnings.add(`Warning: ${message}`); context?.ui.notify(message, "warning"); };
+  /** Highest notice handed to Pi, and highest found persisted in this session and acknowledged. */
+  let sent = 0, acked = 0;
   const notify = (through: number, messages: Message[] = []) => {
-    pi.sendMessage({ customType: "ac-teams", content: `New team messages through sequence ${through}. Read team_message history after your last cursor. Reply only with useful updates, not acknowledgements.`, display: true, details: { through, messages } }, { deliverAs: "followUp", triggerTurn: true });
+    if (through <= sent) return;
+    // Unacknowledged posts are offered again; show each one once.
+    messages = messages.filter(message => message.seq > sent);
+    sent = through;
+    const labels = memberLabels(), name = (id: string) => labels[id] ?? id;
+    const lines = messages.map(message => `[${message.seq}] ${name(message.from)}${message.kind === "outcome" ? " completed" : ""}${message.task ? ` ${name(message.task)} [${message.task}]` : ""}: ${message.summary}${message.detail ? " (detail via team_message history)" : ""}`);
+    pi.sendMessage({ customType: "ac-teams", content: `Team posts:\n${lines.join("\n")}\nAct only if one needs you. Fetch detail only to settle a question about your own work.`, display: true, details: { through, messages } }, { deliverAs: "steer", triggerTurn: true });
+  };
+  /** Acknowledges notices only once they are durable session entries, so a crash before persistence redelivers them. */
+  const reconcile = (ctx: ExtensionContext) => {
+    const through = ctx.sessionManager.getEntries().reduce((max, entry) => entry.type === "custom_message" && entry.customType === "ac-teams" ? Math.max(max, Number((entry.details as { through?: number } | undefined)?.through) || 0) : max, 0);
+    sent = Math.max(sent, through);
+    if (through <= acked || (!connection && !coordinator)) return;
+    acked = through;
     if (connection) void connection.request("ack", { through }).catch(error => warn(String(error)));
     else coordinator?.ack(coordinator.self, through);
   };
@@ -273,15 +291,16 @@ export default function teams(pi: ExtensionAPI) {
     }
   });
   pi.on("agent_start", (_event, ctx) => report(ctx, { type: "agent_start" }));
-  pi.on("agent_settled", (_event, ctx) => { inputCount = 0; report(ctx, { type: "agent_settled" }); });
+  pi.on("turn_end", (_event, ctx) => reconcile(ctx));
+  pi.on("agent_settled", (_event, ctx) => { inputCount = 0; reconcile(ctx); report(ctx, { type: "agent_settled" }); });
   pi.on("tool_execution_start", (event, ctx) => report(ctx, { type: "activity", text: `Running ${event.toolName}`.slice(0, 500) }));
   pi.on("message_end", (event, ctx) => {
     const change = assistantEvent(event.message);
     if (change) report(ctx, change);
   });
   function output(data: unknown) { return { content: [{ type: "text" as const, text: JSON.stringify(data) }], details: data }; }
-  const guidance = "Team launches use real long-lived Pi sessions. Idle members count against the shared ceiling and retain their processes and extensions. Check team_agent list resources before adding concurrency; teammate launch/resume results include pre-launch host headroom. Resource warnings are advisory, not a memory reservation or capacity guarantee. Choose concurrency using resource readings and observed progress, not low headroom alone. If contention slows progress, stop unneeded idle members and resume their saved sessions later. Use teammate names for messaging and stable IDs for member control and tasks; query status and history instead of acknowledging notifications. Limits cover only ac-teams, not other launchers or shell commands.";
-  const taskTrackingGuidance = "Before delegating a deliverable through team_agent, create or reuse a team_task and include its ID in the member's brief. Use one shared task list for your own work and delegated work; do not create one task per teammate by default. Quick lookups and brief second opinions need no separate task unless their results need coordination or follow-up.";
+  const guidance = "Team launches use real long-lived Pi sessions. Idle members count against the shared ceiling and retain their processes and extensions. Check team_agent list resources before adding concurrency; teammate launch/resume results include pre-launch host headroom. Resource warnings are advisory, not a memory reservation or capacity guarantee. Choose concurrency using resource readings and observed progress, not low headroom alone. If contention slows progress, stop unneeded idle members and resume their saved sessions later. Use teammate names for messaging and stable IDs for member control and tasks; never acknowledge notifications. Limits cover only ac-teams, not other launchers or shell commands.";
+  const taskTrackingGuidance = "Before delegating a deliverable through team_agent, create or reuse a team_task and pass it as the launch task; its owner's completion outcome reports back to you. Use one shared task list for your own work and delegated work; do not create one task per teammate by default. Quick lookups and brief second opinions need no separate task unless their results need coordination or follow-up.";
   pi.registerTool({
     name: "team_agent", label: "Team agent", description: "Launch/resume Pi members, list/status, stop owned subtrees, change root limits, and explicitly clean stopped worktrees. Create or reuse team_task entries for delegated deliverables; quick lookups need no task unless results need coordination or follow-up.",
     promptGuidelines: [guidance, taskTrackingGuidance, "Delegation needs the user's authorization. Give each new member a unique descriptive name (one or two lowercase words, hyphenated if two), plus a bounded brief. Names remain stable on resume. Avoid concurrent writers in the same cwd. Worktrees are opt-in."],
@@ -310,12 +329,15 @@ export default function teams(pi: ExtensionAPI) {
     },
   });
   pi.registerTool({
-    name: "team_message", label: "Team message", description: "Send a persistent direct/team message to teammate names or IDs, or read cursor-paged history. Send returns a receipt with resolved IDs; history and search return full messages. New messages queue a compact follow-up notification for each recipient.",
-    promptGuidelines: ["Do not poll team_message history while waiting for replies; notifications trigger a follow-up turn. On notification, read team_message history after your last read cursor and advance it through the returned messages. An empty result means no newer messages, not that a teammate has finished."],
+    name: "team_message", label: "Team message", description: "Post to the team board, read history or search, or wait. A post has a required one-line summary that stands alone, optional detail, and links an existing task or replies to a post. It reaches named recipients (teammate names or IDs) plus the linked task's owner and delegator; it is never broadcast. Recipients receive summaries at their next safe point. Wait yields this turn until a post reaches you or lands on the given tasks.",
+    promptGuidelines: ["Post only what changes someone's work: an outcome, a blocker, a question, or new context. Do not acknowledge notices or narrate progress.", "Notices carry summaries; read history only for the detail a question about your own work needs.", "After delegating, do not repeat the delegated work. Do distinct work, or call team_message wait with the delegated task IDs as your last action; never poll history."],
     parameters: MessageSchema,
     ...teamToolRenderers("team_message", memberLabels),
     async execute(_id, args, _signal, _update, ctx) {
-      const result = await handle("message", args, ctx);
+      // Posts already shown in a notice are not news to this wait.
+      const result = await handle("message", args.action === "wait" && args.after === undefined ? { ...args, after: sent } : args, ctx);
+      // Nothing ready: end the turn without another model request; the next matching notice starts a new one.
+      if (args.action === "wait") return { ...output(result), terminate: (result as Message[]).length === 0 };
       if (args.action === "send") {
         const { seq, id, recipients } = result as Message;
         return output({ seq, id, recipients });
@@ -393,7 +415,7 @@ export default function teams(pi: ExtensionAPI) {
     pi.sendMessage({ customType: "ac-teams", display: true, details: { through: state.messages.at(-1)?.seq ?? 0, messages: recent }, content: [
       `Joined team ${state.id} as ${name(team!.member)}, a main session.`,
       open.length ? `Open tasks:\n${open.map(task => `- ${taskName(task)} (${task.status}, ${name(task.owner)})`).join("\n")}` : "No open tasks.",
-      recent.length ? `Recent messages:\n${recent.map(message => `- ${name(message.from)}: ${message.text.split("\n")[0].slice(0, 200)}`).join("\n")}` : "No messages yet.",
+      recent.length ? `Recent messages:\n${recent.map(message => `- ${name(message.from)}: ${message.summary.split("\n")[0].slice(0, 200)}`).join("\n")}` : "No messages yet.",
     ].join("\n\n") }, { triggerTurn: false });
   }
   /** /teams leave: hands this session's work back and drops its main-session role. */
@@ -410,7 +432,7 @@ export default function teams(pi: ExtensionAPI) {
   }
   pi.on("session_start", async (_event, ctx) => {
     if (!child && linkedSession && linkedSession !== ctx.sessionManager.getSessionId()) { await close(); drafts.clear(); }
-    context = ctx; exiting = false; inputCount = 0;
+    context = ctx; exiting = false; inputCount = 0; sent = acked = 0;
     if (child) {
       if (environment.some(value => !value)) throw new Error("Incomplete AC_TEAMS membership environment; refusing independent-root fallback");
       const link = new Connection(environment[0]!, environment[1]!, environment[2]!);
@@ -428,6 +450,9 @@ export default function teams(pi: ExtensionAPI) {
       if (data?.left) disable("This session left its team; use /teams join to join one");
       else if (team) await rejoin(ctx);
     }
+    // Notices persisted before a crash or reconnect count as delivered; acknowledge them so they are not shown twice.
+    reconcile(ctx);
+    bindNoticeGroups(ctx, memberLabels, () => memberLabels()[memberId()] ?? "this session", line => ownWarnings.has(line));
     startTelemetry(ctx);
     if (!warned) {
       warned = true;

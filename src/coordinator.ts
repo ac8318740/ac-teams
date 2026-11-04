@@ -29,6 +29,9 @@ export const taskRequestGuidance = [
   "Respect completion checks and add only real dependencies. Explain the decision and any actual task changes to the user.",
 ].join(" ");
 
+/** Posts per notice, oldest first; the session acknowledges a batch before the next one goes out. */
+const noticeBatch = 20;
+
 export function assistantEvent(message: unknown): { type: string; text: string } | undefined {
   if (!isRecord(message) || message.role !== "assistant") return;
   if (message.stopReason === "error") return { type: "model_error", text: String(message.errorMessage || "Model request failed").slice(0, 2000) };
@@ -95,7 +98,7 @@ export class Coordinator {
     this.options = options;
     this.self = options.self ?? "root";
     const root: Member = { id: "root", role: "main", depth: 0, token: randomUUID(), cwd: options.cwd, status: "idle", notified: 0, sessionId: options.id, sessionFile: options.sessionFile, model: options.model, thinking: options.thinking };
-    const initial: TeamState = { version: 4, id: options.id, key: randomUUID(), limit: options.limit, depth: options.depth, members: { root }, tasks: {}, messages: [] };
+    const initial: TeamState = { version: 5, id: options.id, key: randomUUID(), limit: options.limit, depth: options.depth, members: { root }, tasks: {}, messages: [] };
     this.store = new Store(initial, options.home);
     this.socketPath = join(this.store.dir, "coordinator.sock");
   }
@@ -280,7 +283,7 @@ export class Coordinator {
       current.modelName = event.modelName;
       current.contextUsage = event.contextUsage ?? undefined;
     }
-    else if (event.type === "agent_start") { current.status = "busy"; current.activity = "Working"; delete current.error; delete current.summary; }
+    else if (event.type === "agent_start") { delete current.waiting; current.status = "busy"; current.activity = "Working"; delete current.error; delete current.summary; }
     else if (event.type === "agent_settled") { delete current.needsInput; current.status = "idle"; current.activity = current.error ? "Model request failed" : current.summary || "Available for follow-up"; }
     else if (event.type === "activity") current.activity = event.text;
     else if (event.type === "summary") current.summary = event.text?.slice(0, 500);
@@ -291,7 +294,7 @@ export class Coordinator {
     }
     if (event.type === "model_error" && !isMain(member) && member.status !== "stopping") {
       const recipient = member.parent && isLive(this.store.state.members[member.parent]) ? member.parent : this.self;
-      this.store.message(actor, { action: "send", recipients: [recipient], text: `Member ${actor} model error: ${event.text || "Model request failed"}` });
+      this.store.message(actor, { action: "send", recipients: [recipient], summary: `Member ${actor} model error: ${event.text || "Model request failed"}` });
       this.notify(recipient);
     }
   }
@@ -331,7 +334,7 @@ export class Coordinator {
         catch (error) { fallback = `Creator ${recipient} could not resume (${String(error)}); delivered to ${memberName(this.store.state.members[main])} instead. `; recipient = main; }
       }
     }
-    const message = this.store.message(actor, { action: "send", recipients: [recipient], text }, true) as Message;
+    const message = this.store.message(actor, { action: "send", recipients: [recipient], summary: text }, true) as Message;
     this.notify(recipient);
     return `${fallback}Sent to ${isMain(this.store.state.members[recipient]) ? memberName(this.store.state.members[recipient]) : recipient} · message ${message.seq}`;
   }
@@ -365,6 +368,8 @@ export class Coordinator {
     if (this.closed) throw new Error("Team is stopping");
     if (through <= this.store.state.members[id].notified) return;
     this.store.update(state => { state.members[id].notified = through; });
+    // Batches are bounded, so posts beyond the acknowledged batch go out next.
+    this.notify(id);
   }
   private notify(id: string): void {
     if (this.closed || this.notices.has(id)) return;
@@ -373,11 +378,11 @@ export class Coordinator {
       const member = this.store.state.members[id];
       if (!member || !isLive(member)) return;
       const pending = this.store.state.messages.filter(message => message.seq > member.notified && message.recipients.includes(id));
-      const through = pending.at(-1)?.seq;
+      const batch = pending.slice(0, noticeBatch), through = batch.at(-1)?.seq;
       if (!through) return;
       try {
-        if (id === this.self) this.options.notice(through, pending.slice(-5));
-        else { const socket = this.sockets.get(id); if (socket) send(socket, { type: "notice", through, messages: pending.slice(-5) }); }
+        if (id === this.self) this.options.notice(through, batch);
+        else { const socket = this.sockets.get(id); if (socket) send(socket, { type: "notice", through, messages: batch }); }
       } catch (error) { this.options.warning(`Team notification remains in history: ${String(error)}`); }
     }, 50));
   }
@@ -392,10 +397,10 @@ export class Coordinator {
       if (member.access) throw new Error("Sandboxed members cannot send user team actions; use Main");
       return this.userAction(actor, args as UserAction);
     }
-    if (operation === "task") return this.store.task(actor, args as TaskArgs);
-    if (operation === "message") {
-      const result = this.store.message(actor, args as MessageArgs);
-      if ((args as MessageArgs).action === "send") for (const id of Object.keys(this.store.state.members)) this.notify(id);
+    if (operation === "task" || operation === "message") {
+      const last = this.store.state.messages.at(-1)?.seq ?? 0;
+      const result = operation === "task" ? this.store.task(actor, args as TaskArgs) : this.store.message(actor, args as MessageArgs);
+      for (const message of this.store.state.messages.filter(message => message.seq > last)) for (const id of message.recipients) this.notify(id);
       return result;
     }
     return this.agent(actor, args as AgentArgs, authorizedLimit);
@@ -471,8 +476,14 @@ export class Coordinator {
     const member: Member = resumed ? { ...resumed, token: randomUUID(), status: "starting", error: undefined, contextUsage: undefined, modelName: undefined, handover: undefined } : { id, name: args.name, role: "member", parent: actor, depth, token: randomUUID(), cwd, status: "starting", notified: 0, access, provider: access ? provider : undefined };
     const resources = this.resources();
     for (const warning of resources.warnings) this.options.warning(warning);
-    // Reserve synchronously before the first await so concurrent launches cannot oversubscribe.
-    this.store.update(next => { next.members[id] = member; });
+    const assigned = args.task === undefined ? undefined : state.tasks[args.task];
+    if (args.task !== undefined && (!assigned || assigned.status !== "todo" || (assigned.owner && assigned.owner !== actor))) throw new Error("A launch task must be an existing to-do task that is unowned or yours");
+    // Reserve synchronously before the first await so concurrent launches cannot oversubscribe or double-assign.
+    this.store.update(next => {
+      next.members[id] = member;
+      if (assigned) Object.assign(next.tasks[assigned.id], { owner: id, delegator: actor, revision: next.tasks[assigned.id].revision + 1 });
+    });
+    const brief = assigned ? `${args.brief}\n\nYou own team task ${taskName(assigned)} [${assigned.id}], delegated by ${memberName(parent)}. Start it, and finish with team_task complete and an outcome summary; that one call reports back.` : args.brief;
     this.publishStatus();
     member.model = args.model; member.thinking = args.thinking ?? "off";
     member.terminal = this.options.interactive === true;
@@ -546,14 +557,19 @@ export class Coordinator {
       if (rpcState.model.name !== undefined || rpcState.contextUsage !== undefined) this.recordEvent(id, { type: "telemetry", model: args.model, modelName: rpcState.model.name, contextUsage: rpcState.contextUsage ?? null });
       this.store.update(next => { if (next.members[id].status === "starting") next.members[id].status = prompt ? "busy" : "idle"; });
       this.publishStatus();
-      if (prompt) await agent.request("prompt", { message: args.brief, streamingBehavior: "followUp" });
+      if (prompt) await agent.request("prompt", { message: brief, streamingBehavior: "followUp" });
       return { ...this.publicMember(this.store.state.members[id]), resources };
     } catch (error) {
       clearTimeout(timer); this.ready.delete(id);
       if (agent) await agent.stop();
       // The exit handler may already own the container removal; wait for it so a failed launch leaves nothing running.
       await this.releaseSandbox(id); await this.releasing.get(id);
-      this.store.update(next => { next.members[id].status = "interrupted"; delete next.members[id].needsInput; next.members[id].error = error instanceof Error ? error.message : "Startup failed"; });
+      this.store.update(next => {
+        next.members[id].status = "interrupted"; delete next.members[id].needsInput; next.members[id].error = error instanceof Error ? error.message : "Startup failed";
+        // A failed launch returns its untouched reservation.
+        const task = assigned && next.tasks[assigned.id];
+        if (task && task.owner === id && task.status === "todo") { delete task.owner; delete task.delegator; task.revision++; }
+      });
       this.publishStatus();
       throw error;
     }

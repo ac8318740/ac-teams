@@ -60,7 +60,7 @@ for (const interactive of [false, true]) {
         brief: "PROBE:" + JSON.stringify(config), access: { read: [join(root, "work/read")], write: ["."] } }) as { id: string; access: unknown };
       assert.deepEqual(member.access, { read: [join(root, "work/read")], write: [join(root, "work/write")], network: {} });
       let report: string | undefined;
-      await until(() => !!(report = t.store.state.messages.find(message => message.from === member.id)?.text), 120000);
+      await until(() => !!(report = t.store.state.messages.find(message => message.from === member.id)?.summary), 120000);
       const r = JSON.parse(report!);
       assert.equal(r.readOutside.ok, false);
       assert.deepEqual(r.readGranted, { ok: true, value: "readable" });

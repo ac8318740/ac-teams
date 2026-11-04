@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { stateRoot } from "./config.ts";
 import { validatePolicy } from "./egress.ts";
 import { stripVTControlCharacters } from "node:util";
-import { isDescendant, isLive, isMain, memberName, memberNamePattern, memberNameMaxLength, taskLabelMaxLength, taskLabelPattern } from "./types.ts";
+import { isDescendant, isMain, memberName, memberNamePattern, memberNameMaxLength, taskLabelMaxLength, taskLabelPattern } from "./types.ts";
 import type { TeamState, TaskArgs, MessageArgs, Task, TaskView, Message, Worktree } from "./types.ts";
 
 // UI envelopes add task context after the public 16,000-character input limit.
@@ -58,7 +58,15 @@ function taskLabel(title: string): string {
 }
 
 function migrate(state: unknown): boolean {
-  if (!object(state) || ![1, 2, 3].includes(state.version as number)) return false;
+  if (!object(state) || ![1, 2, 3, 4].includes(state.version as number)) return false;
+  if (state.version !== 4) migrateRoles(state);
+  // Schema 5: a post's former text becomes its summary, unchanged.
+  requireValue(Array.isArray(state.messages), "Invalid legacy messages");
+  for (const message of state.messages) if (object(message) && Object.hasOwn(message, "text")) { message.summary = message.text; delete message.text; }
+  state.version = 5;
+  return true;
+}
+function migrateRoles(state: Record<string, unknown>): void {
   if (state.version !== 3) migrateTasks(state);
   // Schema 4: roles replace the special root ID; the creator's record becomes a main session.
   const root = state.root ?? "root";
@@ -67,7 +75,6 @@ function migrate(state: unknown): boolean {
   delete state.root;
   state.key = randomUUID();
   state.version = 4;
-  return true;
 }
 function migrateTasks(state: Record<string, unknown>): void {
   requireValue(object(state.tasks), "Invalid legacy state tasks");
@@ -89,7 +96,7 @@ function migrateTasks(state: Record<string, unknown>): void {
 function validate(state: unknown): asserts state is TeamState {
   requireValue(object(state), "Invalid state snapshot");
   id(state.id);
-  requireValue(state.version === 4 && text(state.key) && integer(state.limit, 1) && integer(state.depth) && object(state.members) && object(state.tasks) && Array.isArray(state.messages), "Invalid state snapshot schema");
+  requireValue(state.version === 5 && text(state.key) && integer(state.limit, 1) && integer(state.depth) && object(state.members) && object(state.tasks) && Array.isArray(state.messages), "Invalid state snapshot schema");
   const members = state.members;
   const names = new Set<string>(["main", "root", ...Object.keys(members)]);
   for (const [key, member] of Object.entries(members)) {
@@ -108,6 +115,7 @@ function validate(state: unknown): asserts state is TeamState {
     requireValue(member.role !== "main" || member.parent === undefined, "A main session has no parent");
     requireValue(member.handover === undefined || ["busy", "idle", "input"].includes(String(member.handover)), "Invalid member handover state");
     requireValue(member.promotion === undefined || (object(member.promotion) && ["stopped", "moved", "role", "entry"].includes(String(member.promotion.step)) && text(member.promotion.sessionFile)), "Invalid member promotion");
+    requireValue(member.waiting === undefined || (object(member.waiting) && Array.isArray(member.waiting.tasks) && member.waiting.tasks.every(task => typeof task === "string" && Object.hasOwn(state.tasks as object, task))), "Invalid member wait");
     requireValue(member.terminal === undefined || typeof member.terminal === "boolean", "Invalid member terminal flag");
     requireValue(member.needsInput === undefined || typeof member.needsInput === "boolean", "Invalid member input flag");
     requireValue(member.pid === undefined || integer(member.pid, 1), "Invalid member PID");
@@ -132,7 +140,8 @@ function validate(state: unknown): asserts state is TeamState {
     requireValue(task.completedAt === undefined || integer(task.completedAt), "Invalid task completion time");
     requireValue(task.dependencies.every(dep => typeof dep === "string" && dep !== key && Object.hasOwn(tasks, dep)) && new Set(task.dependencies).size === task.dependencies.length, "Invalid task dependencies");
     requireValue(task.owner === undefined || (typeof task.owner === "string" && Object.hasOwn(members, task.owner)), "Invalid task owner");
-    requireValue(task.creator === undefined || (typeof task.creator === "string" && Object.hasOwn(members, task.creator)), "Invalid task creator");
+    requireValue([task.creator, task.delegator].every(member => member === undefined || (typeof member === "string" && Object.hasOwn(members, member))), "Invalid task creator or delegator");
+    requireValue(task.outcome === undefined || (task.status === "done" && state.messages.some(message => object(message) && message.id === task.outcome && message.task === key)), "Invalid task outcome");
     requireValue(task.status !== "in_progress" || task.owner !== undefined, "In-progress task requires an owner");
     requireValue(task.status === "todo" || task.dependencies.every(dep => (tasks[dep] as Record<string, unknown>).status === "done"), "Active or done task has unfinished dependencies");
     edges[key] = task.dependencies;
@@ -150,9 +159,42 @@ function validate(state: unknown): asserts state is TeamState {
   let last = 0;
   const messageIds = new Set<string>();
   for (const message of state.messages) {
-    requireValue(object(message) && integer(message.seq, last + 1) && text(message.id) && !messageIds.has(message.id) && typeof message.from === "string" && Object.hasOwn(members, message.from) && Array.isArray(message.recipients) && message.recipients.every(recipient => typeof recipient === "string" && Object.hasOwn(members, recipient)) && new Set(message.recipients).size === message.recipients.length && text(message.text, maxMessageText) && typeof message.time === "string" && Number.isFinite(Date.parse(message.time)), "Invalid state message");
+    requireValue(object(message) && integer(message.seq, last + 1) && text(message.id) && !messageIds.has(message.id) && typeof message.from === "string" && Object.hasOwn(members, message.from) && Array.isArray(message.recipients) && message.recipients.every(recipient => typeof recipient === "string" && Object.hasOwn(members, recipient)) && new Set(message.recipients).size === message.recipients.length && text(message.summary, maxMessageText) && typeof message.time === "string" && Number.isFinite(Date.parse(message.time)), "Invalid state message");
+    requireValue((message.detail === undefined || text(message.detail)) && (message.task === undefined || (typeof message.task === "string" && Object.hasOwn(tasks, message.task))) && (message.replyTo === undefined || (typeof message.replyTo === "string" && messageIds.has(message.replyTo))) && (message.kind === undefined || (message.kind === "outcome" && message.task !== undefined)), "Invalid message detail or link");
     last = message.seq; messageIds.add(message.id);
   }
+}
+
+/**
+ * Appends a post. Attention goes to explicit recipients, the linked task's owner and delegator (else creator),
+ * and the replied-to post's author; never the sender, and never an implicit broadcast.
+ */
+function post(state: TeamState, actor: string, args: Pick<MessageArgs, "recipients" | "summary" | "detail" | "task" | "replyTo">, user = false): Message {
+  // A user's request is authored in a session but addressed to that session's own model.
+  const limit = user ? maxMessageText : 16000;
+  requireValue(text(args.summary, limit), `A post needs a nonempty summary of at most ${limit} characters`);
+  requireValue(args.detail === undefined || text(args.detail), "Detail must be nonempty and at most 16000 characters");
+  const original = args.replyTo === undefined ? undefined : state.messages.find(message => message.id === args.replyTo);
+  requireValue(args.replyTo === undefined || original, "Unknown post to reply to");
+  requireValue(!args.task || !original?.task || args.task === original.task, "A reply stays on the replied-to post's task");
+  const taskId = args.task ?? original?.task;
+  const task = taskId === undefined ? undefined : state.tasks[taskId];
+  requireValue(taskId === undefined || task, "Unknown task");
+  requireValue(args.recipients === undefined || Array.isArray(args.recipients), "Recipients must be unique known member names or IDs");
+  const members = Object.values(state.members);
+  // Names resolve to durable IDs; a stopped member still receives its post on resume.
+  const explicit = (args.recipients ?? []).map(recipient => typeof recipient === "string" ? members.find(member => member.id === recipient || member.name === recipient)?.id : undefined);
+  requireValue(new Set(explicit).size === explicit.length && explicit.every((recipient): recipient is string => recipient !== undefined), "Recipients must be unique known member names or IDs");
+  requireValue(explicit.length > 0 || task || original, "Name recipients, a task, or a post to reply to; posts are never broadcast");
+  const waiters = taskId === undefined ? [] : Object.values(state.members).filter(member => member.waiting?.tasks.includes(taskId)).map(member => member.id);
+  const routed = [...explicit, task?.owner, task?.delegator ?? task?.creator, original?.from, ...waiters];
+  const recipients = [...new Set(routed.filter((id): id is string => !!id && (id !== actor || (user && explicit.includes(id)))))];
+  const message: Message = { seq: (state.messages.at(-1)?.seq ?? 0) + 1, id: randomUUID(), from: actor, recipients, summary: args.summary, time: new Date().toISOString() };
+  if (args.detail !== undefined) message.detail = args.detail;
+  if (taskId !== undefined) message.task = taskId;
+  if (original) message.replyTo = original.id;
+  state.messages.push(message);
+  return message;
 }
 
 // Check every component rather than following a symlink into another home.
@@ -183,6 +225,11 @@ export function readState(dir: string): TeamState {
   } finally { closeSync(fd); }
 }
 
+/** Display names for members and tasks; their IDs are distinct UUIDs, so one map names both. */
+export function stateLabels(state: TeamState): Record<string, string> {
+  return Object.fromEntries([...Object.values(state.members).map(member => [member.id, memberName(member)]), ...Object.values(state.tasks).map(task => [task.id, `#${task.number} ${task.title}`])]);
+}
+
 /** Cache only display names, not histories; atomic snapshot replacements invalidate the cache. */
 export function createMemberLabels(): (dir: string) => Record<string, string> {
   let key: string | undefined, labels: Record<string, string>;
@@ -190,7 +237,7 @@ export function createMemberLabels(): (dir: string) => Record<string, string> {
     const file = join(dir, "state.json"), stat = lstatSync(file, { bigint: true });
     const next = `${file}:${stat.dev}:${stat.ino}:${stat.mtimeNs}:${stat.size}:${stat.mode}:${stat.uid}:${stat.nlink}`;
     if (next !== key) {
-      labels = Object.fromEntries(Object.values(readState(dir).members).map(member => [member.id, memberName(member)]));
+      labels = stateLabels(readState(dir));
       key = next;
     }
     return labels;
@@ -325,6 +372,12 @@ export class Store {
       }
       requireValue(args.id && Object.hasOwn(state.tasks, args.id), "Unknown task");
       const task = state.tasks[args.id];
+      if (args.action === "complete" && task.outcome) {
+        // A retried completion returns the original; a different outcome is a conflict, not a second post.
+        const published = state.messages.find(message => message.id === task.outcome)!;
+        requireValue(published.from === actor && published.summary === args.summary && published.detail === args.detail, "Task is already done with a different outcome; reopen it before completing again");
+        return taskView(state, task);
+      }
       requireValue(args.revision === undefined || (integer(args.revision) && args.revision === task.revision), "Stale or invalid task revision; read the task before retrying");
       if (args.action === "edit") {
         requireValue(task.status === "todo", "Only to-do tasks can be edited");
@@ -348,6 +401,10 @@ export class Store {
         requireValue(task.owner === actor, "Only the owner can complete this task");
         requireValue(task.status === "in_progress", "Only in-progress tasks can be completed; start it first");
         requireValue(args.acceptance === true, "Completion requires acceptance=true after checking acceptance criteria");
+        requireValue(text(args.summary), "Completion requires an outcome summary: what was done, how it was checked, and any caveats");
+        const outcome = post(state, actor, { summary: args.summary, detail: args.detail, task: task.id });
+        outcome.kind = "outcome";
+        task.outcome = outcome.id;
         task.status = "done";
         task.completedAt = Date.now();
       } else if (args.action === "release") {
@@ -362,7 +419,7 @@ export class Store {
         const dependents = Object.values(state.tasks).filter(other => other.dependencies.includes(task.id) && other.status !== "todo");
         requireValue(dependents.length === 0, `Cannot reopen task with active or done dependents: ${dependents.map(t => t.id).join(", ")}`);
         task.status = "todo";
-        delete task.completedAt;
+        delete task.completedAt; delete task.outcome;
       } else throw new Error("Unknown task action");
       task.revision++;
       return taskView(state, task);
@@ -371,17 +428,16 @@ export class Store {
 
   message(actor: string, args: MessageArgs, enveloped = false): Message | Message[] {
     requireValue(!this.closed && Object.hasOwn(this.state.members, actor), "Unknown actor or closed store");
-    if (args.action === "send") return this.update(state => {
-      const limit = enveloped ? maxMessageText : 16000;
-      requireValue(text(args.text, limit), `Message text must be nonempty and at most ${limit} characters`);
-      const members = Object.values(state.members);
-      requireValue(args.recipients === undefined || Array.isArray(args.recipients), "Recipients must be unique live member names or IDs");
-      const recipients = args.recipients === undefined ? members.filter(member => member.id !== actor && isLive(member)).map(member => member.id)
-        : args.recipients.map(recipient => typeof recipient === "string" ? members.find(member => member.id === recipient || member.name === recipient)?.id : undefined);
-      requireValue((args.recipients === undefined || recipients.length > 0) && new Set(recipients).size === recipients.length && recipients.every((recipient): recipient is string => recipient !== undefined && isLive(state.members[recipient])), "Recipients must be unique live member names or IDs");
-      const message = { seq: (state.messages.at(-1)?.seq ?? 0) + 1, id: randomUUID(), from: actor, recipients: [...recipients], text: args.text, time: new Date().toISOString() };
-      state.messages.push(message);
-      return structuredClone(message);
+    if (args.action === "send") return this.update(state => structuredClone(post(state, actor, args, enveloped)));
+    if (args.action === "wait") return this.update(state => {
+      const tasks = args.tasks ?? [];
+      requireValue(Array.isArray(tasks) && tasks.length <= 100 && tasks.every(task => Object.hasOwn(state.tasks, task)), "Wait tasks must be existing task IDs");
+      // Register and recheck in one mutation, so a post committed after the caller last looked still wakes it.
+      const after = args.after ?? state.members[actor].notified;
+      const ready = state.messages.filter(message => message.seq > after && (message.recipients.includes(actor) || (message.task !== undefined && tasks.includes(message.task))));
+      if (ready.length) delete state.members[actor].waiting;
+      else state.members[actor].waiting = { tasks: [...new Set(tasks)] };
+      return structuredClone(ready);
     });
     requireValue(args.action === "history" || args.action === "search", "Unknown message action");
     const after = args.after ?? 0, limit = args.limit ?? 20;
@@ -389,7 +445,7 @@ export class Store {
     if (args.action === "search") requireValue(text(args.query, 500), "Search requires a nonempty query (max 500)");
     const results = [];
     for (const message of this.state.messages) {
-      if (message.seq > after && (args.action !== "search" || message.text.includes(args.query!))) results.push(message);
+      if (message.seq > after && (args.action !== "search" || (message.summary.includes(args.query!) || !!message.detail?.includes(args.query!)))) results.push(message);
       if (results.length === limit) break;
     }
     return structuredClone(results);
