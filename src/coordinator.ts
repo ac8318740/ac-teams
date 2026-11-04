@@ -13,6 +13,7 @@ import { Store, processAlive, processIdentity } from "./store.ts";
 import { stateRoot } from "./config.ts";
 import { RpcAgent } from "./rpc-agent.ts";
 import { hostResources, type HostResources } from "./resources.ts";
+import { analysisPolicy } from "./analysis.ts";
 import { TerminalAgent, tmux } from "./terminal-agent.ts";
 import { authentic, isRecord, readLines, send } from "./connection.ts";
 import { validate } from "./schemas.ts";
@@ -89,6 +90,7 @@ export class Coordinator {
   private plans = new Map<string, SandboxPlan>();
   private releasing = new Map<string, Promise<void>>();
   private sessionDirs = new Map<string, string>();
+  private analysisPolicies = new Map<string, ReturnType<typeof analysisPolicy>>();
   private sandbox?: { status: SandboxStatus; at: number };
 
   private options: CoordinatorOptions;
@@ -340,7 +342,7 @@ export class Coordinator {
   }
   private publicMember(member: Member) {
     const { token: _token, identity: _identity, ...view } = member;
-    return view;
+    return member.role === "member" ? { ...view, analysis: member.analysis ?? "auto", analysisPolicy: this.analysisPolicies.get(member.id) } : view;
   }
   sandboxStatus(): SandboxStatus {
     if (!this.options.credentials) return { available: false, backend: "docker", reason: "This Pi root cannot broker provider credentials" };
@@ -449,7 +451,10 @@ export class Coordinator {
     if (!args.model || !args.model.includes("/")) throw new Error("A provider/model is required (normally inherited from the requesting member)");
     const resumed = args.action === "resume" ? state.members[args.id ?? ""] : undefined;
     if (args.action === "resume" && (!resumed || !resumed.sessionFile || !canControl(state, actor, resumed.id))) throw new Error("Resume requires a stopped member you control with a native session file");
-    if (resumed && isMain(resumed)) return this.resumeMain(resumed.id);
+    if (resumed && isMain(resumed)) {
+      if (args.analysis !== undefined) throw new Error("Analysis can only be set for teammate launches; a main session keeps its own environment");
+      return this.resumeMain(resumed.id);
+    }
     if (resumed && this.cleaning.has(resumed.id)) throw new Error("Worktree cleanup is running; cannot resume this member");
     if (resumed && (isLive(resumed) || (resumed.pid && processAlive(resumed.pid, resumed.identity)))) throw new Error("Cannot resume a live or uncertain member");
     const depth = resumed ? resumed.depth : parent.depth + 1;
@@ -474,6 +479,8 @@ export class Coordinator {
     const locked = resumed ? resumed.provider : parent.access?.network.allow ? parent.provider : undefined;
     if (access?.network.allow && locked && provider !== locked) throw new Error(`A member with restricted network access can only use ${locked} models`);
     const member: Member = resumed ? { ...resumed, token: randomUUID(), status: "starting", error: undefined, contextUsage: undefined, modelName: undefined, handover: undefined } : { id, name: args.name, role: "member", parent: actor, depth, token: randomUUID(), cwd, status: "starting", notified: 0, access, provider: access ? provider : undefined };
+    member.analysis = args.analysis ?? resumed?.analysis ?? "auto";
+    const policy = analysisPolicy(member);
     const resources = this.resources();
     for (const warning of resources.warnings) this.options.warning(warning);
     const assigned = args.task === undefined ? undefined : state.tasks[args.task];
@@ -483,6 +490,7 @@ export class Coordinator {
       next.members[id] = member;
       if (assigned) Object.assign(next.tasks[assigned.id], { owner: id, delegator: actor, revision: next.tasks[assigned.id].revision + 1 });
     });
+    this.analysisPolicies.set(id, policy);
     const brief = assigned ? `${args.brief}\n\nYou own team task ${taskName(assigned)} [${assigned.id}], delegated by ${memberName(parent)}. Start it, and finish with team_task complete and an outcome summary; that one call reports back.` : args.brief;
     this.publishStatus();
     member.model = args.model; member.thinking = args.thinking ?? "off";
@@ -513,7 +521,7 @@ export class Coordinator {
       const rpcArgs = [...(this.options.interactive ? [] : ["--mode", "rpc"]), "--session-dir", sessions, "-e", this.options.extension, "--provider", provider, "--model", modelId, "--thinking", args.thinking ?? "off"];
       if (resumed?.sessionFile) rpcArgs.push("--session", resumed.sessionFile);
       // ACSTACK_AGENT_ROLE tells ACStack hooks this is not a main session; children inherit it.
-      const identity = { HERDR_ENV: "0", ACSTACK_AGENT_ROLE: "member", AC_TEAMS_SOCKET: this.socketPath, AC_TEAMS_MEMBER: id, AC_TEAMS_TOKEN: member.token, AC_TEAMS_ACCESS: JSON.stringify(access ? { enforced: true, ...access } : { enforced: false }) };
+      const identity = { PI_LENS_WARM_ATTACH: policy.warmAttach, HERDR_ENV: "0", ACSTACK_AGENT_ROLE: "member", AC_TEAMS_SOCKET: this.socketPath, AC_TEAMS_MEMBER: id, AC_TEAMS_TOKEN: member.token, AC_TEAMS_ACCESS: JSON.stringify(access ? { enforced: true, ...access } : { enforced: false }) };
       const spawnOptions = access
         ? await this.sandboxed(id, access, member.cwd, provider, modelId, rpcArgs, identity, sessions)
         : { cwd: member.cwd, args: rpcArgs, command: this.options.command, env: { ...process.env, ...identity, AC_TEAMS_TERMINAL_SOCKET: join(this.store.dir, "t.sock") } };

@@ -69,6 +69,7 @@ export async function probe(config, request) {
   result.hostSecretEnv = process.env.AC_TEAMS_TEST_SECRET ?? null;
   result.terminalSocketEnv = process.env.AC_TEAMS_TERMINAL_SOCKET ?? null;
   result.accessEnv = process.env.AC_TEAMS_ACCESS ?? null;
+  result.warmAttachEnv = process.env.PI_LENS_WARM_ATTACH ?? null;
   result.fds = readdirSync("/proc/self/fd").map(fd => attempt(() => readlinkSync(`/proc/self/fd/${fd}`))).map(entry => entry.value ?? entry.code)
     .filter(target => typeof target === "string" && target.startsWith("/") && !target.startsWith("/dev/") && !target.startsWith("/proc/"));
   result.authFile = attempt(() => JSON.parse(readFileSync(`${config.agentDir}/auth.json`, "utf8")));

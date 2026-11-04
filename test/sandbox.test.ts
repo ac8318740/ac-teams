@@ -27,7 +27,8 @@ const team = (root: string, cwd: string, extra: Partial<CoordinatorOptions> = {}
 for (const interactive of [false, true]) {
   test(`enforced member cannot escape its grants (${interactive ? "native" : "RPC"})`, { skip, timeout: 180000 }, async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "sbx-")));
-    const previous = { HOME: process.env.HOME, AC_TEAMS_TEST_SECRET: process.env.AC_TEAMS_TEST_SECRET };
+    const previous = { HOME: process.env.HOME, AC_TEAMS_TEST_SECRET: process.env.AC_TEAMS_TEST_SECRET, PI_LENS_WARM_ATTACH: process.env.PI_LENS_WARM_ATTACH };
+    process.env.PI_LENS_WARM_ATTACH = "1";
     process.env.HOME = join(root, "home");
     process.env.AC_TEAMS_TEST_SECRET = "host-env-secret";
     const agentDir = join(root, "home/.pi/agent");
@@ -116,6 +117,7 @@ for (const interactive of [false, true]) {
       assert.equal(r.hostSecretEnv, null);
       assert.equal(r.terminalSocketEnv, null);
       assert.equal(JSON.parse(r.accessEnv).enforced, true);
+      assert.equal(r.warmAttachEnv, "0", "restricted members must not inherit host warm attach");
       assert.deepEqual(r.fds.filter((target: string) => !target.startsWith(memberRoot)), []);
       assert.match(r.escalate, /Write access .* exceeds/);
       assert.match(r.unsandboxedChild, /would expose|cwd must be inside|exceeds/);
