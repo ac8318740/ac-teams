@@ -49,6 +49,57 @@ for (const interactive of [false, true]) test(`members cannot report directly to
   } finally { await f.close(); if (previous === undefined) delete process.env.HERDR_ENV; else process.env.HERDR_ENV = previous; }
 });
 
+for (const interactive of [false, true]) test(`analysis launch policy preserves settings and resume preferences (${interactive ? "native" : "RPC"})`, async () => {
+  const previous = process.env.PI_LENS_WARM_ATTACH;
+  const f = await setup(2, 2, interactive);
+  try {
+    const settings = ["PI_LENS_HOME", "PILENS_DATA_DIR", "PI_LENS_CONFIG_PATH", "PATH"].map(key => [key, process.env[key]]);
+    const cases = [
+      { inherited: undefined, analysis: undefined, expected: "1", reason: "reuse requested" },
+      { inherited: "", analysis: "auto", expected: "1", reason: "reuse requested" },
+      { inherited: "1", analysis: "auto", expected: "1", reason: "reuse requested" },
+      { inherited: "0", analysis: "auto", expected: "0", reason: "separate: explicit opt-out" },
+      { inherited: "custom", analysis: "auto", expected: "custom", reason: "inherited setting unchanged" },
+      { inherited: "1", analysis: "separate", expected: "0", reason: "separate requested" },
+    ];
+    for (const [i, c] of cases.entries()) {
+      if (c.inherited === undefined) delete process.env.PI_LENS_WARM_ATTACH; else process.env.PI_LENS_WARM_ATTACH = c.inherited;
+      const member = await f.team.handle("root", "agent", { ...launch, name: `worker-${i}`, analysis: c.analysis }) as { id: string; pid: number; analysis: string; analysisPolicy: { warmAttach: string; reason: string } };
+      const env = readFileSync(`/proc/${member.pid}/environ`, "utf8").split("\0");
+      assert.ok(env.includes(`PI_LENS_WARM_ATTACH=${c.expected}`));
+      for (const [key, value] of settings) assert.equal(env.find(entry => entry.startsWith(`${key}=`)), value === undefined ? undefined : `${key}=${value}`);
+      assert.equal(process.env.PI_LENS_WARM_ATTACH, c.inherited, "launch must not change the parent environment");
+      assert.equal(member.analysis, c.analysis ?? "auto");
+      assert.deepEqual(member.analysisPolicy, { warmAttach: c.expected, reason: c.reason });
+      // Status describes this launch, not a later change in the coordinator environment.
+      process.env.PI_LENS_WARM_ATTACH = "changed-after-launch";
+      const status = await f.team.handle("root", "agent", { action: "status", id: member.id }) as typeof member;
+      assert.deepEqual(status.analysisPolicy, member.analysisPolicy);
+      const list = await f.team.handle("root", "agent", { action: "list" }) as { members: typeof member[] };
+      assert.deepEqual(list.members.find(entry => entry.id === member.id)?.analysisPolicy, member.analysisPolicy);
+      assert.equal(Object.hasOwn(status.analysisPolicy, "shared"), false);
+      const saved = JSON.parse(readFileSync(join(f.team.store.dir, "state.json"), "utf8")).members[member.id];
+      assert.equal(saved.analysis, c.analysis ?? "auto");
+      assert.equal(Object.hasOwn(saved, "analysisPolicy"), false, "only requested preferences are persisted");
+      await f.team.stopTree(member.id);
+      if (c.analysis === "separate") {
+        process.env.PI_LENS_WARM_ATTACH = "1";
+        const resume = { action: "resume", id: member.id, brief: "continue", model: "test/model" };
+        const retained = await f.team.handle("root", "agent", resume) as typeof member;
+        assert.equal(retained.analysis, "separate");
+        assert.ok(readFileSync(`/proc/${retained.pid}/environ`, "utf8").split("\0").includes("PI_LENS_WARM_ATTACH=0"));
+        await f.team.stopTree(member.id);
+        const overridden = await f.team.handle("root", "agent", { ...resume, analysis: "auto" }) as typeof member;
+        assert.equal(overridden.analysis, "auto");
+        assert.ok(readFileSync(`/proc/${overridden.pid}/environ`, "utf8").split("\0").includes("PI_LENS_WARM_ATTACH=1"));
+        await f.team.stopTree(member.id);
+      }
+    }
+    for (const analysis of ["shared", false, 1, null]) await assert.rejects(f.team.handle("root", "agent", { ...launch, analysis }), /Invalid agent request/);
+    for (const action of ["list", "status", "stop", "limits", "cleanup"]) await assert.rejects(f.team.handle("root", "agent", { action, analysis: "auto" }), /Analysis can only be set on launch or resume/);
+  } finally { await f.close(); if (previous === undefined) delete process.env.PI_LENS_WARM_ATTACH; else process.env.PI_LENS_WARM_ATTACH = previous; }
+});
+
 test("team attention aggregates busy members and questions, and clears on settle, stop, and exit", async () => {
   const f = await setup();
   try {
@@ -165,8 +216,10 @@ test("live idle members count; concurrency reserves slots and stop/resume keeps 
     const original = f.team.store.state.members[member.id];
     await f.team.handle("root", "agent", { action: "stop", id: member.id });
     assert.equal(f.team.live().length, 0);
+    f.team.store.update(state => { delete state.members[member.id].analysis; });
     await f.team.handle("root", "agent", { action: "resume", id: member.id, brief: "hello again", model: "test/model" });
     const resumed = f.team.store.state.members[member.id];
+    assert.equal(resumed.analysis, "auto", "older member records default to auto on resume");
     assert.equal(resumed.name, original.name);
     assert.equal(resumed.sessionId, original.sessionId);
     assert.equal(resumed.sessionFile, original.sessionFile);
@@ -687,6 +740,7 @@ test("main sessions control members and each other; members cannot touch a main 
     await until(() => f.team.store.state.members[member.id].status === "idle");
     await f.team.handle("root", "agent", { action: "stop", id: second.id });
     await until(() => f.team.store.state.members[second.id].status === "stopped");
+    await assert.rejects(f.team.handle("root", "agent", { action: "resume", id: second.id, brief: "x", model: "test/model", analysis: "separate" }), /a main session keeps its own environment/);
     await f.team.handle("root", "agent", { action: "resume", id: second.id, brief: "x", model: "test/model" });
     assert.deepEqual(launched, [second.id]);
     client = await mainClient(f.team, second.id);
@@ -729,7 +783,7 @@ test("a new owner resumes each member to its recorded state after a handover", a
   const f = await setup(10, 2, true);
   try {
     const second = await addMain(f.team, f.home);
-    const idle = await f.team.handle("root", "agent", launch) as { id: string; sessionFile: string };
+    const idle = await f.team.handle("root", "agent", { ...launch, analysis: "separate" }) as { id: string; sessionFile: string };
     const busy = await f.team.handle("root", "agent", { ...launch, name: "busy", brief: "WAIT" }) as { id: string; sessionFile: string };
     const asking = await f.team.handle("root", "agent", { ...launch, name: "asking" }) as { id: string; sessionFile: string };
     await until(() => f.team.store.state.members[idle.id].status === "idle" && f.team.store.state.members[asking.id].status === "idle" && f.team.store.state.members[busy.id].status === "busy");
@@ -745,6 +799,11 @@ test("a new owner resumes each member to its recorded state after a handover", a
       assert.equal(prompts(idle.sessionFile).at(-1), "hello", "idle members resume without a new prompt");
       assert.equal(next.store.state.members[asking.id].needsInput, true);
       assert.equal(next.store.state.members.root.status, "stopped");
+      const restored = next.store.state.members[idle.id];
+      assert.equal(restored.analysis, "separate");
+      assert.ok(readFileSync(`/proc/${restored.pid}/environ`, "utf8").split("\0").includes("PI_LENS_WARM_ATTACH=0"));
+      const status = await next.handle(second.id, "agent", { action: "status", id: idle.id }) as { analysisPolicy: { warmAttach: string } };
+      assert.equal(status.analysisPolicy.warmAttach, "0");
     } finally { await next.close(); }
   } finally { rmSync(f.home, { recursive: true, force: true }); }
 });

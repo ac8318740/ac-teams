@@ -59,6 +59,24 @@ test("snapshot persists, locks exclude owners, and close is idempotent", t => {
   reopened.close();
 });
 
+test("analysis preferences persist while older snapshots remain readable", t => {
+  const { home, store } = fixture(t);
+  assert.equal(store.state.members.child.analysis, undefined, "old snapshots have no analysis preference");
+  const path = join(store.dir, "state.json");
+  store.update(state => { state.members.child.analysis = "separate"; });
+  assert.equal(JSON.parse(readFileSync(path, "utf8")).members.child.analysis, "separate");
+  store.close();
+  const reopened = new Store(initial(), home);
+  try {
+    assert.equal(reopened.state.members.child.analysis, "separate");
+    assert.equal(reopened.state.members.other.analysis, undefined);
+  } finally { reopened.close(); }
+  const saved = JSON.parse(readFileSync(path, "utf8"));
+  saved.members.child.analysis = "shared";
+  writeFileSync(path, JSON.stringify(saved));
+  assert.throws(() => new Store(initial(), home), /Invalid member analysis preference/);
+});
+
 test("failed mutations preserve memory and durable state; malformed snapshots are refused", t => {
   const { home, store } = fixture(t);
   const before = readFileSync(join(store.dir, "state.json"), "utf8");
