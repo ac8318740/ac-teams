@@ -62,7 +62,7 @@ function toolSummary(data: unknown, theme: Theme, labels: Readonly<Record<string
     const value = data as Record<string, unknown>;
     if (Array.isArray(value.members)) return preview(value.members, `${value.members.length} members`, theme, labels);
     if (Array.isArray(value.tasks)) return preview(value.tasks, value.total === undefined ? `${value.tasks.length} tasks` : `${value.tasks.length} of ${value.total} tasks`, theme, labels);
-    const label = value.title ?? value.name ?? value.brief ?? value.text ?? value.query ?? (Array.isArray(value.recipients) ? undefined : value.id === undefined ? undefined : memberLabel(value.id, labels));
+    const label = value.title ?? value.name ?? value.brief ?? value.summary ?? value.text ?? value.query ?? (Array.isArray(value.recipients) ? undefined : value.id === undefined ? undefined : memberLabel(value.id, labels));
     const status = value.status === undefined ? "" : inline(value.status);
     const color = status === "done" ? "success"
       : status === "interrupted" ? "error"
@@ -75,7 +75,7 @@ function toolSummary(data: unknown, theme: Theme, labels: Readonly<Record<string
     }
     return parts.filter(Boolean).join(" ");
   }
-  return data === undefined || data === null ? "" : inline(data);
+  return data === undefined || data === null ? "" : memberLabel(data, labels);
 }
 
 export function teamToolRenderers(name: string, getLabels: MemberLabels = defaultLabels): ToolRenderers {
@@ -97,12 +97,12 @@ export function teamToolRenderers(name: string, getLabels: MemberLabels = defaul
         try { data = JSON.parse(text); } catch { data = text; }
       }
       const labels = getLabels();
-      const outcome = context.isError ? `error · ${inline(text)}` : toolSummary(data, theme, labels) || "done";
+      const waiting = action === "wait" && Array.isArray(data) && data.length === 0;
+      const outcome = context.isError ? `error · ${inline(text)}` : waiting ? "turn ended; the next post wakes this session" : toolSummary(data, theme, labels) || "done";
       const request = toolSummary(fields, theme, labels);
       const heading = `${theme.fg(context.isError ? "error" : "success", "●")} ${theme.fg("toolTitle", name)} · ${inline(action ?? "...")} → ${outcome}${request && !outcome.includes(request) ? ` · ${request}` : ""}`;
-      const requestJSON = cleanText(JSON.stringify(context.args, null, 2));
       const responseJSON = cleanText(result.details === undefined ? text : JSON.stringify(result.details, null, 2));
-      const hiddenLines = requestJSON.split("\n").length + responseJSON.split("\n").length + 2;
+      const hiddenLines = responseJSON.split("\n").length;
       const hint = theme.fg("muted", options.expanded ? " (" : ` … +${hiddenLines} lines (`)
         + keyHint("app.tools.expand", options.expanded ? "to collapse" : "to expand") + theme.fg("muted", ")");
       const row = new Container();
@@ -117,9 +117,6 @@ export function teamToolRenderers(name: string, getLabels: MemberLabels = defaul
         },
       });
       if (options.expanded) {
-        row.addChild(new Text(theme.fg("muted", "Request"), context.outputPad, 0));
-        row.addChild(new Text(requestJSON, context.outputPad, 0));
-        row.addChild(new Text(theme.fg("muted", "Response"), context.outputPad, 0));
         row.addChild(new Text(responseJSON, context.outputPad, 0));
       }
       return row;
@@ -129,12 +126,15 @@ export function teamToolRenderers(name: string, getLabels: MemberLabels = defaul
 
 export function teamMessageRenderer(getLabels: MemberLabels = defaultLabels): MessageRenderer {
   return (message, { expanded }, theme) => {
-    const details = message.details as { through?: number; messages?: { from: string; text: string; recipients: string[] }[] } | undefined;
-    const recent = details?.messages?.at(-1);
+    const details = message.details as { through?: number; messages?: { from: string; summary: string; recipients: string[]; task?: string; kind?: string }[] } | undefined;
+    const posts = details?.messages ?? [], recent = posts.at(-1);
+    const more = posts.length > 1 ? ` (+${posts.length - 1} more)` : "";
     const labels = getLabels();
     const name = (id: string) => memberLabel(id, labels);
-    const preview = recent ? `${name(recent.from)} → ${recent.recipients.map(name).join(", ")} · ${recent.text.split("\n")[0]}` : `Updates through ${details?.through ?? "unknown"}`;
-    return entry("Team message", details ?? { content: message.content }, expanded, theme, false, preview);
+    // Lead with what happened: "count-a completed #1 Count lines · 37 lines", or "count-a → Main · #1 … · question".
+    const what = recent && (recent.kind === "outcome" && recent.task ? `${name(recent.from)} completed ${name(recent.task)}` : `${name(recent.from)} → ${recent.recipients.map(name).join(", ")}${recent.task ? ` · ${name(recent.task)}` : ""}`);
+    const preview = recent ? `${what} · ${recent.summary.split("\n")[0]}${more}` : `Updates through ${details?.through ?? "unknown"}`;
+    return entry("ac-teams", details ?? { content: message.content }, expanded, theme, false, preview);
   };
 }
 

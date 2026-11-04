@@ -9,7 +9,7 @@ import { Store, processAlive, processIdentity, createMemberLabels } from "../src
 import type { TeamState, Task, Message } from "../src/types.ts";
 
 function initial(): TeamState {
-  return { version: 4, id: "team", key: "key", limit: 5, depth: 3, tasks: {}, messages: [], members: {
+  return { version: 5, id: "team", key: "key", limit: 5, depth: 3, tasks: {}, messages: [], members: {
     root: { id: "root", role: "main", depth: 0, token: "secret", cwd: "/tmp", status: "idle", notified: 0 },
     child: { id: "child", role: "member", parent: "root", depth: 1, token: "secret2", cwd: "/tmp", status: "idle", notified: 0 },
     other: { id: "other", role: "member", parent: "root", depth: 1, token: "secret3", cwd: "/tmp", status: "idle", notified: 0 },
@@ -92,46 +92,79 @@ test("task ownership, frozen edges, and interrupted-descendant release stay sepa
   store.task("root", { action: "claim", id: a.id });
   store.task("root", { action: "start", id: a.id });
   assert.throws(() => store.task("root", { action: "complete", id: a.id }), /acceptance/);
-  store.task("root", { action: "complete", id: a.id, acceptance: true });
+  store.task("root", { action: "complete", id: a.id, acceptance: true, summary: "A done" });
   store.task("root", { action: "release", id: b.id });
   store.task("other", { action: "claim", id: b.id });
   assert.equal(store.state.tasks[b.id].owner, "other");
   assert.throws(() => store.task("unknown", { action: "list" }));
 });
 
-test("messages validate recipient sets atomically and provide bounded literal cursor searches", t => {
+test("posts route to named recipients, never broadcast, and provide bounded literal cursor searches", t => {
   const { store } = fixture(t);
   store.update(s => { s.members.other.status = "stopped"; });
-  assert.throws(() => store.message("root", { action: "send", text: "no", recipients: ["child", "other"] }));
-  assert.throws(() => store.message("root", { action: "send", text: "no", recipients: ["child", "child"] }));
+  assert.throws(() => store.message("root", { action: "send", summary: "no", recipients: ["child", "unknown"] }), /known member/);
+  assert.throws(() => store.message("root", { action: "send", summary: "no", recipients: ["child", "child"] }));
+  assert.throws(() => store.message("root", { action: "send", summary: "no" }), /never broadcast/);
   assert.equal(store.state.messages.length, 0);
-  const first = store.message("root", { action: "send", text: "literal .*" }) as Message;
-  assert.deepEqual(first.recipients, ["child"]);
-  const second = store.message("child", { action: "send", text: "next" }) as Message;
+  const first = store.message("root", { action: "send", summary: "literal .*", recipients: ["root", "child", "other"] }) as Message;
+  assert.deepEqual(first.recipients, ["child", "other"], "a stopped recipient keeps its post; the sender is excluded");
+  const second = store.message("child", { action: "send", summary: "next", replyTo: first.id }) as Message;
+  assert.deepEqual(second.recipients, ["root"], "a reply reaches the replied-to author");
   assert.equal(second.seq, first.seq + 1);
   assert.notEqual(second.id, first.id);
   assert.deepEqual(store.message("other", { action: "search", query: ".*" }), [first]);
   assert.deepEqual(store.message("other", { action: "history", after: first.seq, limit: 1 }), [second]);
-  assert.throws(() => store.message("root", { action: "send", text: "x".repeat(16001) }));
+  assert.throws(() => store.message("root", { action: "send", recipients: ["child"], summary: "x".repeat(16001) }));
   assert.throws(() => store.message("root", { action: "history", limit: 101 }));
 });
 
 test("message aliases resolve to durable IDs and reject invalid sets atomically", t => {
   const { store } = fixture(t);
   store.update(s => { s.members.child.name = "oom-review"; s.members.other.name = "tests"; });
-  const sent = store.message("root", { action: "send", recipients: ["oom-review", "other"], text: "Review" }) as Message;
+  const sent = store.message("root", { action: "send", recipients: ["oom-review", "other"], summary: "Review" }) as Message;
   assert.deepEqual(sent.recipients, ["child", "other"]);
   assert.deepEqual(store.state.messages[0], sent);
   assert.deepEqual(JSON.parse(readFileSync(join(store.dir, "state.json"), "utf8")).messages[0].recipients, ["child", "other"]);
-  assert.deepEqual((store.message("child", { action: "send", recipients: ["root"], text: "Done" }) as Message).recipients, ["root"]);
+  assert.deepEqual((store.message("child", { action: "send", recipients: ["root"], summary: "Done" }) as Message).recipients, ["root"]);
   const before = readFileSync(join(store.dir, "state.json"), "utf8");
-  for (const recipients of [["child", "oom-review"], ["oom-review", "oom-review"], ["oom-review", "missing"], ["OOM-review"], ["toString"], []]) {
-    assert.throws(() => store.message("root", { action: "send", recipients, text: "No" }), /Recipients/);
+  for (const recipients of [["child", "oom-review"], ["oom-review", "oom-review"], ["oom-review", "missing"], ["OOM-review"], ["toString"]]) {
+    assert.throws(() => store.message("root", { action: "send", recipients, summary: "No" }), /Recipients/);
     assert.equal(readFileSync(join(store.dir, "state.json"), "utf8"), before);
   }
   store.update(s => { s.members.child.status = "stopped"; });
-  assert.throws(() => store.message("root", { action: "send", recipients: ["oom-review"], text: "No" }), /Recipients/);
-  assert.deepEqual((store.message("root", { action: "send", text: "Broadcast" }) as Message).recipients, ["other"]);
+  assert.deepEqual((store.message("root", { action: "send", recipients: ["oom-review"], summary: "On resume" }) as Message).recipients, ["child"], "a stopped member keeps its post for resume");
+});
+
+test("task posts reach owner and delegator; completion publishes its outcome atomically and idempotently", t => {
+  const { home, store } = fixture(t);
+  const task = store.task("root", { action: "create", title: "A", description: "A" }) as Task;
+  store.update(s => { s.tasks[task.id].owner = "child"; s.tasks[task.id].delegator = "other"; });
+  const question = store.message("child", { action: "send", summary: "Which parser?", task: task.id }) as Message;
+  assert.deepEqual(question.recipients, ["other"], "the delegator, not the creator, receives the owner's question");
+  const answer = store.message("other", { action: "send", summary: "The new one", replyTo: question.id }) as Message;
+  assert.equal(answer.task, task.id, "a reply inherits its task");
+  assert.deepEqual(answer.recipients, ["child"]);
+  const other = store.task("root", { action: "create", title: "B", description: "B" }) as Task;
+  assert.throws(() => store.message("other", { action: "send", summary: "x", replyTo: question.id, task: other.id }), /stays on/);
+  store.task("child", { action: "start", id: task.id });
+  const before = readFileSync(join(store.dir, "state.json"), "utf8");
+  assert.throws(() => store.task("child", { action: "complete", id: task.id, acceptance: true }), /outcome summary/);
+  assert.equal(readFileSync(join(store.dir, "state.json"), "utf8"), before, "a refused completion writes nothing");
+  const done = store.task("child", { action: "complete", id: task.id, acceptance: true, summary: "Parsed", detail: "All 12 cases" }) as Task;
+  const outcome = store.state.messages.at(-1)!;
+  assert.equal(done.outcome, outcome.id);
+  assert.deepEqual([outcome.summary, outcome.detail, outcome.task, outcome.recipients], ["Parsed", "All 12 cases", task.id, ["other"]]);
+  const count = store.state.messages.length;
+  assert.deepEqual(store.task("child", { action: "complete", id: task.id, acceptance: true, summary: "Parsed", detail: "All 12 cases" }), done, "a retry returns the original");
+  assert.throws(() => store.task("child", { action: "complete", id: task.id, acceptance: true, summary: "Different" }), /different outcome/);
+  assert.equal(store.state.messages.length, count);
+  store.task("child", { action: "reopen", id: task.id });
+  assert.equal(store.state.tasks[task.id].outcome, undefined);
+  assert.equal(store.state.messages.length, count, "reopening keeps the published post");
+  store.close();
+  const reopened = new Store(initial(), home);
+  assert.equal(reopened.state.tasks[task.id].delegator, "other");
+  reopened.close();
 });
 
 test("paths and process locks fail closed", t => {
@@ -228,7 +261,7 @@ test("task and message results stay bounded", t => {
     for (let i = 0; i < 105; i++) {
       const id = `task-${i}`;
       s.tasks[id] = { id, number: i + 1, label: "A", revision: 1, title: "A", description: "B", dependencies: [], status: "todo" };
-      s.messages.push({ seq: i + 1, id: `message-${i}`, from: "root", recipients: ["child"], text: "text", time: new Date().toISOString() });
+      s.messages.push({ seq: i + 1, id: `message-${i}`, from: "root", recipients: ["child"], summary: "text", time: new Date().toISOString() });
     }
   });
   const tasks = store.task("root", { action: "list" }) as { tasks: Task[]; total: number };
@@ -288,12 +321,12 @@ test("schema 3 migrates the root record to a main session and every other record
   writeFileSync(path, JSON.stringify(legacy));
   const reopened = new Store(initial(), home);
   t.after(() => reopened.close());
-  assert.equal(reopened.state.version, 4);
+  assert.equal(reopened.state.version, 5);
   assert.equal((reopened.state as unknown as Record<string, unknown>).root, undefined);
   assert.match(reopened.state.key, /^[0-9a-f-]{36}$/);
   assert.deepEqual(Object.fromEntries(Object.values(reopened.state.members).map(member => [member.id, member.role])), { root: "main", child: "member", other: "member" });
   assert.equal(Object.values(reopened.state.tasks)[0].title, "Keep me");
-  assert.equal(JSON.parse(readFileSync(path, "utf8")).version, 4, "the migration is written back");
+  assert.equal(JSON.parse(readFileSync(path, "utf8")).version, 5, "the migration is written back");
 });
 
 test("v2 tasks gain durable numbers and initial labels without changing existing work", t => {
@@ -311,7 +344,7 @@ test("v2 tasks gain durable numbers and initial labels without changing existing
   const reopened = new Store(initial(), home);
   assert.deepEqual(reopened.state.tasks[first.id], { ...legacy.tasks[first.id], number: 1, label: "Run complete parser" });
   assert.deepEqual(reopened.state.tasks[second.id], { ...legacy.tasks[second.id], number: 2, label: "Review" });
-  assert.equal(reopened.state.version, 4);
+  assert.equal(reopened.state.version, 5);
   const migrated = readFileSync(path, "utf8");
   reopened.close();
   const again = new Store(initial(), home);
@@ -335,13 +368,27 @@ test("optional revision checks reject stale task mutations and completion requir
   const claimed = store.task("child", { action: "claim", id: created.id, revision: edited.revision }) as Task;
   assert.equal(claimed.revision, edited.revision + 1);
   assert.throws(() => store.task("child", { action: "release", id: created.id, revision: edited.revision }), /revision/i);
-  assert.throws(() => store.task("child", { action: "complete", id: created.id, revision: edited.revision, acceptance: true }), /revision/i);
-  assert.throws(() => store.task("child", { action: "complete", id: created.id, acceptance: true }), /in-progress/i);
+  assert.throws(() => store.task("child", { action: "complete", id: created.id, revision: edited.revision, acceptance: true, summary: "Done" }), /revision/i);
+  assert.throws(() => store.task("child", { action: "complete", id: created.id, acceptance: true, summary: "Done" }), /in-progress/i);
   const started = store.task("child", { action: "start", id: created.id, revision: claimed.revision }) as Task;
   assert.throws(() => store.task("child", { action: "complete", id: created.id, revision: started.revision }), /acceptance/i);
   assert.throws(() => store.task("child", { action: "complete", id: created.id, acceptance: false }), /acceptance/i);
   assert.equal(store.state.tasks[created.id].revision, started.revision);
-  const completed = store.task("child", { action: "complete", id: created.id, revision: started.revision, acceptance: true }) as Task;
+  const completed = store.task("child", { action: "complete", id: created.id, revision: started.revision, acceptance: true, summary: "Done" }) as Task;
   assert.equal(completed.status, "done");
   assert.equal(completed.revision, started.revision + 1);
+});
+
+test("schema 4 posts keep their text as the summary, unchanged", t => {
+  const { home, store } = fixture(t);
+  const path = join(store.dir, "state.json");
+  const legacy = JSON.parse(readFileSync(path, "utf8"));
+  store.close();
+  legacy.version = 4;
+  legacy.messages = [{ seq: 1, id: "m1", from: "root", recipients: ["child"], text: "Line one\nline two", time: new Date().toISOString() }];
+  writeFileSync(path, JSON.stringify(legacy));
+  const reopened = new Store(initial(), home);
+  t.after(() => reopened.close());
+  assert.equal(reopened.state.version, 5);
+  assert.deepEqual([reopened.state.messages[0].summary, "text" in reopened.state.messages[0]], ["Line one\nline two", false]);
 });

@@ -114,7 +114,7 @@ test("footer snapshots omit history while the panel still loads messages and com
   try {
     await f.event("session_start");
     await f.execute("team_task", { action: "create", title: "Keep full tasks", description: "Acceptance criteria" });
-    await f.execute("team_message", { action: "send", recipients: ["root"], text: "Keep this message" });
+    await f.execute("team_message", { action: "send", recipients: ["root"], summary: "Keep this message" });
     const before = message.mock.calls.length;
     await f.event("resources_discover");
     const end = Date.now() + 2000;
@@ -124,7 +124,7 @@ test("footer snapshots omit history while the panel still loads messages and com
     await f.commands.get("teams")!.handler("panel", f.ctx);
     assert.equal(message.mock.calls.length, before + 1);
     assert.equal(message.mock.calls.at(-1)!.arguments[1].action, "history");
-    assert.equal((message.mock.calls.at(-1)!.result as { text: string }[])[0].text, "Keep this message");
+    assert.equal((message.mock.calls.at(-1)!.result as { summary: string }[])[0].summary, "Keep this message");
   } finally { await f.close(); }
 });
 
@@ -223,7 +223,7 @@ test("team tools guide solo planning and task-backed delegation without tracking
       const tool = f.tools.get(name)!;
       const guidelines = tool.promptGuidelines!.join(" ");
       assert.match(guidelines, /Before delegating a deliverable through team_agent, create or reuse a team_task/);
-      assert.match(guidelines, /include its ID in the member's brief/);
+      assert.match(guidelines, /pass it as the launch task/);
       assert.match(guidelines, /not create one task per teammate/);
     }
     const agentGuidance = f.tools.get("team_agent")!.promptGuidelines!.join(" ");
@@ -257,7 +257,7 @@ test("task batches and lists keep model output compact while read and details re
     assert.ok(text(read).includes(batch.tasks[0].description));
     await call({ action: "start", id: batch.tasks[0].id });
     await assert.rejects(call({ action: "complete", id: batch.tasks[0].id }), /acceptance/);
-    await call({ action: "complete", id: batch.tasks[0].id, acceptance: true });
+    await call({ action: "complete", id: batch.tasks[0].id, acceptance: true, summary: "Inspected" });
     await assert.rejects(call({ action: "list", tasks: [{ title: "Wrong action" }] }), /create/);
   } finally { await f.close(); }
 });
@@ -267,21 +267,24 @@ test("message sends return receipts while history and search preserve the full m
   try {
     await f.event("session_start");
     const tool = f.tools.get("team_message")!;
-    const sent = await tool.execute(randomUUID(), { action: "send", text: "unique message body" }, new AbortController().signal, undefined, f.ctx);
+    const sent = await tool.execute(randomUUID(), { action: "send", recipients: ["root"], summary: "unique message body", detail: "supporting detail" }, new AbortController().signal, undefined, f.ctx);
     const receipt = sent.details as { seq: number; id: string; recipients: string[] };
     assert.deepEqual(Object.keys(receipt).sort(), ["id", "recipients", "seq"]);
     assert.equal(receipt.seq, 1);
     assert.equal(typeof receipt.id, "string");
     assert.deepEqual(receipt.recipients, []);
     assert.deepEqual(sent.content, [{ type: "text", text: JSON.stringify(receipt) }]);
-    assert.match(tool.promptGuidelines!.join(" "), /Do not poll team_message history/);
-    const history = await f.execute("team_message", { action: "history" }) as { seq: number; id: string; text: string; from: string; time: string }[];
+    assert.match(tool.promptGuidelines!.join(" "), /never poll history/);
+    const history = await f.execute("team_message", { action: "history" }) as { seq: number; id: string; summary: string; detail: string; from: string; time: string }[];
     assert.equal(history[0].id, receipt.id);
     assert.equal(history[0].seq, receipt.seq);
-    assert.equal(history[0].text, "unique message body");
+    assert.equal(history[0].summary, "unique message body");
+    assert.equal(history[0].detail, "supporting detail");
     assert.equal(typeof history[0].from, "string");
     assert.equal(typeof history[0].time, "string");
     assert.deepEqual(await f.execute("team_message", { action: "search", query: "unique message" }), history);
+    assert.deepEqual(await f.execute("team_message", { action: "search", query: "supporting" }), history, "search covers detail");
+    await assert.rejects(f.execute("team_message", { action: "send", summary: "to nobody" }), /never broadcast/);
     assert.deepEqual(await f.execute("team_message", { action: "history", after: receipt.seq, limit: 10 }), []);
   } finally { await f.close(); }
 });
@@ -293,7 +296,7 @@ test("message tool accepts aliases and renders resolved recipients by name", asy
     await f.event("session_start");
     const member = await f.execute("team_agent", { action: "launch", name: "oom-review", brief: "WAIT" }) as { id: string };
     const tool = f.tools.get("team_message")!;
-    const args = { action: "send", recipients: ["oom-review"], text: "Please review" };
+    const args = { action: "send", recipients: ["oom-review"], summary: "Please review" };
     const sent = await tool.execute(randomUUID(), args, new AbortController().signal, undefined, f.ctx);
     assert.deepEqual((sent.details as { recipients: string[] }).recipients, [member.id]);
     const context = { args, outputPad: 0, isError: false } as Parameters<NonNullable<ToolRenderers["renderResult"]>>[3];
@@ -323,23 +326,24 @@ test("tool wiring refuses malformed requests and preserves task acceptance check
     await assert.rejects(f.execute("team_task", { action: "complete", id: task.id, acceptance: true }), /in-progress/);
     await f.execute("team_task", { action: "start", id: task.id });
     await assert.rejects(f.execute("team_task", { action: "complete", id: task.id }), /acceptance/);
-    const completed = await f.execute("team_task", { action: "complete", id: task.id, acceptance: true }) as { status: string };
+    await assert.rejects(f.execute("team_task", { action: "complete", id: task.id, acceptance: true }), /outcome summary/);
+    const completed = await f.execute("team_task", { action: "complete", id: task.id, acceptance: true, summary: "Parser verified" }) as { status: string };
     assert.equal(completed.status, "done");
     await f.execute("team_task", { action: "release", id: task.id });
     await assert.rejects(f.execute("team_task", { action: "claim", id: task.id }), /reopen/);
     const reopened = await f.execute("team_task", { action: "reopen", id: task.id }) as { status: string; owner?: string };
     assert.equal(reopened.status, "todo");
     assert.equal(reopened.owner, undefined);
-    await f.execute("team_message", { action: "send", text: "persisted, with no recipients" });
-    const history = await f.execute("team_message", { action: "history" }) as { text: string }[];
-    assert.equal(history[0].text, "persisted, with no recipients");
+    const history = await f.execute("team_message", { action: "history" }) as { summary: string; task: string }[];
+    assert.equal(history[0].summary, "Parser verified");
+    assert.equal(history[0].task, task.id);
   } finally { await f.close(); }
 });
 
 /** Writes a team where this session is the main session "second", beside the creator and one stopped member. */
 function seedTeam(f: ReturnType<typeof fixture>, sessionId = f.id) {
   const team = randomUUID();
-  const store = new Store({ version: 4, id: team, key: randomUUID(), limit: 10, depth: 2, tasks: {}, messages: [], members: {
+  const store = new Store({ version: 5, id: team, key: randomUUID(), limit: 10, depth: 2, tasks: {}, messages: [], members: {
     root: { id: "root", role: "main", depth: 0, token: "a", cwd: f.home, status: "stopped", notified: 0, sessionId: randomUUID() },
     second: { id: "second", name: "main-2", role: "main", depth: 0, token: "b", cwd: f.home, status: "stopped", notified: 0, sessionId },
     w1: { id: "w1", name: "worker", role: "member", parent: "root", depth: 1, token: "c", cwd: f.home, status: "stopped", notified: 0 },
@@ -399,5 +403,31 @@ test("/teams join adds this session as a main session and writes the team entry"
     const status = await f.execute("team_agent", { action: "list" }) as { members: { id: string; role?: string; sessionId?: string }[] };
     assert.equal(status.members.find(member => member.sessionId === f.id)?.role, "main");
     assert.match(String((f.messages.at(-1) as { content: string }).content), /Joined team/);
+  } finally { await f.close(); }
+});
+
+async function until(check: () => boolean) {
+  const end = Date.now() + 5000;
+  while (!check()) { if (Date.now() > end) throw new Error("Condition timed out"); await delay(10); }
+}
+
+test("notices steer in summaries once, are acknowledged only after persistence, and a wait with nothing new ends the turn", async () => {
+  const f = fixture();
+  try {
+    const task = await f.execute("team_task", { action: "create", title: "Review", description: "Review" }) as { id: string };
+    const member = await f.execute("team_agent", { action: "launch", name: "worker", model: "test/model", brief: "REPORT:Found the bug", task: task.id }) as { id: string };
+    const notices = () => f.messages.filter(message => (message as { customType?: string }).customType === "ac-teams") as { content: string; details: { through: number } }[];
+    await until(() => notices().length === 1);
+    assert.match(notices()[0].content, /Found the bug/);
+    const wait = await f.tools.get("team_message")!.execute(randomUUID(), { action: "wait", tasks: [task.id] }, new AbortController().signal, undefined, f.ctx) as { terminate?: boolean; details: unknown[] };
+    assert.deepEqual([wait.details, wait.terminate], [[], true], "a post already shown in a notice does not end the wait again");
+    const missed = await f.tools.get("team_message")!.execute(randomUUID(), { action: "wait", tasks: [task.id], after: 0 }, new AbortController().signal, undefined, f.ctx) as { terminate?: boolean; details: unknown[] };
+    assert.deepEqual([missed.details.length, missed.terminate], [1, false], "a post after the caller's cursor returns at once instead of sleeping");
+    f.entries.push({ type: "custom_message", id: randomUUID(), customType: "ac-teams", data: undefined, details: notices()[0].details } as never);
+    await f.event("turn_end");
+    const idle = await f.tools.get("team_message")!.execute(randomUUID(), { action: "wait", tasks: [task.id] }, new AbortController().signal, undefined, f.ctx) as { terminate?: boolean; details: unknown[] };
+    assert.deepEqual([idle.details, idle.terminate], [[], true]);
+    await f.execute("team_message", { action: "send", recipients: [member.id], summary: "Thanks" });
+    assert.equal(notices().length, 1, "the sender's own post does not notify it");
   } finally { await f.close(); }
 });

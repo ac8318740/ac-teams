@@ -30,7 +30,7 @@ test("each team tool uses one row with a dot, action, arguments, and result", ()
   for (const [name, args, result, expected] of [
     ["team_agent", { action: "launch", brief: "Review tests" }, { id: "member-1", status: "busy" }, /busy/],
     ["team_task", { action: "create", title: "Fix spacing" }, { id: "task-1", title: "Fix spacing", status: "todo" }, /todo/],
-    ["team_message", { action: "send", recipients: ["member-1"], text: "Please review" }, { seq: 7 }, /seq.*7/],
+    ["team_message", { action: "send", recipients: ["member-1"], summary: "Please review" }, { seq: 7 }, /seq.*7/],
   ] as const) {
     const component = row(name, args);
     const pending = lines(component);
@@ -63,10 +63,8 @@ test("long and multiline arguments stay one line at narrow widths without losing
   }
   component.setExpanded(true);
   const expanded = lines(component, 2000).map(line => line.slice(1).trimEnd()).join("\n");
-  assert.ok(expanded.includes(JSON.stringify(args, null, 2)));
   assert.ok(expanded.includes(JSON.stringify(result, null, 2)));
-  assert.match(expanded, /Request/);
-  assert.match(expanded, /Response/);
+  assert.ok(!expanded.includes('"brief"'), "Pi already shows the call; the row never repeats it");
   component.setExpanded(false);
   assert.equal(lines(component).length, 2);
 });
@@ -79,7 +77,7 @@ test("clicking a completed row expands and collapses through Pi's native mouse r
   assert.ok(x > 0, "expansion hint is present and clickable");
   const click = { type: "click", button: "left", x, y: 1, width: 120, height: 2, screenX: x, screenY: 1, shift: false, alt: false, ctrl: false } as const;
   assert.equal(component.handleMouse(click)?.handled, true);
-  assert.match(lines(component).join("\n"), /Response/);
+  assert.ok(lines(component).join("\n").includes('"total": 1'));
   component.handleMouse(click);
   assert.equal(lines(component).length, 2);
 });
@@ -96,8 +94,7 @@ test("collapsed task lists preview titles and statuses, never empty request JSON
   assert.match(collapsed, /\[todo\] Fix spacing/);
   assert.match(collapsed, /\[done\] Check clicks/);
   assert.doesNotMatch(collapsed, /[{}▸▾]/);
-  const detailLines = JSON.stringify({ action: "list" }, null, 2).split("\n").length
-    + JSON.stringify({ tasks, total: 2 }, null, 2).split("\n").length + 2;
+  const detailLines = JSON.stringify({ tasks, total: 2 }, null, 2).split("\n").length;
   assert.ok(collapsed.includes(`+${detailLines} lines`));
 });
 

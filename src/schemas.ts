@@ -13,6 +13,7 @@ export const AgentSchema = Type.Object({
   worktree: Type.Optional(Type.Boolean()), base: Type.Optional(id), target: Type.Optional(id),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
   depth: Type.Optional(Type.Integer({ minimum: 0, maximum: 10 })),
+  task: Type.Optional(Type.String({ minLength: 1, maxLength: 128, description: "Launch only: an existing to-do task the new member owns, with you as its delegator. Its activity reaches you; include its goal in the brief." })),
   access: Type.Optional(Type.Object({
     read: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 4096 }), { maxItems: 32 })),
     write: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 4096 }), { maxItems: 32 })),
@@ -32,12 +33,19 @@ export const TaskSchema = Type.Object({
   offset: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
   action: Type.Union(["create", "list", "read", "edit", "claim", "start", "release", "complete", "reopen"].map(v => Type.Literal(v))),
   id: Type.Optional(id), ...taskFields,
+  summary: Type.Optional(Type.String({ minLength: 1, maxLength: 16000, description: "Complete: the outcome, published atomically with done: what was done, how it was checked, and caveats. Start with the result itself (e.g. 37 lines); the first line is the one people see. Complete enough that the delegator can act without reading detail." })),
+  detail: Type.Optional(Type.String({ minLength: 1, maxLength: 16000, description: "Complete: optional supporting detail, read on demand." })),
   tasks: Type.Optional(Type.Array(Type.Object({ ...taskFields, title: Type.String({ minLength: 1, maxLength: 500 }) }, { additionalProperties: false }), { minItems: 1, maxItems: 100, description: "Create several tasks atomically. Use instead of top-level task fields. Dependencies must refer to existing task IDs, not items in this batch." })),
 }, { additionalProperties: false });
 export const MessageSchema = Type.Object({
-  action: Type.Union(["send", "history", "search"].map(v => Type.Literal(v))),
-  recipients: Type.Optional(Type.Array(id, { minItems: 1, maxItems: 100, uniqueItems: true, description: "Exact teammate names or member IDs. Each must resolve to a different live member. Omit to notify all other live members." })),
-  text: Type.Optional(text), query: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+  action: Type.Union(["send", "history", "search", "wait"].map(v => Type.Literal(v))),
+  tasks: Type.Optional(Type.Array(id, { maxItems: 100, uniqueItems: true, description: "Wait: also wake on posts linked to these tasks, e.g. ones you delegated." })),
+  recipients: Type.Optional(Type.Array(id, { minItems: 1, maxItems: 100, uniqueItems: true, description: "Exact teammate names or member IDs." })),
+  summary: Type.Optional(Type.String({ minLength: 1, maxLength: 16000, description: "Send: delivered directly to recipients. Start with the point (the first line is the one people see) and what it changes; complete enough to act on." })),
+  detail: Type.Optional(Type.String({ minLength: 1, maxLength: 16000, description: "Send: optional supporting detail, read only when needed." })),
+  task: Type.Optional(Type.String({ minLength: 1, maxLength: 128, description: "Send: link an existing task; its owner and delegator receive the post." })),
+  replyTo: Type.Optional(Type.String({ minLength: 1, maxLength: 128, description: "Send: the post ID this answers; its author receives the reply and it stays on that post's task." })),
+  query: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
   after: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
 }, { additionalProperties: false });
 const UserActionSchema = Type.Object({
@@ -67,6 +75,7 @@ export function validate(operation: string, value: unknown): void {
     const args = value as { action: string; name?: string };
     if (args.action === "launch" && !args.name) throw new Error("A descriptive teammate name is required on launch");
     if (args.action !== "launch" && args.name !== undefined) throw new Error("A teammate name can only be set on launch");
+    if (args.action !== "launch" && (value as { task?: unknown }).task !== undefined) throw new Error("A task can only be assigned on launch");
     if (args.action !== "launch" && (value as { access?: unknown }).access !== undefined) throw new Error("Access can only be set on launch; resume keeps the member's access");
   }
 }

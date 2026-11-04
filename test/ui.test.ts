@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { initTheme, type ExtensionContext, type Theme, type ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { foregroundAnsi, indexedColor, setKeybindings, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
-import { buildTaskGraph, moveTaskSelection, taskStatus } from "../src/graph.ts";
+import { buildTaskGraph, moveTaskSelection, shortenTitle, taskStatus } from "../src/graph.ts";
 import { cleanText, renderTeamMessage, teamMessageRenderer, teamToolRenderers } from "../src/render.ts";
 import { showTeamsPanel } from "../src/panel.ts";
 import type { PanelHost, TeamSnapshot } from "../src/ui-types.ts";
@@ -44,7 +44,7 @@ test("status priority and graph map match real domain values", () => {
 
 test("graph handles real UUID task IDs without wrapping away selectable headers", () => {
   const first = "938d26e0-5440-4894-ae3a-6e0f37e1aeaa", second = "02d2f8b6-3cdb-4a82-bf28-358e471c70fb";
-  const graph = buildTaskGraph([task(first, { number: 1, label: "Core", title: "Completed foundation", status: "done" }), task(second, { number: 2, label: "Parser tests", dependencies: [first] })]);
+  const graph = buildTaskGraph([task(first, { number: 1, label: "Core", title: "Core", status: "done" }), task(second, { number: 2, label: "Parser tests", title: "Parser tests", dependencies: [first] })]);
   assert.ok(graph);
   assert.equal(graph.bounds.size, 2);
   assert.equal(moveTaskSelection(graph.bounds, first, "down"), second);
@@ -84,16 +84,15 @@ test("tool renderers expand full JSON without mutating payloads or exposing term
   assert.ok(lines.every(line => visibleWidth(line) <= 32));
   const text = plain(expanded, 2000);
   assert.ok(text.includes(JSON.stringify(data, null, 2)));
-  assert.match(text, /Request/);
-  assert.match(text, /Response/);
+  assert.doesNotMatch(text, /Request|Response/);
   assert.ok(!text.includes("\x1b[2J"));
   assert.equal(JSON.stringify(result), before);
   const fallback = renderers.renderResult!({ content: result.content, details: undefined }, { expanded: true, isPartial: false }, theme, renderContext(true));
   assert.ok(plain(fallback, 2000).includes(JSON.stringify(data)));
-  assert.equal(plain(renderers.renderCall!({ action: "send", text: data.text }, theme, renderContext(true))), "");
+  assert.equal(plain(renderers.renderCall!({ action: "send", summary: data.text }, theme, renderContext(true))), "");
   const agentData = { id: "member-uuid", name: "parser-review", status: "idle" };
   const agentResult = { content: [{ type: "text" as const, text: JSON.stringify(agentData) }], details: agentData };
-  assert.match(plain(renderers.renderResult!(agentResult, { expanded: false, isPartial: false }, theme, renderContext())), /\[idle\] parser-review/);
+  assert.match(plain(renderers.renderResult!(agentResult, { expanded: false, isPartial: false }, theme, renderContext()), 200), /\[idle\] parser-review/);
   assert.ok(!plain(renderers.renderResult!(agentResult, { expanded: false, isPartial: false }, theme, renderContext())).includes("member-uuid"));
   assert.match(plain(renderers.renderResult!(agentResult, { expanded: true, isPartial: false }, theme, renderContext(true))), /"id": "member-uuid"/);
   const message = renderTeamMessage({ role: "custom", customType: "team", content: "hello\x1b]0;bad\x07", display: true, timestamp: 0 }, { expanded: true, outputPad: 0 }, theme)!;
@@ -126,7 +125,7 @@ test("compact tool rows prefer aliases while expanded JSON retains IDs", () => {
 test("notification previews use aliases and fall back to unknown IDs", () => {
   const render = teamMessageRenderer(() => ({ root: "Main", "member-uuid": "oom-review\x1b[2J" }));
   const message = { role: "custom" as const, customType: "ac-teams", content: "Notice", display: true, timestamp: 0,
-    details: { through: 3, messages: [{ from: "member-uuid", recipients: ["root", "legacy-id"], text: "Done\nDetails" }] } };
+    details: { through: 3, messages: [{ from: "member-uuid", recipients: ["root", "legacy-id"], summary: "Done\nDetails" }] } };
   const compact = plain(render(message, { expanded: false, outputPad: 0 }, theme)!, 1000);
   assert.match(compact, /oom-review → Main, legacy-id · Done/);
   assert.doesNotMatch(compact, /member-uuid|Details/);
@@ -184,7 +183,7 @@ test("panel keeps selected status color, dims done text, fits narrow terminals, 
     assert.match(empty.text(150), /Context +Unknown/);
     assert.match(empty.text(150), /Directory +\/project/);
     empty.component.handleInput("\t");
-    assert.match(empty.text(), /No activity yet/);
+    assert.match(empty.text(), /No posts yet/);
   } finally { empty.close(); await empty.running; }
 });
 
@@ -199,16 +198,17 @@ test("teammate columns stay aligned and preserve status at narrow and split widt
   try {
     f.component.handleInput("\t");
     for (const width of [40, 80, 100, 150]) {
-      const lines = f.component.render(width).map(cleanText);
-      const header = lines.find(line => /Member +Session/.test(line))!;
+      const rendered = f.component.render(width).map(cleanText);
+      const lines = rendered.map(line => line.split(" │ ")[0]); // roster column only; details repeat the state
+      const header = lines.find(line => /Member +State/.test(line))!;
       assert.ok(header, `column headings at width ${width}`);
-      const column = visibleWidth(header.slice(0, header.indexOf("Session")));
+      const column = visibleWidth(header.slice(0, header.indexOf("State")));
       for (const status of ["Main conversation", "Stopped", "Busy", "Needs input"]) {
         const line = lines.find(line => line.includes(status))!;
         assert.ok(line, `${status} visible at width ${width}`);
         assert.equal(visibleWidth(line.slice(0, line.indexOf(status))), column, `${status} aligned at width ${width}`);
       }
-      assert.ok(lines.every(line => visibleWidth(line) <= width));
+      assert.ok(rendered.every(line => visibleWidth(line) <= width));
     }
     for (const width of [12, 24, 39, 82, 83]) {
       assert.ok(f.component.render(width).every(line => visibleWidth(line) <= width), `fits width ${width}`);
@@ -216,7 +216,7 @@ test("teammate columns stay aligned and preserve status at narrow and split widt
     f.component.handleInput("\x1b[B");
     assert.match(f.text(80), /● marketplace-scout/);
     f.component.handleInput("\x1b[C");
-    assert.match(f.text(80), /State +Stopped/);
+    assert.match(f.text(80), /marketplace-scout · Stopped/);
   } finally { f.close(); await f.running; }
 });
 
@@ -231,37 +231,36 @@ test("teammate table adds task progress and directory only when they fit", async
   try {
     f.component.handleInput("\t");
     const wide = f.component.render(150).map(cleanText);
-    const header = wide.find(line => /Member +Session +Tasks +Directory/.test(line))!;
+    const header = wide.find(line => /Member +State +Done +Directory/.test(line))!;
     assert.ok(header);
     const worker = wide.find(line => /marketplace-fix +Busy/.test(line))!;
     assert.match(worker, /marketplace-fix {4,}Busy {4,}1\/3 {4,}marketplace/);
-    for (const [title, value] of [["Session", "Busy"], ["Tasks", "1/3"], ["Directory", "marketplace"]]) {
+    for (const [title, value] of [["State", "Busy"], ["Done", "1/3"], ["Directory", "marketplace"]]) {
       assert.equal(visibleWidth(header.slice(0, header.indexOf(title))), visibleWidth(worker.slice(0, worker.lastIndexOf(value))));
     }
     assert.ok(!worker.includes("/work/"));
     assert.match(wide.find(line => /other +Idle/.test(line))!, /0\/1 +解析器/);
     const columnAt = (width: number, title: string) => {
-      const heading = f.component.render(width).map(cleanText).find(line => /Member +Session/.test(line))!;
+      const heading = f.component.render(width).map(cleanText).find(line => /Member +State/.test(line))!;
       return visibleWidth(heading.slice(0, heading.indexOf(title)));
     };
-    assert.ok(columnAt(180, "Session") > columnAt(150, "Session"), "Session moves with available width");
-    assert.ok(columnAt(180, "Tasks") > columnAt(150, "Tasks"), "Tasks moves with available width");
+    assert.ok(columnAt(180, "State") > columnAt(150, "State"), "State moves with available width");
+    assert.ok(columnAt(180, "Done") > columnAt(150, "Done"), "Done moves with available width");
     assert.ok(columnAt(180, "Directory") > columnAt(150, "Directory"), "Directory uses the right-hand space");
-    const medium = f.text(100).split("\n").find(line => /Member +Session/.test(line))!;
-    assert.match(medium, /Tasks/);
+    const medium = f.text(100).split("\n").find(line => /Member +State/.test(line))!;
+    assert.match(medium, /Done/);
     assert.ok(!medium.includes("Directory"));
-    const narrow = f.text(40).split("\n").find(line => /Member +Session/.test(line))!;
-    assert.ok(!narrow.includes("Tasks"));
+    const narrow = f.text(40).split("\n").find(line => /Member +State/.test(line))!;
+    assert.ok(!narrow.includes("Done"));
     assert.ok(!narrow.includes("Directory"));
     for (let width = 12; width <= 180; width++) {
       assert.ok(f.component.render(width).every(line => visibleWidth(line) <= width), `fits width ${width}`);
     }
     f.component.handleInput("\x1b[B"); f.component.handleInput("\x1b[C");
-    assert.match(f.text(100), /Tasks +1\/3/);
-    assert.match(f.text(100), /Completed \/ currently assigned/);
+    assert.match(f.text(100), /Tasks \(1 of 3 done\)/);
     assert.match(f.text(100), /Directory +\/work\/marketplace\//);
     data.tasks[1].owner = "other";
-    assert.match(f.text(100), /Tasks +1\/2/, "reassignment leaves the denominator");
+    assert.match(f.text(100), /Tasks \(1 of 2 done\)/, "reassignment leaves the denominator");
   } finally { f.close(); await f.running; }
 });
 
@@ -278,11 +277,11 @@ test("teammate search and stopped filter affect only the visible roster and sele
   try {
     f.component.handleInput("\t");
     assert.match(f.text(150), /1 working · 0 idle · 1 stopped · 2 needs input/);
-    assert.match(f.text(150), /→ Details/);
+    assert.match(f.text(150), /Enter  Open session/);
     const footer = () => { const text = f.text(150); return text.slice(text.lastIndexOf("├")); };
     assert.match(footer(), /\/ Filter · H Hide stopped/);
     const rows = f.component.render(150).map(cleanText);
-    const headingRow = rows.findIndex(line => /Member +Session/.test(line));
+    const headingRow = rows.findIndex(line => /Member +State/.test(line));
     assert.match(rows[headingRow + 1], /● Main/, "headings sit directly above roster rows");
     assert.ok(!rows.slice(0, rows.findLastIndex(line => line.includes("├"))).some(line => /Filter names|H Hide stopped/.test(line)));
     f.component.handleInput("h");
@@ -330,7 +329,7 @@ test("panel summaries follow the active tab and details separate model from cont
   const data = snapshot();
   data.members = [{ id: "worker", name: "worker", status: "idle", depth: 1, cwd: "/project", notified: 0,
     modelName: "Test model", contextUsage: { tokens: 12000, contextWindow: 100000, percent: 12 } }];
-  data.messages = [{ seq: 1, id: "M1", from: "root", recipients: ["worker"], text: "Hello", time: "2026-01-01T12:00:00Z" }];
+  data.messages = [{ seq: 1, id: "M1", from: "root", recipients: ["worker"], summary: "Hello", time: "2026-01-01T12:00:00Z" }];
   const f = await panelFixture(data);
   try {
     assert.match(f.text(150), /4 tasks/);
@@ -340,7 +339,7 @@ test("panel summaries follow the active tab and details separate model from cont
     assert.match(f.text(150), /Model +Test model/);
     assert.match(f.text(150), /Context +12k \/ 100k \(12%\)/);
     f.component.handleInput("\t");
-    assert.match(f.text(150), /1 message · newest first/);
+    assert.match(f.text(150), /1 post · 0 outcomes · 0 replies/);
     assert.ok(!f.text(150).includes("4 tasks"));
   } finally { f.close(); await f.running; }
 });
@@ -401,7 +400,7 @@ test("polling preserves task identity, never overlaps, and stops after disposal"
 test("fallback does not overwrite delivery receipts and Activity uses persistent messages", async () => {
   const data = snapshot();
   data.tasks = [task("T1", { dependencies: ["missing"] })];
-  data.messages = [{ seq: 1, id: "M1", from: "root", recipients: ["worker"], text: "Real persistent message", time: "2026-01-01T12:00:00Z" }];
+  data.messages = [{ seq: 1, id: "M1", from: "root", recipients: ["worker"], summary: "Real persistent message", time: "2026-01-01T12:00:00Z" }];
   const f = await panelFixture(data);
   try {
     assert.match(f.text(), /Graph unavailable or too large/);
@@ -411,9 +410,68 @@ test("fallback does not overwrite delivery receipts and Activity uses persistent
     assert.match(f.text(), /Delivered to Main/);
     f.component.handleInput("\t"); f.component.handleInput("\t");
     assert.match(f.text(), /Real persistent message/);
-    assert.match(f.text(), /Recent messages · newest first/);
-    assert.match(f.text(), /● Main → worker/);
+    assert.match(f.text(), /From +Kind +Summary +Task +Time/);
+    assert.match(f.text(), /● Main +Post +Real persistent message/);
   } finally { f.close(); await f.running; }
+});
+
+test("Board shows headline, full title, time, and detail tiers for outcomes and replies", async () => {
+  const data = snapshot();
+  data.tasks = [task("T1", { title: "Count lines in c.txt", status: "done" })];
+  data.messages = [
+    { seq: 1, id: "M1", from: "root", recipients: ["worker"], summary: "Which file?", time: "2026-01-01T12:00:00Z" },
+    { seq: 2, id: "M2", from: "worker", recipients: ["root"], summary: "15 lines\nCounted with wc", detail: "Exact output: 15 c.txt", task: "T1", kind: "outcome", time: "2026-01-01T12:00:05Z" },
+    { seq: 3, id: "M3", from: "worker", recipients: ["root"], summary: "c.txt", replyTo: "M1", time: "2026-01-01T12:00:06Z" },
+  ];
+  data.members.push({ id: "worker", name: "worker", depth: 1, cwd: "/project", status: "idle", notified: 0 });
+  const f = await panelFixture(data);
+  try {
+    f.component.handleInput("\t"); f.component.handleInput("\t");
+    assert.match(f.text(150), /3 posts · 1 outcomes · 1 replies/);
+    assert.match(f.text(150), /● worker +Reply +c\.txt/);
+    assert.match(f.text(150), /Reply to +Main: Which file\?/);
+    f.component.handleInput("\x1b[B");
+    const text = f.text(150);
+    assert.match(text, /● worker +Outcome +15 lines +#\d+ +\d\d:\d\d/, "one row: who, kind, summary headline, task, time");
+    assert.match(text, /Task +#\d+ Count lines in c\.txt · Done/, "detail names the full task title");
+    assert.match(text, /Summary ─+/);
+    assert.match(text, /Detail ─+/);
+    assert.match(text, /Exact output: 15 c\.txt/);
+    f.component.handleInput("\x1b[B");
+    assert.match(f.text(150), /Replies \(1\)/);
+    assert.match(f.text(150), /worker: c\.txt/);
+  } finally { f.close(); await f.running; }
+});
+
+test("task graph starts fitted and zooms by shortening titles, never dropping number or status", async () => {
+  const data = snapshot();
+  data.tasks = ["a", "b", "c"].map((x, i) => task(`T${x}`, { number: i + 1, title: `Count lines in ${x}.txt` }));
+  const f = await panelFixture(data);
+  const graph = () => f.text(200);
+  try {
+    assert.match(graph(), /Zoom 100% \(fit\)/);
+    assert.match(graph(), /#1 Count lines in a\.txt/);
+    f.component.handleInput("-");
+    assert.match(graph(), /Zoom \d+%(?! \(fit\))/);
+    assert.match(graph(), /#1 Count lines in…/, "zooming out cuts at a word boundary with an ellipsis");
+    for (let i = 0; i < 20; i++) f.component.handleInput("-");
+    assert.match(graph(), /Zoom 0%/);
+    assert.match(graph(), /#1 · Ready/, "number and status survive the smallest zoom");
+    f.component.handleInput("\x1b[C");
+    assert.match(f.text(200), /#2 Count lines in b\.txt · Ready/, "selection still moves at the smallest zoom");
+    for (let i = 0; i < 20; i++) f.component.handleInput("+");
+    assert.match(graph(), /Zoom 100%/);
+    f.component.handleInput("f");
+    assert.match(graph(), /\(fit\)/);
+    assert.ok(f.component.render(60).join("\n").includes("(fit)"), "fit at a narrow width still renders");
+  } finally { f.close(); await f.running; }
+});
+
+test("shortenTitle prefers word boundaries and keeps short titles whole", () => {
+  assert.equal(shortenTitle("Count lines in a.txt", 40), "Count lines in a.txt");
+  assert.equal(shortenTitle("Count lines in a.txt", 12), "Count lines…");
+  assert.equal(shortenTitle("Supercalifragilistic", 8), "Superca…");
+  assert.equal(shortenTitle("Anything", 1), "");
 });
 
 test("feedback sends prose and task context without mutating task state", async () => {
@@ -432,4 +490,11 @@ test("feedback sends prose and task context without mutating task state", async 
     assert.equal(f.host.drafts.has("feedback:T03"), false);
     assert.equal(JSON.stringify(data), before);
   } finally { f.close(); await f.running; }
+});
+
+test("an outcome notice says who completed which task, by name", () => {
+  const render = teamMessageRenderer(() => ({ root: "Main", m1: "count-a", t1: "#1 Count lines" }));
+  const posts = [{ from: "m1", recipients: ["root"], summary: "Started", task: "t1" }, { from: "m1", recipients: ["root"], summary: "37 lines\nmore", task: "t1", kind: "outcome" }];
+  const compact = plain(render({ role: "custom" as const, customType: "ac-teams", content: "", display: true, timestamp: 0, details: { through: 2, messages: posts } }, { expanded: false, outputPad: 0 }, theme)!, 200);
+  assert.equal(compact, "ac-teams · count-a completed #1 Count lines · 37 lines (+1 more)");
 });

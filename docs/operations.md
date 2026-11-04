@@ -127,6 +127,8 @@ State schema 3 adds stable task numbers and short labels. Opening a schema 1 or 
 
 Schema 1 also migrates progress: `pending` becomes `todo`, `claimed` becomes `in_progress`, and `completed` becomes `done`. Migration writes atomically and rejects invalid snapshots without replacement. Older ac-teams code cannot reopen schema 3; stop old sessions before updating.
 
+State schema 5 turns messages into board posts: each has a `summary`, optional `detail`, and an optional `task` or `replyTo`; tasks gain an optional `delegator` and `outcome` post reference, and records an optional `waiting` registration. Opening a schema 4 team keeps every message's text unchanged as its summary. Older done tasks have no outcome, and no delegation is inferred. Schema 5 state cannot be opened by older ac-teams versions.
+
 State schema 4 adds a role to each record: `main` or `member`. Opening a schema 3 team makes the root record a main session and every other record a member. A record without a role has left the team. A promotion records each step, so a failure rolls the member back to a stopped member with its original transcript path.
 
 Only the coordinator writes state. Mutations validate a copy, flush a temporary snapshot, atomically rename it, and flush the directory before returning success. An exclusive process-identity lock prevents concurrent owners. Private team directories use 0700; state files and the authenticated Unix socket use 0600. Uncertain locks fail closed.
