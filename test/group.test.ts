@@ -8,7 +8,7 @@ const notice = (posts: object[], expanded = false) => ({ message: { customType: 
 const tool = (toolName: string, args: object, expanded = false) => ({ toolName, args, expanded, render: () => [`${toolName}`] });
 const other = (text: string) => ({ render: () => [text] });
 const empty = { render: () => [] };
-const draw = (children: unknown[]) => groupTeamRows(children, 80, (header, posts, _width, warnings) => [`[${header}]`, ...warnings, ...posts], labels, "Main", line => line.startsWith("Warning: Host")).flatMap(child => (child as { render(width: number): string[] }).render(80));
+const draw = (children: unknown[], toolsExpanded = false) => groupTeamRows(children, 80, (header, posts, _width, warnings) => [`[${header}]`, ...warnings, ...posts], labels, "Main", line => line.startsWith("Warning: Host"), undefined, toolsExpanded).flatMap(child => (child as { render(width: number): string[] }).render(80));
 
 test("folded rows preserve native output padding before and after later chat arrives", () => {
   for (const outputPad of [0, 1, 3]) {
@@ -59,8 +59,8 @@ test("any visible other row ends a run, so later rows never join an older block"
   assert.deepEqual(draw([a, empty]), ["notice"], "a single team row stays native; a trailing empty row is not swallowed");
 });
 
-test("an expanded row shows its whole run natively, and silenced notices draw nothing", () => {
-  assert.deepEqual(draw([tool("team_task", { action: "list" }, true), notice([])]), ["team_task", "notice"]);
+test("global expansion shows native rows, and silenced notices draw nothing", () => {
+  assert.deepEqual(draw([tool("team_task", { action: "list" }, true), notice([])], true), ["team_task", "notice"]);
   const silent = { message: { customType: "ac-teams" }, render: () => [] };
   assert.deepEqual(draw([silent, silent]), []);
 });
