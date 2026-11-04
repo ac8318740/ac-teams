@@ -231,6 +231,10 @@ test("team tools guide solo planning and task-backed delegation without tracking
     assert.match(agentGuidance, /advisory, not a memory reservation or capacity guarantee/);
     assert.match(agentGuidance, /If contention slows progress, stop unneeded idle members and resume their saved sessions/);
     assert.doesNotMatch(agentGuidance, /Sequence launches/);
+    assert.match(agentGuidance, /Analysis defaults to auto/);
+    assert.match(agentGuidance, /Choose analysis: separate.*uncertain compatibility/);
+    assert.match(agentGuidance, /possibly from sessions outside this team/);
+    assert.match(agentGuidance, /not proof of attachment or compatibility/);
     const task = f.tools.get("team_task")!;
     assert.match(task.promptSnippet!, /multi-step/);
     assert.match(task.description, /solo and team/);

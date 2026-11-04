@@ -36,6 +36,8 @@ export interface Member {
   modelName?: string;
   contextUsage?: ContextUsage;
   thinking?: string;
+  /** Launch-time pi-lens preference; absent older records default to auto. */
+  analysis?: "auto" | "separate";
   activity?: string;
   summary?: string;
   terminal?: boolean;
@@ -153,6 +155,7 @@ export interface AgentArgs {
   cwd?: string;
   model?: string;
   thinking?: string;
+  analysis?: "auto" | "separate";
   worktree?: boolean;
   base?: string;
   target?: string;

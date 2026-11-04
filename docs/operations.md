@@ -53,7 +53,25 @@ Choose concurrency using resource readings and observed progress. These advisori
 
 Idle members keep Pi and its extensions alive. Stop unneeded members to release their owned processes, then resume their saved sessions when needed.
 
-This preserves transcripts, tasks, messages, and worktrees. Extension-owned language servers and scanners can dominate memory; ac-teams does not disable them or share them across sessions.
+This preserves transcripts, tasks, messages, and worktrees. Extension-owned language servers and scanners can dominate memory; ac-teams does not disable checks or manage their processes.
+
+### Choose pi-lens reuse or separate analysis
+
+Teammate launches default to `analysis: "auto"`, which sets `PI_LENS_WARM_ATTACH=1` in the child. Active pi-lens can then try its existing same-workspace reuse, including providers outside this team. ac-teams does not install or enable pi-lens; without it, launch proceeds normally.
+
+Choose `analysis: "separate"` for different environments or rules, uncertain compatibility, suspicious diagnostics, or independent analyzer state. This sets the flag to `0` without disabling checks. Different assignments alone do not require separate analyzers.
+
+An inherited `0` remains an explicit opt-out even with `auto`. Other nonempty values besides `1` stay unchanged. Restricted members always receive `0`; the wrapper adds no sharing channels or access.
+
+Resume keeps the member's saved preference unless overridden. Older member records default to `auto`. This choice applies to teammate startup, not live processes or main-session resume.
+
+Launch, list, and status results include `analysis`. When this coordinator launched the member, `analysisPolicy` also reports the effective `warmAttach` value and reason. `reuse requested` does not mean attachment succeeded.
+
+The coordinator does not persist effective startup details; after recovery they appear when the member next launches.
+
+pi-lens owns peer selection, supported shared analysis, and fallback to local analysis. No eligible provider means ordinary local analysis, not a launch failure. An existing leader participates only if its session started with warm attach enabled.
+
+The wrapper leaves plugin configuration, data directories, tool paths, and caches unchanged. It does not prove matching environments or rules, team-only routing, successful attachment, or memory savings. Choose `separate` when those existing pi-lens limitations matter.
 
 ### Avoid repeated work without dropping updates
 
