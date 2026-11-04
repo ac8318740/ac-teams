@@ -57,8 +57,9 @@ test("folded chat blocks align with native rows when later text follows them", (
     details: { messages: [{ from: "worker", recipients: ["root"], summary: "Ready" }] } }, teamMessageRenderer());
   chat.addChild(launch);
   chat.addChild(notice);
-  // SAFETY: the grouping hook only needs the chat layout and the active theme.
-  bindNoticeGroups({ mode: "tui", ui: { theme, setWidget(_key, factory) {
+  let toolsExpanded = false;
+  // SAFETY: the grouping hook only needs the chat layout, global expansion, and active theme.
+  bindNoticeGroups({ mode: "tui", ui: { theme, getToolsExpanded: () => toolsExpanded, setWidget(_key, factory) {
     assert.equal(typeof factory, "function");
     if (typeof factory === "function") factory({ children: [{ children: [chat] }] } as unknown as TUI, theme);
   } } } as ExtensionContext, () => ({ root: "Main" }), () => "Main", () => false);
@@ -72,11 +73,73 @@ test("folded chat blocks align with native rows when later text follows them", (
     assert.equal(rendered.find(line => line.includes("Later assistant"))!.indexOf("Later assistant"), padding);
     assert.ok(rendered.every(line => visibleWidth(line) <= 100));
     assert.equal(chat.children, nativeChildren, "folding restores native children after rendering");
+    toolsExpanded = true;
     launch.setExpanded(true);
     assert.deepEqual(chat.render(100), nativeChildren.flatMap(child => child.render(100)), "expanded blocks stay native");
+    toolsExpanded = false;
     launch.setExpanded(false);
     chat.children.pop();
   }
+});
+
+test("folded groups toggle independently through native mouse dispatch and retain Ctrl+O", () => {
+  const chat = new Container();
+  const create = row("team_task", { action: "create", title: "First task" });
+  const start = row("team_task", { action: "start", id: "task-1" });
+  const later = row("team_task", { action: "list" });
+  const read = row("team_task", { action: "read", id: "task-1" });
+  for (const component of [create, start, later, read]) finish(component, { title: "First task", status: "todo" });
+  for (const component of [create, start, new Text("Between groups", 0, 0), later, read]) chat.addChild(component);
+  let renders = 0;
+  let toolsExpanded = false;
+  bindNoticeGroups({ mode: "tui", ui: { theme, getToolsExpanded: () => toolsExpanded, setWidget(_key, factory) {
+    if (typeof factory === "function") factory({ children: [{ children: [chat] }], requestRender() { renders++; } } as unknown as TUI, theme);
+  } } } as ExtensionContext, () => ({}), () => "Main", () => false);
+  const draw = () => chat.render(120).map(stripVTControlCharacters);
+  const click = (type: "click" | "wheel" = "click", button: "left" | "right" = "left") => chat.handleMouse({
+    type, button, x: 2, y: 1, width: 120, height: draw().length, screenX: 2, screenY: 1, shift: false, alt: false, ctrl: false,
+  });
+  const collapsed = draw();
+  assert.equal(click("wheel"), undefined);
+  assert.equal(click("click", "right"), undefined);
+  assert.deepEqual(draw(), collapsed);
+  assert.equal(click()?.handled, true, "the folded header receives clicks through Pi's cached mouse layout");
+  assert.doesNotMatch(collapsed.join("\n"), /Ctrl\+O|click/i, "no interaction hint is added");
+  const opened = draw();
+  assert.ok(opened.some(line => line.includes("team_task") && line.includes("create")));
+  assert.equal(opened.filter(line => line.includes("ac-teams")).length, 2, "the other group stays folded");
+  assert.ok(!opened.some(line => line.includes("team_task") && line.includes("read")));
+  assert.deepEqual(draw(), opened, "local expansion survives rebuilding groups on rerender");
+  const clickChild = () => {
+    const rendered = draw();
+    const y = rendered.findIndex(line => line.includes("team_task") && line.includes("create"));
+    const x = rendered[y]!.indexOf("team_task");
+    return chat.handleMouse({ type: "click", button: "left", x, y, width: 120, height: rendered.length, screenX: x, screenY: y, shift: false, alt: false, ctrl: false });
+  };
+  assert.equal(clickChild()?.handled, true);
+  assert.ok(draw().some(line => line.includes('"title": "First task"')), "child click opens detail");
+  assert.equal(draw().filter(line => line.includes("ac-teams")).length, 2, "child expansion keeps the group header");
+  assert.equal(clickChild()?.handled, true);
+  assert.deepEqual(draw(), opened, "collapsing the child returns to the open group");
+  create.setExpanded(true);
+  start.setExpanded(true);
+  assert.equal(draw().filter(line => line.includes("ac-teams")).length, 2, "even all children expanded is not global expansion");
+  create.setExpanded(false);
+  start.setExpanded(false);
+  const complete = row("team_task", { action: "complete", id: "task-1" });
+  finish(complete, { title: "First task", status: "done" });
+  chat.children.splice(2, 0, complete);
+  assert.ok(draw().some(line => line.includes("team_task") && line.includes("complete")), "new rows join the open group");
+  assert.equal(click()?.handled, true);
+  assert.ok(!draw().some(line => line.includes("team_task")), "clicking the header again folds it");
+  assert.equal(renders, 2);
+  click();
+  toolsExpanded = true;
+  for (const component of [create, start, complete, later, read]) component.setExpanded(true);
+  assert.ok(draw().some(line => line.includes('"title": "First task"')), "Ctrl+O still opens native detail");
+  toolsExpanded = false;
+  for (const component of [create, start, complete, later, read]) component.setExpanded(false);
+  assert.ok(!draw().some(line => line.includes("team_task")), "Ctrl+O collapse resets local expansion too");
 });
 
 test("each team tool uses one row with a dot, action, arguments, and result", () => {
