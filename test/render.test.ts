@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
-import { initTheme, type ExtensionAPI, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { visibleWidth, setKeybindings, type TUI } from "@earendil-works/pi-tui";
+import { initTheme, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Container, Text, visibleWidth, setKeybindings, type TUI } from "@earendil-works/pi-tui";
+import { bindNoticeGroups } from "../src/group.ts";
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 import { ToolExecutionComponent } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/tool-execution.js";
 import { CustomMessageComponent } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/custom-message.js";
@@ -45,6 +46,36 @@ test("team notices follow transcript padding in collapsed and expanded views", (
       }
       if (expanded) assert.match(rendered.join("\n"), /More detail/);
     }
+  }
+});
+
+test("folded chat blocks align with native rows when later text follows them", () => {
+  const chat = new Container();
+  const launch = row("team_agent", { action: "launch", name: "worker" });
+  finish(launch, { name: "worker", status: "busy" });
+  const notice = new CustomMessageComponent({ role: "custom", customType: "ac-teams", content: "Ready", display: true, timestamp: 0,
+    details: { messages: [{ from: "worker", recipients: ["root"], summary: "Ready" }] } }, teamMessageRenderer());
+  chat.addChild(launch);
+  chat.addChild(notice);
+  // SAFETY: the grouping hook only needs the chat layout and the active theme.
+  bindNoticeGroups({ mode: "tui", ui: { theme, setWidget(_key, factory) {
+    assert.equal(typeof factory, "function");
+    if (typeof factory === "function") factory({ children: [{ children: [chat] }] } as unknown as TUI, theme);
+  } } } as ExtensionContext, () => ({ root: "Main" }), () => "Main", () => false);
+  const nativeChildren = chat.children;
+  for (const padding of [0, 1, 3]) {
+    launch.setOutputPad(padding);
+    notice.setOutputPad(padding);
+    chat.addChild(new Text("Later assistant response", padding, 0));
+    const rendered = chat.render(100).map(stripVTControlCharacters);
+    assert.equal(rendered.find(line => line.includes("ac-teams"))!.indexOf("ac-teams"), padding);
+    assert.equal(rendered.find(line => line.includes("Later assistant"))!.indexOf("Later assistant"), padding);
+    assert.ok(rendered.every(line => visibleWidth(line) <= 100));
+    assert.equal(chat.children, nativeChildren, "folding restores native children after rendering");
+    launch.setExpanded(true);
+    assert.deepEqual(chat.render(100), nativeChildren.flatMap(child => child.render(100)), "expanded blocks stay native");
+    launch.setExpanded(false);
+    chat.children.pop();
   }
 });
 

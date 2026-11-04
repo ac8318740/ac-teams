@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { groupTeamRows } from "../src/group.ts";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 const labels = { root: "Main", m1: "count-a", t1: "#1 Count lines in a.txt", t2: "#2 Count lines in b.txt" };
 const notice = (posts: object[], expanded = false) => ({ message: { customType: "ac-teams", details: { messages: posts } }, _expanded: expanded, render: () => ["notice"] });
@@ -8,6 +9,39 @@ const tool = (toolName: string, args: object, expanded = false) => ({ toolName, 
 const other = (text: string) => ({ render: () => [text] });
 const empty = { render: () => [] };
 const draw = (children: unknown[]) => groupTeamRows(children, 80, (header, posts, _width, warnings) => [`[${header}]`, ...warnings, ...posts], labels, "Main", line => line.startsWith("Warning: Host")).flatMap(child => (child as { render(width: number): string[] }).render(80));
+
+test("folded rows preserve native output padding before and after later chat arrives", () => {
+  for (const outputPad of [0, 1, 3]) {
+    const launch = { ...tool("team_agent", { action: "launch", name: "count-a" }), outputPad };
+    const post = { ...notice([{ from: "m1", summary: "Ready" }]), outputPad };
+    const rows: unknown[] = [launch, post];
+    const widths: number[] = [];
+    const style = (header: string, posts: string[], width: number) => {
+      widths.push(width);
+      return ["ac-teams · " + header, ...posts.map(post => "  " + post)].map(line => truncateToWidth(line, width));
+    };
+    const render = (width: number) => groupTeamRows(rows, width, style, labels).flatMap(child => (child as { render(width: number): string[] }).render(width));
+    for (const width of [1, 2, 20, 80]) {
+      const pad = Math.min(outputPad, Math.floor(width / 2));
+      for (const historical of [false, true]) {
+        if (historical) rows.push(other("Later assistant response"));
+        const lines = render(width);
+        assert.equal(widths.at(-1), width - pad * 2, "summary reserves both margins");
+        assert.ok(lines[1]!.startsWith(" ".repeat(pad)), "header preserves left margin");
+        if (width === 80) assert.ok(lines[1]!.startsWith(" ".repeat(pad) + "ac-teams"), "header starts at native content column");
+        assert.ok(lines.slice(1, 3).every(line => visibleWidth(line) <= width));
+        if (width === 80) assert.ok(lines[2]!.startsWith(" ".repeat(pad + 2) + "count-a"), "posts keep their relative indent");
+        if (historical) {
+          assert.equal(lines.at(-1), "Later assistant response");
+          rows.pop();
+        }
+      }
+    }
+    launch.outputPad = 2;
+    post.outputPad = 2;
+    assert.ok(render(80)[1]!.startsWith("  ac-teams"), "padding changes apply on rerender");
+  }
+});
 
 test("a run of team rows folds into plain words: what Main did, then each post", () => {
   const rows = [
