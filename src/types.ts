@@ -47,6 +47,8 @@ export interface Member {
   role?: "main" | "member";
   /** State recorded when the coordinator owner stopped this member; the next owner's resume pass consumes it. */
   handover?: "busy" | "idle" | "input";
+  /** Registered by a yield: posts on these tasks reach this member and wake it. Cleared when it next works. */
+  waiting?: { tasks: string[] };
   /** Promotion in progress: the last completed step and what a rollback restores. */
   promotion?: { step: "stopped" | "moved" | "role" | "entry"; sessionFile: string; parent?: string; access?: Access; provider?: string };
 }
@@ -74,6 +76,10 @@ export interface Task {
   completedAt?: number;
   owner?: string;
   creator?: string;
+  /** Who handed this task to its owner; receives its activity. Routing falls back to the creator. */
+  delegator?: string;
+  /** The post that published this task's completion outcome. */
+  outcome?: string;
 }
 export interface TaskView extends Task {
   blockedBy: string[];
@@ -83,11 +89,18 @@ export interface Message {
   id: string;
   from: string;
   recipients: string[];
-  text: string;
+  /** Delivered directly in notices; complete enough to act on. */
+  summary: string;
+  /** Read on demand. */
+  detail?: string;
+  task?: string;
+  replyTo?: string;
+  /** "outcome": the post that completed its task. */
+  kind?: "outcome";
   time: string;
 }
 export interface TeamState {
-  version: 4;
+  version: 5;
   id: string;
   /** Lets an unsandboxed session of the same user add itself as a main session. */
   key: string;
@@ -115,11 +128,19 @@ export interface TaskArgs {
   label?: string;
   description?: string;
   dependencies?: string[];
+  /** Complete: the outcome published with the completion. */
+  summary?: string;
+  detail?: string;
 }
 export interface MessageArgs {
-  action: "send" | "history" | "search";
+  action: "send" | "history" | "search" | "wait";
+  /** Wait: also wake on posts linked to these tasks. */
+  tasks?: string[];
   recipients?: string[];
-  text?: string;
+  summary?: string;
+  detail?: string;
+  task?: string;
+  replyTo?: string;
   query?: string;
   after?: number;
   limit?: number;
@@ -138,6 +159,8 @@ export interface AgentArgs {
   limit?: number;
   depth?: number;
   access?: AccessRequest;
+  /** Launch: an existing task the new member owns, with the requester as its delegator. */
+  task?: string;
 }
 export interface UserAction {
   action: "task_request" | "feedback" | "resume" | "promote" | "leave";

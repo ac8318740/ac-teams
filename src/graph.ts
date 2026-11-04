@@ -2,7 +2,7 @@ import { render, type MermaidArt } from "grok-mermaid";
 import { sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
 import { stripVTControlCharacters } from "node:util";
 
-import { taskName, type TaskView } from "./types.ts";
+import type { TaskView } from "./types.ts";
 import { cleanText } from "./render.ts";
 
 export function taskStatus(task: TaskView): "Done" | "Blocked" | "Working" | "Ready" {
@@ -16,11 +16,20 @@ const label = (text: string) => stripVTControlCharacters(text).replace(/[\x00-\x
   .replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 const cell = (art: MermaidArt, y: number, x: number) => sliceByColumn(art.plain[y] ?? "", x, 1);
 
-export function buildTaskGraph(tasks: TaskView[]): TaskGraph | null {
+/** Shorten a title to at most `budget` columns, preferring a word boundary, with an ellipsis when cut. */
+export function shortenTitle(title: string, budget: number): string {
+  if (visibleWidth(title) <= budget) return title;
+  if (budget < 2) return "";
+  const cut = sliceByColumn(title, 0, budget - 1), space = cut.lastIndexOf(" ");
+  return (space >= cut.length * 0.6 ? cut.slice(0, space) : cut).trimEnd() + "…";
+}
+
+/** Each box shows `#n title · status`; zooming out gives the title fewer columns. Number and status always stay. */
+export function buildTaskGraph(tasks: TaskView[], titleBudget = Infinity): TaskGraph | null {
   if (!tasks.length || tasks.length > 100 || tasks.reduce((size, task) => size + task.dependencies.length, 0) > 300) return null;
   const ids = new Set(tasks.map(task => task.id));
   if (ids.size !== tasks.length || new Set(tasks.map(task => task.number)).size !== tasks.length || tasks.some(task => task.id.length > 128 || !Number.isSafeInteger(task.number) || task.number < 1 || task.dependencies.some(id => !ids.has(id)))) return null;
-  const source = ["flowchart TD", ...tasks.map((task, index) => `n${index}["○ ${label(cleanText(taskName(task)))} · ${taskStatus(task)}"]`),
+  const source = ["flowchart TD", ...tasks.map((task, index) => `n${index}["○ ${label(`#${task.number} ${shortenTitle(cleanText(task.title), titleBudget)}`.trimEnd())} · ${taskStatus(task)}"]`),
     ...tasks.flatMap((task, index) => task.dependencies.map(id => `n${tasks.findIndex(parent => parent.id === id)} --> n${index}`)),
   ].join("\n");
   let art: MermaidArt | null;
@@ -43,7 +52,7 @@ export function buildTaskGraph(tasks: TaskView[]): TaskGraph | null {
       const left = borders[i], right = borders[i + 1];
       if (cell(rendered, y - 1, left) !== "┌" || cell(rendered, y - 1, right) !== "┐") continue;
       const header = sliceByColumn(rendered.plain[y], left + 1, right - left - 1).trimStart();
-      const task = tasks.find(task => header.startsWith(`○ #${task.number} `));
+      const task = tasks.find(task => header.startsWith(`○ #${task.number} `) || header === `○ #${task.number}`);
       if (!task || bounds.has(task.id)) continue;
       for (let bottom = y + 1; bottom < rendered.plain.length; bottom++) {
         if (cell(rendered, bottom, left) === "└" && cell(rendered, bottom, right) === "┘") {

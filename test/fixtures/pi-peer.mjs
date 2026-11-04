@@ -68,9 +68,9 @@ async function run(command) {
     }
     if (command.message.startsWith("PROBE:")) {
       const { probe } = await import("./sandbox-probe.mjs");
-      await request("message", { action: "send", recipients: ["root"], text: JSON.stringify(await probe(JSON.parse(command.message.slice(6)), request)).slice(0, 16000) });
+      await request("message", { action: "send", recipients: ["root"], summary: JSON.stringify(await probe(JSON.parse(command.message.slice(6)), request)).slice(0, 16000) });
     }
-    if (command.message.startsWith("REPORT:")) await request("message", { action: "send", recipients: ["root"], text: command.message.slice(7) });
+    if (command.message.startsWith("REPORT:")) await request("message", { action: "send", recipients: ["root"], summary: command.message.slice(7) });
     if (command.message === "ERROR") emit({ type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "Provider rejected this model" } });
     if (command.message !== "WAIT") emit({ type: "agent_settled" });
   }

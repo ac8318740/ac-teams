@@ -106,7 +106,7 @@ test("unchanged events and notification cursors do not rewrite state; real chang
     f.team.recordEvent("root", { type: "activity", text: "Running edit" });
     assert.notEqual(f.team.store.state.members.root.contextUsage, previous.members.root.contextUsage, "real updates keep snapshots isolated");
     assert.equal(JSON.parse(readFileSync(path, "utf8")).members.root.activity, "Running edit");
-    await f.team.handle("root", "message", { action: "send", recipients: ["root"], text: "Keep this history" });
+    await f.team.handle("root", "message", { action: "send", recipients: ["root"], summary: "Keep this history" });
     f.team.ack("root", 1);
     const state = f.team.store.state;
     f.team.ack("root", 1); f.team.ack("root", 0);
@@ -240,7 +240,7 @@ test("child mailbox batching and polling do not consume messages; root is notifi
     await until(() => f.notices.length === 1);
     const history = await f.team.handle("root", "message", { action: "history" });
     assert.deepEqual(await f.team.handle("root", "message", { action: "history" }), history);
-    assert.equal(f.team.store.state.messages[0].text, "member ready");
+    assert.equal(f.team.store.state.messages[0].summary, "member ready");
     assert.equal(f.team.store.state.members.root.notified, 0);
     f.team.ack("root", f.notices[0]);
     assert.equal(f.team.store.state.members.root.notified, f.notices[0]);
@@ -257,9 +257,9 @@ test("forged tokens, extra fields, and unauthenticated connections cannot mutate
     const member = f.team.live()[0];
     const bad = new Connection(f.team.socketPath, member.id, "forged");
     await bad.open();
-    await assert.rejects(bad.request("message", { action: "send", text: "forged" }), /disconnected/);
+    await assert.rejects(bad.request("message", { action: "send", summary: "forged" }), /disconnected/);
     bad.close();
-    await assert.rejects(f.team.handle("root", "message", { action: "send", text: "test", injected: true }), /Invalid/);
+    await assert.rejects(f.team.handle("root", "message", { action: "send", summary: "test", injected: true }), /Invalid/);
     await assert.rejects(f.team.handle(member.id, "agent", { action: "limits", limit: 1 }), /main session/);
     assert.equal(f.team.store.state.messages.length, 0);
     const status = JSON.stringify(await f.team.handle("root", "agent", { action: "list" }));
@@ -277,12 +277,12 @@ test("large valid message and task pages cross the authenticated socket without 
     await connection.request("join", { sessionId: randomUUID(), sessionFile: join(f.team.store.dir, "sessions", "ac-teams", f.team.store.state.id, "reader", "reader.jsonl"), tools: ["team_agent", "team_task", "team_message"], trusted: true });
     const text = "\u0000".repeat(16000);
     for (let index = 0; index < 20; index++) {
-      await f.team.handle("root", "message", { action: "send", recipients: ["root"], text });
+      await f.team.handle("root", "message", { action: "send", recipients: ["root"], summary: text });
       await f.team.handle("root", "task", { action: "create", title: `Task ${index}`, description: text });
     }
-    const messages = await connection.request("message", { action: "history" }) as { text: string }[];
+    const messages = await connection.request("message", { action: "history" }) as { summary: string }[];
     assert.equal(messages.length, 20);
-    assert.ok(messages.every(message => message.text === text));
+    assert.ok(messages.every(message => message.summary === text));
     const page = await connection.request("task", { action: "list" }) as { tasks: { id: string; description: string }[]; total: number };
     assert.equal(page.total, 20);
     assert.equal(page.tasks.length, 20);
@@ -299,7 +299,7 @@ test("provider errors remain visible and notify the requesting ancestor", async 
     const member = f.team.live()[0];
     assert.equal(member.status, "idle");
     assert.equal(member.error, "Provider rejected this model");
-    assert.match(f.team.store.state.messages.at(-1)!.text, /Provider rejected this model/);
+    assert.match(f.team.store.state.messages.at(-1)!.summary, /Provider rejected this model/);
     assert.deepEqual(f.team.store.state.messages.at(-1)!.recipients, ["root"]);
   } finally { await f.close(); }
 });
@@ -399,16 +399,16 @@ test("new task requests carry critical review instructions without changing exis
     const text = "Add tests for malformed parser inputs";
     const receipt = await f.team.handle("root", "ui", { action: "task_request", text });
     assert.match(String(receipt), /Sent to Main/);
-    const history = await f.team.handle("root", "message", { action: "history" }) as { text: string; recipients: string[] }[];
+    const history = await f.team.handle("root", "message", { action: "history" }) as { summary: string; recipients: string[] }[];
     assert.deepEqual(history[0].recipients, ["root"]);
-    assert.ok(history[0].text.includes(taskRequestGuidance));
-    assert.ok(history[0].text.endsWith(`\n\nRequest:\n${text}`), "the user's exact request must remain separate from guidance");
-    assert.match(history[0].text, /current task list \(page as needed\)/);
-    assert.match(history[0].text, /do not add a duplicate/);
-    assert.match(history[0].text, /state and ownership allow it/);
-    assert.match(history[0].text, /genuinely distinct, in-scope work/);
-    assert.match(history[0].text, /Ask for clarification/);
-    assert.match(history[0].text, /Explain the decision/);
+    assert.ok(history[0].summary.includes(taskRequestGuidance));
+    assert.ok(history[0].summary.endsWith(`\n\nRequest:\n${text}`), "the user's exact request must remain separate from guidance");
+    assert.match(history[0].summary, /current task list \(page as needed\)/);
+    assert.match(history[0].summary, /do not add a duplicate/);
+    assert.match(history[0].summary, /state and ownership allow it/);
+    assert.match(history[0].summary, /genuinely distinct, in-scope work/);
+    assert.match(history[0].summary, /Ask for clarification/);
+    assert.match(history[0].summary, /Explain the decision/);
     await until(() => f.notices.length === 1);
     assert.deepEqual(f.team.store.state.tasks, before, "submitting a proposal must not create or edit tasks");
   } finally { await f.close(); }
@@ -432,7 +432,7 @@ test("native members keep PID while idle, stop cleanly, and quietly resume for c
     const before = JSON.stringify(f.team.store.state.tasks[task.id]);
     const request = await f.team.handle(member.id, "ui", { action: "task_request", text: "Please create a task" });
     assert.match(String(request), /Sent to Main/);
-    assert.equal(f.team.store.state.messages.at(-1)!.text, `User task request (review before changing tasks):\n${taskRequestGuidance}\n\nRequest:\nPlease create a task`);
+    assert.equal(f.team.store.state.messages.at(-1)!.summary, `User task request (review before changing tasks):\n${taskRequestGuidance}\n\nRequest:\nPlease create a task`);
     assert.deepEqual(f.team.store.state.messages.at(-1)!.recipients, ["root"]);
     assert.equal(f.team.store.state.members[member.id].pid, member.pid);
     await f.team.handle("root", "agent", { action: "stop", id: member.id });
@@ -447,7 +447,7 @@ test("native members keep PID while idle, stop cleanly, and quietly resume for c
     assert.deepEqual(saved().prompts, ["hello"], "UI resume must not replay a made-up assignment");
     assert.equal(JSON.stringify(f.team.store.state.tasks[task.id]), before);
     assert.deepEqual(f.team.store.state.messages.at(-1)!.recipients, [member.id]);
-    assert.match(f.team.store.state.messages.at(-1)!.text, /User feedback on task/);
+    assert.match(f.team.store.state.messages.at(-1)!.summary, /User feedback on task/);
     assert.deepEqual(f.warnings, []);
     await f.team.close();
     assert.equal(existsSync(join(f.team.store.dir, "t.sock")), false);
@@ -501,10 +501,10 @@ test("full-size user text survives task envelopes, transport and recovery; stopp
     const task = await f.team.handle(member.id, "task", { action: "create", title: "t".repeat(500), label: "Boundary task", description: "Boundary task" }) as { id: string };
     await f.team.handle("root", "ui", { action: "task_request", text });
     await f.team.handle("root", "ui", { action: "feedback", id: task.id, text });
-    await assert.rejects(f.team.handle("root", "message", { action: "send", text: text + "q" }), /Invalid/);
-    const history = await reader.request("message", { action: "history" }) as { text: string }[];
+    await assert.rejects(f.team.handle("root", "message", { action: "send", recipients: ["root"], summary: text + "q" }), /Invalid/);
+    const history = await reader.request("message", { action: "history" }) as { summary: string }[];
     assert.equal(history.length, 2);
-    assert.ok(history.every(message => message.text.endsWith(text)));
+    assert.ok(history.every(message => message.summary.endsWith(text)));
     f.team.store.update(state => { state.members[member.id].status = "stopping"; });
     const result = await f.team.handle("root", "ui", { action: "feedback", id: task.id, text: "Feedback during shutdown" });
     assert.match(String(result), /stopping.*delivered to Main instead/);
@@ -513,7 +513,7 @@ test("full-size user text survives task envelopes, transport and recovery; stopp
     reader.close();
     await f.team.close();
     const recovered = await Coordinator.open(f.options);
-    try { assert.equal(recovered.store.state.messages.length, 3); assert.ok(recovered.store.state.messages[1].text.endsWith(text)); }
+    try { assert.equal(recovered.store.state.messages.length, 3); assert.ok(recovered.store.state.messages[1].summary.endsWith(text)); }
     finally { await recovered.close(); }
   } finally { reader.close(); await f.close(); }
 });
@@ -747,4 +747,22 @@ test("a new owner resumes each member to its recorded state after a handover", a
       assert.equal(next.store.state.members.root.status, "stopped");
     } finally { await next.close(); }
   } finally { rmSync(f.home, { recursive: true, force: true }); }
+});
+
+test("launch hands an existing task to the new member; its outcome reaches the delegator; a failed launch returns it", async () => {
+  const f = await setup();
+  try {
+    const task = await f.team.handle("root", "task", { action: "create", title: "Parse input", description: "Parse" }) as { id: string };
+    await assert.rejects(f.team.handle("root", "agent", { ...launch, name: "broken", worktree: true, task: task.id }));
+    assert.equal(f.team.store.state.tasks[task.id].owner, undefined, "a failed launch releases its reservation");
+    const member = await f.team.handle("root", "agent", { ...launch, brief: "REPORT:briefed", task: task.id }) as { id: string };
+    assert.deepEqual([f.team.store.state.tasks[task.id].owner, f.team.store.state.tasks[task.id].delegator], [member.id, "root"]);
+    await assert.rejects(f.team.handle("root", "agent", { ...launch, name: "second", task: task.id }), /unowned or yours/);
+    await until(() => !!f.team.store.state.messages.find(message => message.from === member.id)?.summary.includes("You own team task #1"));
+    await f.team.handle(member.id, "task", { action: "start", id: task.id });
+    await f.team.handle(member.id, "task", { action: "complete", id: task.id, acceptance: true, summary: "Parsed all inputs" });
+    const outcome = f.team.store.state.messages.at(-1)!;
+    assert.deepEqual([outcome.summary, outcome.recipients], ["Parsed all inputs", ["root"]]);
+    await until(() => f.notices.includes(outcome.seq));
+  } finally { await f.close(); }
 });
