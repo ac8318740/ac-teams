@@ -27,7 +27,7 @@ const taskFields = {
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
   label: Type.Optional(Type.String({ minLength: 1, maxLength: taskLabelMaxLength, pattern: taskLabelPattern.source, description: "Optional 1–3-word label. Derived from title when omitted." })),
   description: Type.Optional(Type.String({ maxLength: 16000, description: "Details and acceptance criteria. Defaults to title; include explicit criteria for substantial or delegated work." })),
-  dependencies: Type.Optional(Type.Array(id, { maxItems: 100, uniqueItems: true })),
+  dependencies: Type.Optional(Type.Array(id, { maxItems: 100, uniqueItems: true, description: "Existing prerequisite task UUIDs whose verified outputs this task needs before it can start; all must be done. Include multiple prerequisites when needed; leave empty for independent work. blockedBy is derived automatically." })),
 };
 export const TaskSchema = Type.Object({
   revision: Type.Optional(Type.Integer({ minimum: 1 })), acceptance: Type.Optional(Type.Boolean()),
