@@ -35,15 +35,21 @@ Other delegation tools remain outside these limits. See [companion tools](usage.
 
 `team_agent list` and `limits` include a fresh `resources` advisory. Launch and teammate resume results include the sample taken before startup.
 
-It reports host available RAM, occupied swap, recent memory stalls, and live/starting member counts. Values are bytes; Linux pressure averages are percentages over the last ten seconds. Missing or invalid metrics are `null` with a warning, not zero or an all-clear.
+It reports host available RAM, occupied swap, recent memory stalls, and live/starting member counts. Values are bytes; Linux pressure averages are percentages.
+
+`someAvg10` and `fullAvg10` cover ten-second trends; `fullAvg60` covers a sixty-second trend. Missing or invalid metrics are `null` with a warning, not zero or an all-clear.
 
 The check reads only `/proc/meminfo` and `/proc/pressure/memory` on demand. It adds no polling, process-tree scans, or subprocesses.
 
-Available RAM below 10% triggers a low-headroom warning (a heuristic, not a per-member budget). Any nonzero ten-second memory-stall average also warns. Occupied swap alone does not trigger a pressure warning.
+Available RAM below 10% triggers a low-headroom warning (a heuristic, not a per-member budget). Low headroom alone does not prescribe sequential work.
+
+Memory contention warns when `fullAvg60 >= 5` or `fullAvg10 >= 10`. Full pressure measures time when all non-idle work is stalled on memory. Partial pressure (`someAvg10`) remains informational; occupied swap alone does not trigger a pressure warning.
+
+These thresholds are advisory defaults, not measured limits for optimal concurrency. Consider reducing concurrency if contention is slowing progress.
 
 Starting members reserve count slots synchronously, but may not yet consume their full memory. Concurrent launch results warn about earlier starts.
 
-Sequence launches and recheck `list` after startup before adding more. These advisories never block a launch, change the configured ceiling, reserve RAM, or stop a member. Host figures do not account for a tighter container/cgroup limit or guarantee future capacity; other teams and non-team processes also consume resources.
+Choose concurrency using resource readings and observed progress. These advisories never block a launch, change the configured ceiling, reserve RAM, or stop a member. Host figures do not account for a tighter container/cgroup limit or guarantee future capacity; other teams and non-team processes also consume resources.
 
 Idle members keep Pi and its extensions alive. Stop unneeded members to release their owned processes, then resume their saved sessions when needed.
 
