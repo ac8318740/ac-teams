@@ -1,15 +1,16 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { Container, truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { stripVTControlCharacters } from "node:util";
 
 type Row = {
   message?: { customType?: string; details?: { messages?: { kind?: string }[] } };
-  toolName?: string; args?: { action?: unknown }; expanded?: boolean; _expanded?: boolean; outputPad?: number;
+  toolName?: string; args?: { action?: unknown }; outputPad?: number;
   render(width: number): string[];
 };
 type Chat = { children: unknown[]; render(width: number): string[] };
 const hook = Symbol.for("ac-teams.hook.notice-groups");
 const widget = "ac-teams-notice-groups";
+const groupStates = new WeakMap<Row, { expanded: boolean; hostExpanded: boolean }>();
 
 const isRow = (child: unknown): child is Row => typeof child === "object" && child !== null && typeof (child as Row).render === "function";
 const isNotice = (row: Row) => row.message?.customType === "ac-teams";
@@ -63,9 +64,9 @@ function describe(rows: Row[], labels: Labels, progress: Progress): { header: st
 /**
  * Folds each run of team tool rows and team notices into one block: a plain-words header, then one line per post.
  * Rows that draw nothing (an empty assistant turn between tool calls) stay inside a run; any visible other row ends it.
- * An expanded row shows the whole run natively.
+ * Global expansion shows native rows; individual row expansion stays inside its open group.
  */
-export function groupTeamRows(children: unknown[], width: number, style: (header: string, posts: string[], width: number, warnings: string[]) => string[], labels: Labels, self = "this session", ours: (line: string) => boolean = () => false): unknown[] {
+export function groupTeamRows(children: unknown[], width: number, style: (header: string, posts: string[], width: number, warnings: string[]) => string[], labels: Labels, self = "this session", ours: (line: string) => boolean = () => false, requestRender: () => void = () => {}, hostExpanded = false): unknown[] {
   const out: unknown[] = [];
   const progress: Progress = { done: new Set(), waiting: false, self };
   for (let i = 0; i < children.length;) {
@@ -94,14 +95,36 @@ export function groupTeamRows(children: unknown[], width: number, style: (header
     const { header, posts } = describe(team, labels, progress);
     if (team.length < 2) out.push(...members);
     else {
-      out.push({ render(width: number) {
-        if (team.some(row => row.expanded || row._expanded)) return members.flatMap(row => (row as Row).render(width));
-        // Native rendering stays in charge of visibility, so /silent (which empties notice rows) still hides a notice-only block.
-        if (team.every(row => isNotice(row) && !row.render(width).length)) return [];
-        // Folding replaces native rows, so retain their current output padding.
-        const pad = " ".repeat(Math.min(team[0]!.outputPad ?? 0, Math.floor(width / 2)));
-        return ["", ...style(header, posts, width - pad.length * 2, warnings).map(line => pad + line + pad)];
-      }, invalidate() {} });
+      const first = team[0]!;
+      let state = groupStates.get(first);
+      if (!state) {
+        state = { expanded: false, hostExpanded };
+        groupStates.set(first, state);
+      }
+      if (state.hostExpanded !== hostExpanded) {
+        state.hostExpanded = hostExpanded;
+        state.expanded = false;
+      }
+      if (hostExpanded) { out.push(...members); i = last + 1; continue; }
+      // Native rendering stays in charge of visibility, so /silent still hides a notice-only block.
+      if (team.every(row => isNotice(row) && !row.render(width).length)) { i = last + 1; continue; }
+      const group = new Container();
+      group.addChild({
+        render(width: number) {
+          // Folding replaces native rows, so retain their current output padding.
+          const pad = " ".repeat(Math.min(first.outputPad ?? 0, Math.floor(width / 2)));
+          return ["", ...style(header, posts, width - pad.length * 2, warnings).map(line => pad + line + pad)];
+        },
+        invalidate() {},
+        handleMouse(event) {
+          if (event.type !== "click" || event.button !== "left" || event.y === 0) return undefined;
+          state.expanded = !state.expanded;
+          requestRender();
+          return { handled: true };
+        },
+      });
+      if (state.expanded) for (const member of members) group.addChild(member as Component);
+      out.push(group);
     }
     i = last + 1;
   }
@@ -118,7 +141,7 @@ export function bindNoticeGroups(ctx: ExtensionContext, labels: () => Labels, se
       const original = chat.render;
       const theme = ctx.ui.theme;
       const style = (header: string, posts: string[], width: number, warnings: string[]) => {
-        const lines = [theme.fg("accent", theme.bold("ac-teams")) + theme.fg("muted", ` · ${header}`) + theme.fg("dim", " (Ctrl+O for details)")];
+        const lines = [theme.fg("accent", theme.bold("ac-teams")) + theme.fg("muted", ` · ${header}`)];
         for (const warning of warnings) lines.push(theme.fg("warning", `  ${warning}`));
         for (const post of posts.slice(-5)) lines.push(theme.fg("text", `  ${post}`));
         if (posts.length > 5) lines.splice(1, 0, theme.fg("dim", `  … ${posts.length - 5} earlier`));
@@ -127,7 +150,7 @@ export function bindNoticeGroups(ctx: ExtensionContext, labels: () => Labels, se
       Object.defineProperty(chat, hook, { value: true });
       chat.render = function (this: Chat, width: number) {
         const children = this.children;
-        this.children = groupTeamRows(children, width, style, labels(), self(), ours);
+        this.children = groupTeamRows(children, width, style, labels(), self(), ours, () => tui.requestRender(), ctx.ui.getToolsExpanded());
         try { return original.call(this, width); } finally { this.children = children; }
       };
     }
