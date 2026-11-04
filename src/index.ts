@@ -45,6 +45,7 @@ export default function teams(pi: ExtensionAPI) {
   let linking: Promise<void> | undefined;
   let linkedSession: string | undefined;
   const drafts = new Map<string, string>();
+  const panelView = { graph: false };
   const display = { ...defaultDisplaySettings };
   const teamTools = ["team_agent", "team_task", "team_message"];
   const memberId = () => child ? environment[1]! : team?.member ?? "root";
@@ -313,7 +314,8 @@ export default function teams(pi: ExtensionAPI) {
     promptSnippet: "Plan and track multi-step work, alone or with teammates",
     promptGuidelines: [
       "Use team_task before substantial work with 3+ steps, when the user gives an explicit task list, or when coordinating deliverables. This includes your own research, design, implementation, and verification; no teammate is required. Skip single trivial tasks, conversation, and tool-by-tool bookkeeping.",
-      "Create the initial plan in one team_task call with tasks:[{title,description},...]. Titles are required; labels and descriptions default from titles. Include acceptance criteria for substantial or delegated work. Dependencies must reference existing task UUIDs; create prerequisites before dependent tasks. Reuse relevant existing tasks rather than duplicating them.",
+      "Before creating team_task entries, identify the outputs each task needs from other tasks. If it cannot start correctly without another task's verified output, add that task's UUID to dependencies. Consider shared contracts/setup before consumers, implementation before integration verification, and multiple outputs before final assembly. Keep independent work parallel; never add edges just to make a graph. Reassess dependencies when scope changes.",
+      "Create the team_task plan in dependency order: batch independent tasks with tasks:[{title,description},...], then create dependent tasks in later calls using the returned prerequisite UUIDs. Include every required prerequisite in dependencies; all prerequisites must be done before start. Dependencies cannot refer to siblings in the same batch. Titles are required; labels and descriptions default from titles. Include acceptance criteria for substantial or delegated work. Reuse relevant existing tasks rather than duplicating them.",
       "Call team_task start BEFORE beginning a task; it claims unowned ready work atomically. Use claim only to reserve work in advance, including blocked work. Complete each task IMMEDIATELY after checking its result with acceptance=true; never complete partial work or work with unresolved failures. Report blockers. Each agent should normally work on one task at a time; teammates can work in parallel.",
       taskTrackingGuidance, taskRequestGuidance,
       "team_task list returns compact summaries; read a task for its full description and acceptance criteria. Use returned UUIDs for API references and stable task numbers/names when reporting to people. Add dependencies only for real prerequisites, never merely to connect the diagram.",
@@ -530,7 +532,7 @@ export default function teams(pi: ExtensionAPI) {
           if (id) await api.visit(id);
           else ctx.ui.notify(`Unknown teammate: ${cleanText(value)}. Use autocomplete or /teams panel.`, "error");
         }
-        else if (!args.trim() || args.trim() === "panel") await showTeamsPanel(ctx, api);
+        else if (!args.trim() || args.trim() === "panel") await showTeamsPanel(ctx, api, panelView);
         else ctx.ui.notify("Usage: /teams [panel|teammate <name-or-id>|config|back|stop|status|join|leave]", "info");
       } else {
         const status = await handle("agent", { action: "list" }, ctx);

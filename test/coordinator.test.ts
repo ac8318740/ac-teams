@@ -818,6 +818,7 @@ test("launch hands an existing task to the new member; its outcome reaches the d
     assert.deepEqual([f.team.store.state.tasks[task.id].owner, f.team.store.state.tasks[task.id].delegator], [member.id, "root"]);
     await assert.rejects(f.team.handle("root", "agent", { ...launch, name: "second", task: task.id }), /unowned or yours/);
     await until(() => !!f.team.store.state.messages.find(message => message.from === member.id)?.summary.includes("You own team task #1"));
+    assert.match(f.team.store.state.messages.find(message => message.from === member.id)!.summary, /Start it only when its prerequisites are done/);
     await f.team.handle(member.id, "task", { action: "start", id: task.id });
     await f.team.handle(member.id, "task", { action: "complete", id: task.id, acceptance: true, summary: "Parsed all inputs" });
     const outcome = f.team.store.state.messages.at(-1)!;

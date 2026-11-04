@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
 import { initTheme, type ExtensionAPI, type ExtensionContext, type ExtensionToolContext, type ToolDefinition, type ToolRenderers } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import { cleanText } from "../src/render.ts";
 import { theme } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import teams from "../src/index.ts";
@@ -128,6 +129,27 @@ test("footer snapshots omit history while the panel still loads messages and com
   } finally { await f.close(); }
 });
 
+test("teams command starts in list mode and remembers graph/list choice across reopenings", async () => {
+  const f = fixture();
+  initTheme("dark");
+  const graphModes: boolean[] = [];
+  Object.assign(f.ctx, { mode: "tui" });
+  Object.assign(f.ctx.ui, {
+    custom(factory: Function) {
+      return new Promise<void>(done => {
+        const component = factory({ terminal: { rows: 32, columns: 100 }, requestRender() {} }, theme, {}, done) as Component & { handleInput(data: string): void; dispose(): void };
+        graphModes.push(component.render(100).map(cleanText).join("\n").includes("+/- Zoom"));
+        if (graphModes.length < 3) component.handleInput("g");
+        component.dispose(); done();
+      });
+    },
+  });
+  try {
+    for (let i = 0; i < 3; i++) await f.commands.get("teams")!.handler("panel", f.ctx);
+    assert.deepEqual(graphModes, [false, true, false]);
+  } finally { await f.close(); }
+});
+
 test("Main's question marker follows balanced attention signals without counting teammate relays twice", async () => {
   const f = fixture();
   const root = async () => (await f.execute("team_agent", { action: "list" }) as { members: { id: string; needsInput?: boolean }[] }).members.find(member => member.id === "root")!;
@@ -241,6 +263,15 @@ test("team tools guide solo planning and task-backed delegation without tracking
     assert.match(task.promptGuidelines!.join(" "), /3\+ steps/);
     assert.match(task.promptGuidelines!.join(" "), /trivial/);
     assert.ok(task.promptGuidelines!.includes(taskRequestGuidance));
+    const taskGuidance = task.promptGuidelines!.join(" ");
+    assert.match(taskGuidance, /outputs each task needs/);
+    assert.match(taskGuidance, /verified output/);
+    assert.match(taskGuidance, /Keep independent work parallel/);
+    assert.match(taskGuidance, /dependent tasks in later calls using the returned prerequisite UUIDs/);
+    assert.match(taskGuidance, /all prerequisites must be done/);
+    assert.match(taskGuidance, /Reassess dependencies when scope changes/);
+    assert.doesNotMatch(taskGuidance, /initial plan in one team_task call/);
+    assert.match(JSON.stringify(task.parameters), /Existing prerequisite task UUIDs/);
   } finally { await f.close(); }
 });
 
