@@ -4,7 +4,7 @@ import { stripVTControlCharacters } from "node:util";
 
 type Row = {
   message?: { customType?: string; details?: { messages?: { kind?: string }[] } };
-  toolName?: string; args?: { action?: unknown }; expanded?: boolean; _expanded?: boolean;
+  toolName?: string; args?: { action?: unknown }; expanded?: boolean; _expanded?: boolean; outputPad?: number;
   render(width: number): string[];
 };
 type Chat = { children: unknown[]; render(width: number): string[] };
@@ -98,7 +98,9 @@ export function groupTeamRows(children: unknown[], width: number, style: (header
         if (team.some(row => row.expanded || row._expanded)) return members.flatMap(row => (row as Row).render(width));
         // Native rendering stays in charge of visibility, so /silent (which empties notice rows) still hides a notice-only block.
         if (team.every(row => isNotice(row) && !row.render(width).length)) return [];
-        return ["", ...style(header, posts, width, warnings)];
+        // Folding replaces native rows, so retain their current output padding.
+        const pad = " ".repeat(Math.min(team[0]!.outputPad ?? 0, Math.floor(width / 2)));
+        return ["", ...style(header, posts, width - pad.length * 2, warnings).map(line => pad + line + pad)];
       }, invalidate() {} });
     }
     i = last + 1;
