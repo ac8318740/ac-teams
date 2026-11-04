@@ -1,6 +1,6 @@
 {
   "name": "ac-teams",
-  "version": "0.0.19",
+  "version": "0.0.20",
   "description": "Small, persistent teams for Pi",
   "type": "module",
   "license": "MIT",
