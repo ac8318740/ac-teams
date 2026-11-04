@@ -16,8 +16,9 @@ const tasks = [task("T03", { status: "done" }), task("T12", { status: "in_progre
   task("T21", { dependencies: ["T03"] }), task("T18", { dependencies: ["T12", "T21"], blockedBy: ["T12", "T21"] })];
 // SAFETY: these bounded Pi doubles implement only the documented methods the UI uses.
 const theme = {
-  fg(color: string, text: string) { return `\x1b[${color === "dim" ? 90 : 37}m${text}\x1b[39m`; },
+  fg(color: string, text: string) { return `\x1b[${color === "dim" ? 90 : color === "accent" ? 95 : 37}m${text}\x1b[39m`; },
   bold(text: string) { return `\x1b[1m${text}\x1b[22m`; },
+  underline(text: string) { return `\x1b[4m${text}\x1b[24m`; },
   style(text: string, options: { fg: Parameters<typeof foregroundAnsi>[0] }) { return foregroundAnsi(options.fg, "256color") + text + "\x1b[39m"; },
 } as unknown as Theme;
 const renderContext = (expanded = false) => ({ expanded, isError: false, isPartial: false, args: { action: "send" }, outputPad: 0 }) as Parameters<NonNullable<ToolRenderers["renderCall"]>>[2];
@@ -185,6 +186,62 @@ test("panel keeps selected status color, dims done text, fits narrow terminals, 
     empty.component.handleInput("\t");
     assert.match(empty.text(), /No posts yet/);
   } finally { empty.close(); await empty.running; }
+});
+
+test("graph renders many independent tasks without multiplying ANSI sequences", async () => {
+  const data = snapshot();
+  data.tasks = Array.from({ length: 24 }, (_, index) => task(`demo-${index}`, {
+    number: index + 1, title: `Demo ${index + 1} ${"Long scheduling title ".repeat(6)}`, dependencies: [],
+  }));
+  const f = await panelFixture(data);
+  try {
+    for (const width of [40, 100, 132, 180]) {
+      const lines = f.component.render(width);
+      assert.ok(lines.every(line => visibleWidth(line) <= width));
+      assert.ok(lines.join("").length < 100000, "ANSI output stays bounded");
+    }
+  } finally { f.close(); await f.running; }
+});
+
+test("task list aligns statuses for short, long, and wide titles", async () => {
+  const data = snapshot();
+  data.tasks = data.tasks.map((item, index) => ({ ...item, title: ["Short", "Long title ".repeat(30), "解析器 👩‍💻".repeat(20), "Blocked task"][index] }));
+  const f = await panelFixture(data);
+  try {
+    f.component.handleInput("g");
+    for (const width of [40, 80, 100, 150]) {
+      const lines = f.component.render(width).map(cleanText).map(line => line.split(" │ ")[0].replace(/ │$/, ""));
+      const header = lines.find(line => /Task +State/.test(line));
+      assert.ok(header, `task headings at width ${width}`);
+      const column = visibleWidth(header.slice(0, header.indexOf("State")));
+      for (const status of ["Done", "Working", "Ready", "Blocked"]) {
+        const row = lines.find(line => new RegExp(`${status} *$`).test(line));
+        assert.ok(row, `${status} visible at width ${width}`);
+        assert.equal(visibleWidth(row.slice(0, row.lastIndexOf(status))), column, `${status} aligned at width ${width}`);
+      }
+    }
+    for (let width = 12; width <= 180; width++) {
+      assert.ok(f.component.render(width).every(line => visibleWidth(line) <= width), `fits width ${width}`);
+    }
+    assert.ok(f.component.render(80).some(line => line.includes("\x1b[95m● ")), "selected marker uses accent even for done tasks");
+  } finally { f.close(); await f.running; }
+});
+
+test("all table headers use bold underlined accent styling", async () => {
+  const data = snapshot();
+  data.messages = [{ seq: 1, id: "M1", from: "root", recipients: [], summary: "Update", time: "2026-01-01T12:00:00Z" }];
+  const f = await panelFixture(data);
+  try {
+    f.component.handleInput("g");
+    for (const label of ["Task", "Member", "From"]) {
+      const header = f.component.render(150).find(line => cleanText(line).includes(`  ${label} `));
+      assert.ok(header, `${label} header exists`);
+      assert.ok(header.includes("\x1b[95m"), `${label} uses accent`);
+      assert.ok(header.includes("\x1b[1m"), `${label} is bold`);
+      assert.ok(header.includes("\x1b[4m"), `${label} is underlined`);
+      f.component.handleInput("\t");
+    }
+  } finally { f.close(); await f.running; }
 });
 
 test("teammate columns stay aligned and preserve status at narrow and split widths", async () => {

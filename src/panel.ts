@@ -65,6 +65,7 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
       return clipped + " ".repeat(Math.max(0, width - visibleWidth(clipped)));
     };
     const heading = (text: string) => theme.bold(fg("text", text));
+    const tableHeader = (text: string) => theme.bold(theme.underline(fg("accent", text)));
     const label = (key: string, value: string) => fg("muted", key.padEnd(9) + " ") + value;
     const wrap = (lines: string[], width: number) => lines.flatMap(line => wrapTextWithAnsi(line, Math.max(1, width)));
     const editor = new Editor(tui, {
@@ -159,7 +160,8 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
       else if (selected.right >= columnScroll + width) columnScroll = selected.right - width + 1;
       columnScroll = Math.max(0, Math.min(columnScroll, Math.max(0, art.width - width)));
       const rows = art.styled.map((spans, y) => {
-        let row = spans.map(span => fg(span.cls === "border" || span.cls === "edge" ? "dim" : "text", span.text)).join("");
+        const row = spans.map(span => fg(span.cls === "border" || span.cls === "edge" ? "dim" : "text", span.text)).join("");
+        const replacements: { left: number; right: number; text: string }[] = [];
         for (const task of tasks) {
           const box = bounds.get(task.id);
           if (!box || y < box.top || y > box.bottom) continue;
@@ -174,10 +176,18 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
           // The selected box keeps its status colour but gets a heavy border and bold text, so selection never competes with status.
           const edge = (part: string) => statusText(task, active ? part.replace(/[┌┐└┘─│┬┴]/g, ch => ({ "┌": "┏", "┐": "┓", "└": "┗", "┘": "┛", "─": "━", "│": "┃", "┬": "┯", "┴": "┷" })[ch]!) : part);
           const styled = border ? edge(text) : edge("│") + (active ? theme.bold(interior) : interior) + edge("│");
-          row = sliceByColumn(row, 0, box.left) + styled + sliceByColumn(row, box.right + 1, art.width);
+          replacements.push({ left: box.left, right: box.right, text: styled });
         }
+        // Slice the original row once per gap; re-slicing styled replacements multiplies ANSI codes.
+        let column = 0;
+        const parts = replacements.sort((a, b) => a.left - b.left).flatMap(box => {
+          const gap = sliceByColumn(row, column, box.left - column);
+          column = box.right + 1;
+          return [gap, box.text];
+        });
+        parts.push(sliceByColumn(row, column, art.width - column));
         const indent = " ".repeat(Math.max(0, Math.floor((width - art.width) / 2)));
-        return indent + sliceByColumn(row, columnScroll, width);
+        return indent + sliceByColumn(parts.join(""), columnScroll, width);
       });
       return { rows, selectedRow: selected.top, selectedHeight: selected.bottom - selected.top + 1, width: art.width };
     }
@@ -204,11 +214,13 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
       let selectedHeight = 1, graphWidth = 0;
       if (tab === 0) {
         const graphData = graph ? graphLines(leftWidth) : undefined;
-        left = graphData ? graphData.rows : tasks.length ? [fg("muted", "  Task"), "",
+        const titleWidth = Math.max(1, leftWidth - 12);
+        left = graphData ? graphData.rows : tasks.length ? [tableHeader(`  ${pad("Task", titleWidth)}   State`), "",
           ...tasks.map((task, index) => {
-            const text = `${index === taskIndex ? "●" : " "} ${taskTitle(task.id)}`;
-            const body = fg(taskStatus(task) === "Done" ? "dim" : "text", truncateToWidth(text, Math.max(1, leftWidth - 10)));
-            return (index === taskIndex ? theme.bold(body) : body) + " · " + stateLabel(task);
+            const selected = index === taskIndex;
+            const body = fg(taskStatus(task) === "Done" ? "dim" : "text", pad(taskTitle(task.id), titleWidth));
+            return fg(selected ? "accent" : "dim", `${selected ? "●" : " "} `)
+              + (selected ? theme.bold(body) : body) + "   " + stateLabel(task);
           })] : [heading("No tasks yet"), "N  Request a task from Main"];
         selectedRow = graphData ? graphData.selectedRow : taskIndex + 2;
         selectedHeight = graphData?.selectedHeight ?? 1;
@@ -231,7 +243,7 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
         const nameExtra = Math.min(spare, Math.max(0, ...ids.map(id => visibleWidth(name(id)) - nameWidth)));
         const gap = " ".repeat(4 + Math.floor((spare - nameExtra) / gaps));
         nameWidth += nameExtra + (spare - nameExtra) % gaps;
-        left = [fg("muted", `  ${pad("Member", nameWidth)}${gap}${pad("State", sessionWidth)}`
+        left = [tableHeader(`  ${pad("Member", nameWidth)}${gap}${pad("State", sessionWidth)}`
           + (showTasks ? `${gap}${pad("Done", tasksWidth)}` : "") + (showDirectory ? `${gap}Directory` : "")), ...ids.map((id, index) => {
           const member = snapshot.members.find(member => member.id === id);
           const selected = index === memberIndex;
@@ -254,7 +266,7 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
         const fromWidth = Math.min(16, Math.max(4, ...events.map(event => visibleWidth(name(event.from)))));
         const taskWidth = Math.min(5, Math.max(4, ...events.map(event => event.task ? visibleWidth(taskRef(event.task)) : 0)));
         const summaryWidth = Math.max(1, leftWidth - (2 + fromWidth + 2 + 7 + 2 + 2 + taskWidth + 2 + 5));
-        left = events.length ? [fg("muted", `  ${pad("From", fromWidth)}  ${pad("Kind", 7)}  ${pad("Summary", summaryWidth)}  ${pad("Task", taskWidth)}  Time`),
+        left = events.length ? [tableHeader(`  ${pad("From", fromWidth)}  ${pad("Kind", 7)}  ${pad("Summary", summaryWidth)}  ${pad("Task", taskWidth)}  Time`),
           ...events.map((event, index) => {
             const selected = index === eventIndex;
             const from = pad(name(event.from), fromWidth), summary = pad(headline(event), summaryWidth);
