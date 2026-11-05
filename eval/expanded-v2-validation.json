@@ -1,0 +1,126 @@
+{
+  "problem_set": "expanded-systems-v2",
+  "status": "ready_for_user_review_before_model_trials",
+  "validated_at": "2026-11-05T17:59:02.018638+00:00",
+  "model_trials_run": false,
+  "next_baseline": {
+    "ac_teams_version": "0.0.27",
+    "ac_teams_revision": "463b2001a8dc26af14faded8414465a7d8288126",
+    "verified_source_package_files": 31,
+    "ac_stack_selection": "installed version at launch; capture exact version and extension fingerprints before and after",
+    "currently_installed_ac_stack_version": "0.56.0",
+    "eval_specific_team_limits": null,
+    "model_attempt_cutoff": null,
+    "delegation_required": false
+  },
+  "validation": {
+    "event-delivery": {
+      "starter": {
+        "visible": {
+          "passed": 15,
+          "failed": 0,
+          "tests": 15,
+          "ok": true
+        },
+        "additional": {
+          "passed": 0,
+          "failed": 19,
+          "tests": 19,
+          "ok": false
+        }
+      },
+      "reference": {
+        "visible": {
+          "passed": 15,
+          "failed": 0,
+          "tests": 15,
+          "ok": true
+        },
+        "additional": {
+          "passed": 19,
+          "failed": 0,
+          "tests": 19,
+          "ok": true
+        }
+      }
+    },
+    "workspace-indexer": {
+      "starter": {
+        "visible": {
+          "passed": 16,
+          "failed": 0,
+          "tests": 16,
+          "ok": true
+        },
+        "additional": {
+          "passed": 0,
+          "failed": 31,
+          "tests": 31,
+          "ok": false
+        }
+      },
+      "reference": {
+        "visible": {
+          "passed": 16,
+          "failed": 0,
+          "tests": 16,
+          "ok": true
+        },
+        "additional": {
+          "passed": 31,
+          "failed": 0,
+          "tests": 31,
+          "ok": true
+        }
+      }
+    }
+  },
+  "tooling_tests": {
+    "passed": 7,
+    "tests": 7
+  },
+  "static_checks": {
+    "repository_tsc": "passed",
+    "fixture_and_reference_src_strict_tsc": "passed"
+  },
+  "problem_files_sha256": {
+    "problems/event-delivery/PROMPT.md": "6e61106c641f6c847e5ec9fae7d7ecbfe6972f2fd78e46cf6a06c3cdd8f13bc0",
+    "problems/event-delivery/fixture/package.json": "12710e8a8ae0fd14722d7aee9671a969b2b00003b8bac7a6d63a9f9239d8ee23",
+    "problems/event-delivery/fixture/src/index.ts": "25e6771006f678acf6e3f9d71376413579f66cf77fe4561c5dd4a38b3718eb58",
+    "problems/event-delivery/fixture/src/persistence.ts": "65f8e85b78d7a3e2b370f0d75ce087d8298c4220d9ea4f16fd715c262c215c5b",
+    "problems/event-delivery/fixture/src/queue.ts": "c58cd9ede3c635e59635d6d67288db5f9206db27e288c477f00e18c34ea82894",
+    "problems/event-delivery/fixture/src/service.ts": "3f8fa44bd0e7f4c7838bf601008771107cdd71cb269bb0d255c8c1a771ab21b5",
+    "problems/event-delivery/fixture/src/types.ts": "44b0d2a41031bbb7e35a8c80ab6cd2404a502780566fe744ee617c7146fed1e6",
+    "problems/event-delivery/fixture/test/delivery.test.ts": "55977d01a5329d2116691c85f9d143cd4bdfcd39fbd3363d0bb3a315d85863eb",
+    "problems/event-delivery/fixture/test/scheduling.test.ts": "253e9a914780aa00f363f8289acc636cf5e0b2408705b05d39e46caf0cc2a8c5",
+    "problems/event-delivery/grader/components.test.ts": "44e0478a7fbbf3d38fa6124f5229a53b4634b4929eb5822a0da8f86f876b5fc4",
+    "problems/event-delivery/grader/delivery.test.ts": "0a5167591baed7e812b2203d293d92a9e8a28fc6f11f6bd057e07ed7dd16f926",
+    "problems/event-delivery/reference/src/broker-types.ts": "48dbbb90af234249af64e0dcc929a0d4fa460dac3c64008084ad061fcc00e88c",
+    "problems/event-delivery/reference/src/broker.ts": "8df1159a5f5e4dc6bed817447190e8bde6e1c064680f3d765eeabfb7319758d3",
+    "problems/event-delivery/reference/src/dispatch.ts": "349c0f0aadc98a68d6c9308b913b5e8a21dbf8d181f4e89d43888c5744c91423",
+    "problems/event-delivery/reference/src/index.ts": "8b5134c5a2f5284565c77349b01189c1404f17aa20165a531417f3a53b0dce12",
+    "problems/event-delivery/reference/src/persistence.ts": "6e325b8ccbfca6bcf0854b1c47072e248eea54688f4247e0dadef33263c15438",
+    "problems/event-delivery/reference/src/queue.ts": "c58cd9ede3c635e59635d6d67288db5f9206db27e288c477f00e18c34ea82894",
+    "problems/event-delivery/reference/src/service.ts": "3f8fa44bd0e7f4c7838bf601008771107cdd71cb269bb0d255c8c1a771ab21b5",
+    "problems/event-delivery/reference/src/state.ts": "66ffb44c1cd45622e6813ffc56c6f6030b48b6001c60357b9bb597dfadcf3af4",
+    "problems/event-delivery/reference/src/subscription.ts": "3f8e2d64ede55fc338343ae9d38b3f385609bb025584f81b97fb6bfced4a6f82",
+    "problems/event-delivery/reference/src/types.ts": "44b0d2a41031bbb7e35a8c80ab6cd2404a502780566fe744ee617c7146fed1e6",
+    "problems/workspace-indexer/PROMPT.md": "a1bb53745314db14d97f29aa7610904f554f752220de0706ffb4c3a030f09473",
+    "problems/workspace-indexer/fixture/package.json": "08280d193f0e2fc56015f7591d46bdd1a10def9c906dde731df283d259c5a7c4",
+    "problems/workspace-indexer/fixture/src/index.ts": "dd222594575f382d57bdf2ab3c988a0f199eff82cd5f0ab817a84b728445437d",
+    "problems/workspace-indexer/fixture/src/query.ts": "c72e8bf6d2f9f342523239d9bf00384715955ac8d685c93649effa8263dd9d3e",
+    "problems/workspace-indexer/fixture/src/snapshot.ts": "fd32fa6b4c845211731f338d8cdc47da0847cfeea97f1261b8aae61a10b41965",
+    "problems/workspace-indexer/fixture/src/text.ts": "e6b4a17bdf888297aba1134d7c03dbdb820c13e2ebeaa148097ec2bfbcc11c32",
+    "problems/workspace-indexer/fixture/test/index.test.ts": "1456f2a956cf1335922bcf2395f2dfde50edfb6c9a5e61ef04dc9520c6e6d9e6",
+    "problems/workspace-indexer/fixture/test/regression.test.ts": "f4a2657735352234b47a23d4df4aa524b523598389b57f99d7e07b7a084ff1b9",
+    "problems/workspace-indexer/grader/persistence.test.ts": "03df8690991aa289c71fef44240e9fd65d0213bb62a20643e662c3210b05ffa4",
+    "problems/workspace-indexer/grader/search.test.ts": "493797fc84c0239263dfb2e1fc950b9d696325ae354fa03d657aa7508fc6e897",
+    "problems/workspace-indexer/reference/src/index.ts": "59449135b9528c49055b4a38ae00c926130afc4e5c3c30a367834f463858c124",
+    "problems/workspace-indexer/reference/src/persistent.ts": "3d2b53e5210ac05b3b6fb862c0e689ced78c9009a28b1745e837af1d85d373ff",
+    "problems/workspace-indexer/reference/src/query.ts": "22d770bf5ac23bb132063a8cd8757c91422b0832d6d647d0a84cfba1afcefb0b",
+    "problems/workspace-indexer/reference/src/ranking.ts": "ae246376a05b48ca56ab39da4e45922724415c5442c3bc40854c87f626eae48e",
+    "problems/workspace-indexer/reference/src/snapshot.ts": "fd32fa6b4c845211731f338d8cdc47da0847cfeea97f1261b8aae61a10b41965",
+    "problems/workspace-indexer/reference/src/state.ts": "396e4d9e177eb387a942e7de65500bb0c0168867870dcaf99b0e1dd400496627",
+    "problems/workspace-indexer/reference/src/text.ts": "e6b4a17bdf888297aba1134d7c03dbdb820c13e2ebeaa148097ec2bfbcc11c32"
+  }
+}

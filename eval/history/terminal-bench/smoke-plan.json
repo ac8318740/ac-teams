@@ -1,0 +1,25 @@
+{
+  "dataset": "Terminal-Bench 2.0 (custom subset, not an official score)",
+  "repository": "https://github.com/laude-institute/terminal-bench-2.git",
+  "revision": "2fd12b88aafdd04a52c298e3940bcb189f9766d6",
+  "baseline": "463b2001a8dc26af14faded8414465a7d8288126",
+  "baseline_version": "0.0.27",
+  "candidate": "0.0.27 plus frozen uncommitted message-audit changes",
+  "candidate_source_tree_sha256": "5e5cf537caaa76be3e161759719415c338451fcdb50d22d754a060a953422b97",
+  "tasks": [
+    "regex-log",
+    "log-summary-date-ranges"
+  ],
+  "attempt_seconds": 240,
+  "verifier_cpus": 1,
+  "verifier_memory_mb": 2048,
+  "model_execution": "native Pi tools in fresh host directories; instruction-only task boundary, no resource caps",
+  "task_path_mapping": "/app replaced by the trial directory in prompts; verifier unchanged",
+  "worker_policy": "benchmark-local parent/all preset with explicit --teams-project-config",
+  "authentication": "existing local subscription OAuth only; no API-key billing",
+  "cost_reporting": "subscription allowance and tokens; dollar cost unknown",
+  "max_sessions_per_trial": 2,
+  "max_depth": 1,
+  "model_execution_enabled_in_this_runner": false,
+  "local_session_harness": "temporary external files; not shipped as a repository feature"
+}

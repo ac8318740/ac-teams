@@ -1,0 +1,645 @@
+{
+  "experiment": "expanded-systems-v2 candidate with installed AC Stack",
+  "recorded_at": "2026-11-05T19:53:49.171020+00:00",
+  "baseline_results": "expanded-v2-baseline-acstack-2026-11-05.json",
+  "candidate_base_revision": "463b2001a8dc26af14faded8414465a7d8288126",
+  "candidate_freeze_sha256sum": "afbdc8627bc33fb13b5219637e5db73a7828190e50e028b563420a7ca5fa6e01",
+  "candidate_source_files_sha256": {
+    "package.json": "e388a3b735de55ef7f7c1647d20b0c8a09bd992172969518231e546054529a46",
+    "src/access.ts": "c7a9907a392e0c93e09c6e9f576b3de086695d03e01213ad062d4a404e91a247",
+    "src/analysis.ts": "9a42a99590a39e5cae6b97952e614733572d3ff3cf90cb254dcf46a9097455e0",
+    "src/commands.ts": "fdeb468d4631913bb959838115694f2048a599f3eb20bc203f1745944425af5c",
+    "src/config.ts": "39c0bbbb07d5d5efca889408ac910a11bc2c34952f6f0c7f55ee60897d02216c",
+    "src/connection.ts": "2a65d4fdc2f65d76145f62fb535e9cb87f07df72ee1e92a1df9095ff3b669b0a",
+    "src/coordinator.ts": "5b8ebb356e862490b7fb243ce22bca265b0102c5b2ff0283b44c1bbd5d1a632b",
+    "src/egress.ts": "1c079a50f2741f13afa3c1b2e2a212f108cb338157166c6a6184413648e86677",
+    "src/graph-jumps.ts": "6555d00e0ed33f40586a759d683be8908d0d5cf35e2ddfd628401b7fe8521b66",
+    "src/graph.ts": "1dbbc2346cd50f42d1d40744a30f53e7ba993a0b842c8bebe0de990fff180a22",
+    "src/group.ts": "bae439ba9438f3081136c3741f734a2c1be97ba043a84988594d600068a951a2",
+    "src/index.ts": "f63e05c5a55579a968ed5e88da08421593e472460d70046b276814ea4acae4c1",
+    "src/loaded-extensions.ts": "af9aa1cf9063d6015a7130f8f90ec685aa6c907cd76d0717b1e43759d4f77071",
+    "src/mains.ts": "7f6f7dc080ee5b3b6c92d4c29695211f9ea645aaccc7a3eba78ad0333bf32ad5",
+    "src/panel.ts": "b9a388e1ac5e26e11597444191c3aa8c2618fb13d9fc3441fdc28510abc02dfe",
+    "src/render.ts": "94217ae96997f93e71bb1c4ccf4a3224cd91503f419300cf0c50968f0b30d9df",
+    "src/resources.ts": "f506a1de98c66c4361cdf078a8d82fc7d8f07798407551c7f6c964353c5b0b89",
+    "src/rpc-agent.ts": "b14d88c2cef01c976821a88dbe6f00e4960d4c116534d4927f01c863ad1acf44",
+    "src/sandbox-bridge.mjs": "6fa78b47bf000ae4b99e8cb598f067e620305d38dd3b74311a22266fd5f5b8cb",
+    "src/sandbox.Dockerfile": "efd7d8368c4f05f1f6182fcf2c0a25e7f1e7f7db400b6a34c5a71833770de200",
+    "src/schemas.ts": "63769fb88515175abe3cd58ef5f24276860e667854278718b802c53f58a472a7",
+    "src/store.ts": "3eb215284e3fb16cd2361ac83e43a7969894db803ca8760e79c3f16e4e8f48b7",
+    "src/task-summary.ts": "6b52c7cd95e1921171ab02b87a962d8268479daee525f4591d55e860fe93f2a9",
+    "src/telemetry.ts": "797ce2568bf38a429df7291f705d471d08b3df112a7c67b61f42649f23aa3db3",
+    "src/terminal-agent.ts": "58dada1fba4db6a3507a36921f211d737c9b07c2b3386070485fd131e1a0df87",
+    "src/terminal-ui.ts": "e5fefeb70ec0e51331780f57e29cc0692e333e7d593bf70ffeb41656c5f71cf9",
+    "src/types.ts": "96c2c922d91d29aecbfa69205a7197970d7655eff75e1a8102622d3de65ddda0",
+    "src/ui-types.ts": "cfb942df04467f15f38cf811d399b1863fdbc01df5cd223978b406ac4f5fe719",
+    "src/worker-config-ui.ts": "b7bd0b48478d313dbfb5acd78f2f405df806c13d6cdb92fe0359e1c5cbf416b2",
+    "src/worker-extensions.ts": "154cf424cd4750061a8aa8f5a63dd91305abd6e9b4f38d53259f0bf867eb9f79",
+    "src/worktrees.ts": "7893f6474a3b41eccc41f4c7f3ec4fc17133dbb72200326e1568ceb41dc0a2d7"
+  },
+  "acstack_version": "0.56.0",
+  "problem_files_sha256": {
+    "problems/event-delivery/PROMPT.md": "6e61106c641f6c847e5ec9fae7d7ecbfe6972f2fd78e46cf6a06c3cdd8f13bc0",
+    "problems/event-delivery/fixture/package.json": "12710e8a8ae0fd14722d7aee9671a969b2b00003b8bac7a6d63a9f9239d8ee23",
+    "problems/event-delivery/fixture/src/index.ts": "25e6771006f678acf6e3f9d71376413579f66cf77fe4561c5dd4a38b3718eb58",
+    "problems/event-delivery/fixture/src/persistence.ts": "65f8e85b78d7a3e2b370f0d75ce087d8298c4220d9ea4f16fd715c262c215c5b",
+    "problems/event-delivery/fixture/src/queue.ts": "c58cd9ede3c635e59635d6d67288db5f9206db27e288c477f00e18c34ea82894",
+    "problems/event-delivery/fixture/src/service.ts": "3f8fa44bd0e7f4c7838bf601008771107cdd71cb269bb0d255c8c1a771ab21b5",
+    "problems/event-delivery/fixture/src/types.ts": "44b0d2a41031bbb7e35a8c80ab6cd2404a502780566fe744ee617c7146fed1e6",
+    "problems/event-delivery/fixture/test/delivery.test.ts": "55977d01a5329d2116691c85f9d143cd4bdfcd39fbd3363d0bb3a315d85863eb",
+    "problems/event-delivery/fixture/test/scheduling.test.ts": "253e9a914780aa00f363f8289acc636cf5e0b2408705b05d39e46caf0cc2a8c5",
+    "problems/event-delivery/grader/components.test.ts": "44e0478a7fbbf3d38fa6124f5229a53b4634b4929eb5822a0da8f86f876b5fc4",
+    "problems/event-delivery/grader/delivery.test.ts": "0a5167591baed7e812b2203d293d92a9e8a28fc6f11f6bd057e07ed7dd16f926",
+    "problems/event-delivery/reference/src/broker-types.ts": "48dbbb90af234249af64e0dcc929a0d4fa460dac3c64008084ad061fcc00e88c",
+    "problems/event-delivery/reference/src/broker.ts": "8df1159a5f5e4dc6bed817447190e8bde6e1c064680f3d765eeabfb7319758d3",
+    "problems/event-delivery/reference/src/dispatch.ts": "349c0f0aadc98a68d6c9308b913b5e8a21dbf8d181f4e89d43888c5744c91423",
+    "problems/event-delivery/reference/src/index.ts": "8b5134c5a2f5284565c77349b01189c1404f17aa20165a531417f3a53b0dce12",
+    "problems/event-delivery/reference/src/persistence.ts": "6e325b8ccbfca6bcf0854b1c47072e248eea54688f4247e0dadef33263c15438",
+    "problems/event-delivery/reference/src/queue.ts": "c58cd9ede3c635e59635d6d67288db5f9206db27e288c477f00e18c34ea82894",
+    "problems/event-delivery/reference/src/service.ts": "3f8fa44bd0e7f4c7838bf601008771107cdd71cb269bb0d255c8c1a771ab21b5",
+    "problems/event-delivery/reference/src/state.ts": "66ffb44c1cd45622e6813ffc56c6f6030b48b6001c60357b9bb597dfadcf3af4",
+    "problems/event-delivery/reference/src/subscription.ts": "3f8e2d64ede55fc338343ae9d38b3f385609bb025584f81b97fb6bfced4a6f82",
+    "problems/event-delivery/reference/src/types.ts": "44b0d2a41031bbb7e35a8c80ab6cd2404a502780566fe744ee617c7146fed1e6",
+    "problems/workspace-indexer/PROMPT.md": "a1bb53745314db14d97f29aa7610904f554f752220de0706ffb4c3a030f09473",
+    "problems/workspace-indexer/fixture/package.json": "08280d193f0e2fc56015f7591d46bdd1a10def9c906dde731df283d259c5a7c4",
+    "problems/workspace-indexer/fixture/src/index.ts": "dd222594575f382d57bdf2ab3c988a0f199eff82cd5f0ab817a84b728445437d",
+    "problems/workspace-indexer/fixture/src/query.ts": "c72e8bf6d2f9f342523239d9bf00384715955ac8d685c93649effa8263dd9d3e",
+    "problems/workspace-indexer/fixture/src/snapshot.ts": "fd32fa6b4c845211731f338d8cdc47da0847cfeea97f1261b8aae61a10b41965",
+    "problems/workspace-indexer/fixture/src/text.ts": "e6b4a17bdf888297aba1134d7c03dbdb820c13e2ebeaa148097ec2bfbcc11c32",
+    "problems/workspace-indexer/fixture/test/index.test.ts": "1456f2a956cf1335922bcf2395f2dfde50edfb6c9a5e61ef04dc9520c6e6d9e6",
+    "problems/workspace-indexer/fixture/test/regression.test.ts": "f4a2657735352234b47a23d4df4aa524b523598389b57f99d7e07b7a084ff1b9",
+    "problems/workspace-indexer/grader/persistence.test.ts": "03df8690991aa289c71fef44240e9fd65d0213bb62a20643e662c3210b05ffa4",
+    "problems/workspace-indexer/grader/search.test.ts": "493797fc84c0239263dfb2e1fc950b9d696325ae354fa03d657aa7508fc6e897",
+    "problems/workspace-indexer/reference/src/index.ts": "59449135b9528c49055b4a38ae00c926130afc4e5c3c30a367834f463858c124",
+    "problems/workspace-indexer/reference/src/persistent.ts": "3d2b53e5210ac05b3b6fb862c0e689ced78c9009a28b1745e837af1d85d373ff",
+    "problems/workspace-indexer/reference/src/query.ts": "22d770bf5ac23bb132063a8cd8757c91422b0832d6d647d0a84cfba1afcefb0b",
+    "problems/workspace-indexer/reference/src/ranking.ts": "ae246376a05b48ca56ab39da4e45922724415c5442c3bc40854c87f626eae48e",
+    "problems/workspace-indexer/reference/src/snapshot.ts": "fd32fa6b4c845211731f338d8cdc47da0847cfeea97f1261b8aae61a10b41965",
+    "problems/workspace-indexer/reference/src/state.ts": "396e4d9e177eb387a942e7de65500bb0c0168867870dcaf99b0e1dd400496627",
+    "problems/workspace-indexer/reference/src/text.ts": "e6b4a17bdf888297aba1134d7c03dbdb820c13e2ebeaa148097ec2bfbcc11c32"
+  },
+  "runtime": {
+    "node": "v22.23.4",
+    "pi": "1.5.0",
+    "model": "openai/gpt-6.1-sol",
+    "thinking": "medium"
+  },
+  "aggregate_usage": {
+    "input": 214323,
+    "output": 36555,
+    "cacheRead": 3742720,
+    "cacheWrite": 0,
+    "totalTokens": 3993598,
+    "reasoning": 2883
+  },
+  "baseline_aggregate_usage": {
+    "input": 81134,
+    "output": 24201,
+    "cacheRead": 1963392,
+    "cacheWrite": 0,
+    "totalTokens": 2068727,
+    "reasoning": 1408
+  },
+  "attempt_interval_overlap_seconds": 288.01841616630554,
+  "dollar_cost": null,
+  "billing": "subscription OAuth; allowance weighting and dollar cost unknown; supervisor usage excluded",
+  "limitations": [
+    "One attempt per problem.",
+    "Native host projects are not OS-sandboxed or resource-isolated.",
+    "Both tasks ran concurrently on a shared host; timing is per problem, not suite wall time.",
+    "Delegation is optional; self-owned task-board planning is not inter-agent coordination.",
+    "V1 results are historical and are not scores on these expanded fixtures.",
+    "Candidate results are one attempt per problem; observed differences are not causal estimates of candidate effects.",
+    "Indexer first Ctrl+D left an idle Pi UI. A second exited; no model or grading-feedback retry. Attempt time is a conservative recovered upper bound, actual completion bracket468.650\u2013470.325 seconds (width1.675s); shutdown recovery excluded. Root/settle timing is approximate.",
+    "Source after-manifests and the afbdc862 freeze were captured before subsequent approved parent changes; those later changes are not part of this result."
+  ],
+  "results": [
+    {
+      "name": "expanded-stack-w27-event-delivery",
+      "task": "event-delivery",
+      "variant": "candidate-persistent-notifications",
+      "baseline_revision": "463b2001a8dc26af14faded8414465a7d8288126",
+      "status": "finished",
+      "valid_trial": true,
+      "attempt_seconds": 288.04521002294496,
+      "verifier_seconds": 0.5175255280919373,
+      "prompt_submitted_at_unix": 1793907734.4203565,
+      "root_final_observed_at_unix": 1793908022.4643986,
+      "reward": 1,
+      "visible": {
+        "ok": true,
+        "tests": 15,
+        "passed": 15,
+        "failed": 0
+      },
+      "additional": {
+        "ok": true,
+        "tests": 19,
+        "passed": 19,
+        "failed": 0
+      },
+      "model": "openai/gpt-6.1-sol",
+      "thinking": "medium",
+      "billing": "subscription OAuth; dollar cost and allowance weighting unknown",
+      "model_execution": "native disposable project, not sandboxed or resource-limited",
+      "team_limits": "normal AC Teams configuration; no evaluation-specific overrides",
+      "attempt_timeout_seconds": null,
+      "concurrent_with_other_problem": true,
+      "plugins": [
+        "AC Teams 0.0.27",
+        "AC Stack 0.56.0"
+      ],
+      "baseline_accepted": false,
+      "diagnostic_only": false,
+      "problem_tier": "expanded-systems-v2",
+      "acstack": {
+        "version": "0.56.0",
+        "files": {
+          "package.json": "79b9eb644d7476253cb6ba06dda1a4efa69a026798ee9532a99a3050ffb8dac1",
+          "pi/extension.ts": "6a362ae18854c007b115a9519086033af65caf89ab75f3be12cdc35f5d125629",
+          "assets/terminal-workspace/pi/acstack-question-blocked.ts": "167852cf54218b849d78469accc743ab86041957d87aa7db92f5999a881f644f"
+        }
+      },
+      "plugins_unchanged": true,
+      "root_attempt_seconds": 288.04403871903196,
+      "descendant_settle_seconds": 0.0011713039129972458,
+      "candidate_source_files_sha256": {
+        "package.json": "e388a3b735de55ef7f7c1647d20b0c8a09bd992172969518231e546054529a46",
+        "src/access.ts": "c7a9907a392e0c93e09c6e9f576b3de086695d03e01213ad062d4a404e91a247",
+        "src/analysis.ts": "9a42a99590a39e5cae6b97952e614733572d3ff3cf90cb254dcf46a9097455e0",
+        "src/commands.ts": "fdeb468d4631913bb959838115694f2048a599f3eb20bc203f1745944425af5c",
+        "src/config.ts": "39c0bbbb07d5d5efca889408ac910a11bc2c34952f6f0c7f55ee60897d02216c",
+        "src/connection.ts": "2a65d4fdc2f65d76145f62fb535e9cb87f07df72ee1e92a1df9095ff3b669b0a",
+        "src/coordinator.ts": "5b8ebb356e862490b7fb243ce22bca265b0102c5b2ff0283b44c1bbd5d1a632b",
+        "src/egress.ts": "1c079a50f2741f13afa3c1b2e2a212f108cb338157166c6a6184413648e86677",
+        "src/graph-jumps.ts": "6555d00e0ed33f40586a759d683be8908d0d5cf35e2ddfd628401b7fe8521b66",
+        "src/graph.ts": "1dbbc2346cd50f42d1d40744a30f53e7ba993a0b842c8bebe0de990fff180a22",
+        "src/group.ts": "bae439ba9438f3081136c3741f734a2c1be97ba043a84988594d600068a951a2",
+        "src/index.ts": "f63e05c5a55579a968ed5e88da08421593e472460d70046b276814ea4acae4c1",
+        "src/loaded-extensions.ts": "af9aa1cf9063d6015a7130f8f90ec685aa6c907cd76d0717b1e43759d4f77071",
+        "src/mains.ts": "7f6f7dc080ee5b3b6c92d4c29695211f9ea645aaccc7a3eba78ad0333bf32ad5",
+        "src/panel.ts": "b9a388e1ac5e26e11597444191c3aa8c2618fb13d9fc3441fdc28510abc02dfe",
+        "src/render.ts": "94217ae96997f93e71bb1c4ccf4a3224cd91503f419300cf0c50968f0b30d9df",
+        "src/resources.ts": "f506a1de98c66c4361cdf078a8d82fc7d8f07798407551c7f6c964353c5b0b89",
+        "src/rpc-agent.ts": "b14d88c2cef01c976821a88dbe6f00e4960d4c116534d4927f01c863ad1acf44",
+        "src/sandbox-bridge.mjs": "6fa78b47bf000ae4b99e8cb598f067e620305d38dd3b74311a22266fd5f5b8cb",
+        "src/sandbox.Dockerfile": "efd7d8368c4f05f1f6182fcf2c0a25e7f1e7f7db400b6a34c5a71833770de200",
+        "src/schemas.ts": "63769fb88515175abe3cd58ef5f24276860e667854278718b802c53f58a472a7",
+        "src/store.ts": "3eb215284e3fb16cd2361ac83e43a7969894db803ca8760e79c3f16e4e8f48b7",
+        "src/task-summary.ts": "6b52c7cd95e1921171ab02b87a962d8268479daee525f4591d55e860fe93f2a9",
+        "src/telemetry.ts": "797ce2568bf38a429df7291f705d471d08b3df112a7c67b61f42649f23aa3db3",
+        "src/terminal-agent.ts": "58dada1fba4db6a3507a36921f211d737c9b07c2b3386070485fd131e1a0df87",
+        "src/terminal-ui.ts": "e5fefeb70ec0e51331780f57e29cc0692e333e7d593bf70ffeb41656c5f71cf9",
+        "src/types.ts": "96c2c922d91d29aecbfa69205a7197970d7655eff75e1a8102622d3de65ddda0",
+        "src/ui-types.ts": "cfb942df04467f15f38cf811d399b1863fdbc01df5cd223978b406ac4f5fe719",
+        "src/worker-config-ui.ts": "b7bd0b48478d313dbfb5acd78f2f405df806c13d6cdb92fe0359e1c5cbf416b2",
+        "src/worker-extensions.ts": "154cf424cd4750061a8aa8f5a63dd91305abd6e9b4f38d53259f0bf867eb9f79",
+        "src/worktrees.ts": "7893f6474a3b41eccc41f4c7f3ec4fc17133dbb72200326e1568ceb41dc0a2d7"
+      },
+      "candidate_unchanged": true,
+      "candidate_freeze_sha256sum": "afbdc8627bc33fb13b5219637e5db73a7828190e50e028b563420a7ca5fa6e01",
+      "candidate_accepted": true,
+      "team_id": "01a1ad3b-aab8-71c3-b349-f829f51ccb57",
+      "sessions": 2,
+      "assistant_messages": 47,
+      "assistant_errors": 0,
+      "assistant_aborts": 0,
+      "usage": {
+        "input": 74310,
+        "output": 16371,
+        "cacheRead": 1454592,
+        "cacheWrite": 0,
+        "reasoning": 1076,
+        "totalTokens": 1545273
+      },
+      "tool_calls": {
+        "read": 24,
+        "bash": 11,
+        "team_agent": 2,
+        "team_task": 8,
+        "edit": 5,
+        "write": 8,
+        "team_message": 3
+      },
+      "board_posts": 6,
+      "board_summary_bytes": 1115,
+      "board_detail_bytes": 3409,
+      "delivered_notice_bytes": 1561,
+      "history_search_response_text_bytes": 0,
+      "explicit_includeDetail_fetches": 0,
+      "byte_counts_are_token_proxies": true,
+      "failed_test_names": {
+        "visible": [],
+        "additional": []
+      },
+      "fixture_and_grader_unchanged": true,
+      "normalized_prompt_matches_baseline": true,
+      "child_inheritance": {
+        "exercised": true,
+        "members": [
+          {
+            "name": "dispatch",
+            "status": "stopped",
+            "session_exists": true,
+            "selected_extension_ids": [
+              "user:package:acstack:assets/terminal-workspace/pi/acstack-question-blocked.ts",
+              "user:package:acstack:pi/extension.ts"
+            ],
+            "required_stack_ids_selected": true
+          }
+        ]
+      },
+      "actual_descendant_count": 1,
+      "coordination_actions": {
+        "team_agent:list": 1,
+        "team_task:create": 1,
+        "team_task:start": 3,
+        "team_agent:launch": 1,
+        "team_message:send": 3,
+        "team_task:complete": 3,
+        "team_task:read": 1
+      },
+      "custom_record_types": {
+        "acstack-writing-style-reminder": 2,
+        "ac-teams-team": 1,
+        "ac-teams": 4
+      },
+      "recorded_tool_errors": {
+        "bash": 3
+      },
+      "api_equivalent_catalog_estimate_usd": {
+        "input": 0.14862,
+        "output": 0.16371,
+        "cacheRead": 0.14545919999999998,
+        "cacheWrite": 0.0,
+        "total": 0.45778919999999984
+      },
+      "api_estimate_caveat": "Pi configured catalog rates, not provider-reported invoice or subscription charge; all root/children included, supervisor excluded.",
+      "observed_root_stack_skill_reads": [
+        "implement/SKILL.md",
+        "record-context/SKILL.md",
+        "test-conventions/SKILL.md"
+      ],
+      "observed_child_stack_skill_reads": [
+        "code-review/SKILL.md",
+        "implement/SKILL.md",
+        "test-conventions/SKILL.md"
+      ],
+      "observed_comparison": {
+        "baseline_attempt_seconds": 389.63861145300325,
+        "attempt_seconds_difference": -101.5934014300583,
+        "attempt_seconds_percent_change": -26.073751020517665,
+        "baseline_usage": {
+          "input": 39880,
+          "output": 13195,
+          "cacheRead": 852608,
+          "cacheWrite": 0,
+          "reasoning": 756,
+          "totalTokens": 905683
+        },
+        "baseline_sessions": 1,
+        "baseline_correctness": {
+          "reward": 1,
+          "visible": {
+            "ok": true,
+            "tests": 15,
+            "passed": 15,
+            "failed": 0
+          },
+          "additional": {
+            "ok": true,
+            "tests": 19,
+            "passed": 19,
+            "failed": 0
+          }
+        },
+        "usage_percent_change": {
+          "input": 86.33400200601807,
+          "output": 24.069723380068208,
+          "cacheRead": 70.60501426212281,
+          "totalTokens": 70.61963181378033
+        }
+      },
+      "observed_prior_candidate_comparison": {
+        "prior_attempt_seconds": 294.1912820780417,
+        "attempt_seconds_percent_change": -2.089141463228794,
+        "prior_usage": {
+          "input": 71426,
+          "output": 15302,
+          "cacheRead": 1224064,
+          "cacheWrite": 0,
+          "reasoning": 521,
+          "totalTokens": 1310792
+        },
+        "usage_percent_change": {
+          "input": 4.037745358832923,
+          "output": 6.986014900013071,
+          "cacheRead": 18.8330021959636,
+          "totalTokens": 17.888497946279802
+        }
+      },
+      "observed_child_stack_skill_reads_by_member": {
+        "aa741c01-ea94-40": [
+          "code-review/SKILL.md",
+          "implement/SKILL.md",
+          "test-conventions/SKILL.md"
+        ]
+      }
+    },
+    {
+      "name": "expanded-stack-w27-workspace-indexer",
+      "task": "workspace-indexer",
+      "variant": "candidate-persistent-notifications",
+      "baseline_revision": "463b2001a8dc26af14faded8414465a7d8288126",
+      "status": "finished",
+      "valid_trial": true,
+      "attempt_seconds": 470.32511019706726,
+      "verifier_seconds": 0.49144076800439507,
+      "prompt_submitted_at_unix": 1793907734.4459825,
+      "root_final_observed_at_unix": 1793908203.096095,
+      "reward": 1,
+      "visible": {
+        "ok": true,
+        "tests": 16,
+        "passed": 16,
+        "failed": 0
+      },
+      "additional": {
+        "ok": true,
+        "tests": 31,
+        "passed": 31,
+        "failed": 0
+      },
+      "model": "openai/gpt-6.1-sol",
+      "thinking": "medium",
+      "billing": "subscription OAuth; dollar cost and allowance weighting unknown",
+      "model_execution": "native disposable project, not sandboxed or resource-limited",
+      "team_limits": "normal AC Teams configuration; no evaluation-specific overrides",
+      "attempt_timeout_seconds": null,
+      "concurrent_with_other_problem": true,
+      "plugins": [
+        "AC Teams 0.0.27",
+        "AC Stack 0.56.0"
+      ],
+      "baseline_accepted": false,
+      "diagnostic_only": false,
+      "problem_tier": "expanded-systems-v2",
+      "acstack": {
+        "version": "0.56.0",
+        "files": {
+          "package.json": "79b9eb644d7476253cb6ba06dda1a4efa69a026798ee9532a99a3050ffb8dac1",
+          "pi/extension.ts": "6a362ae18854c007b115a9519086033af65caf89ab75f3be12cdc35f5d125629",
+          "assets/terminal-workspace/pi/acstack-question-blocked.ts": "167852cf54218b849d78469accc743ab86041957d87aa7db92f5999a881f644f"
+        }
+      },
+      "plugins_unchanged": true,
+      "root_attempt_seconds": 468.65011262893677,
+      "descendant_settle_seconds": 1.6749975681304932,
+      "candidate_source_files_sha256": {
+        "package.json": "e388a3b735de55ef7f7c1647d20b0c8a09bd992172969518231e546054529a46",
+        "src/access.ts": "c7a9907a392e0c93e09c6e9f576b3de086695d03e01213ad062d4a404e91a247",
+        "src/analysis.ts": "9a42a99590a39e5cae6b97952e614733572d3ff3cf90cb254dcf46a9097455e0",
+        "src/commands.ts": "fdeb468d4631913bb959838115694f2048a599f3eb20bc203f1745944425af5c",
+        "src/config.ts": "39c0bbbb07d5d5efca889408ac910a11bc2c34952f6f0c7f55ee60897d02216c",
+        "src/connection.ts": "2a65d4fdc2f65d76145f62fb535e9cb87f07df72ee1e92a1df9095ff3b669b0a",
+        "src/coordinator.ts": "5b8ebb356e862490b7fb243ce22bca265b0102c5b2ff0283b44c1bbd5d1a632b",
+        "src/egress.ts": "1c079a50f2741f13afa3c1b2e2a212f108cb338157166c6a6184413648e86677",
+        "src/graph-jumps.ts": "6555d00e0ed33f40586a759d683be8908d0d5cf35e2ddfd628401b7fe8521b66",
+        "src/graph.ts": "1dbbc2346cd50f42d1d40744a30f53e7ba993a0b842c8bebe0de990fff180a22",
+        "src/group.ts": "bae439ba9438f3081136c3741f734a2c1be97ba043a84988594d600068a951a2",
+        "src/index.ts": "f63e05c5a55579a968ed5e88da08421593e472460d70046b276814ea4acae4c1",
+        "src/loaded-extensions.ts": "af9aa1cf9063d6015a7130f8f90ec685aa6c907cd76d0717b1e43759d4f77071",
+        "src/mains.ts": "7f6f7dc080ee5b3b6c92d4c29695211f9ea645aaccc7a3eba78ad0333bf32ad5",
+        "src/panel.ts": "b9a388e1ac5e26e11597444191c3aa8c2618fb13d9fc3441fdc28510abc02dfe",
+        "src/render.ts": "94217ae96997f93e71bb1c4ccf4a3224cd91503f419300cf0c50968f0b30d9df",
+        "src/resources.ts": "f506a1de98c66c4361cdf078a8d82fc7d8f07798407551c7f6c964353c5b0b89",
+        "src/rpc-agent.ts": "b14d88c2cef01c976821a88dbe6f00e4960d4c116534d4927f01c863ad1acf44",
+        "src/sandbox-bridge.mjs": "6fa78b47bf000ae4b99e8cb598f067e620305d38dd3b74311a22266fd5f5b8cb",
+        "src/sandbox.Dockerfile": "efd7d8368c4f05f1f6182fcf2c0a25e7f1e7f7db400b6a34c5a71833770de200",
+        "src/schemas.ts": "63769fb88515175abe3cd58ef5f24276860e667854278718b802c53f58a472a7",
+        "src/store.ts": "3eb215284e3fb16cd2361ac83e43a7969894db803ca8760e79c3f16e4e8f48b7",
+        "src/task-summary.ts": "6b52c7cd95e1921171ab02b87a962d8268479daee525f4591d55e860fe93f2a9",
+        "src/telemetry.ts": "797ce2568bf38a429df7291f705d471d08b3df112a7c67b61f42649f23aa3db3",
+        "src/terminal-agent.ts": "58dada1fba4db6a3507a36921f211d737c9b07c2b3386070485fd131e1a0df87",
+        "src/terminal-ui.ts": "e5fefeb70ec0e51331780f57e29cc0692e333e7d593bf70ffeb41656c5f71cf9",
+        "src/types.ts": "96c2c922d91d29aecbfa69205a7197970d7655eff75e1a8102622d3de65ddda0",
+        "src/ui-types.ts": "cfb942df04467f15f38cf811d399b1863fdbc01df5cd223978b406ac4f5fe719",
+        "src/worker-config-ui.ts": "b7bd0b48478d313dbfb5acd78f2f405df806c13d6cdb92fe0359e1c5cbf416b2",
+        "src/worker-extensions.ts": "154cf424cd4750061a8aa8f5a63dd91305abd6e9b4f38d53259f0bf867eb9f79",
+        "src/worktrees.ts": "7893f6474a3b41eccc41f4c7f3ec4fc17133dbb72200326e1568ceb41dc0a2d7"
+      },
+      "candidate_unchanged": true,
+      "candidate_freeze_sha256sum": "afbdc8627bc33fb13b5219637e5db73a7828190e50e028b563420a7ca5fa6e01",
+      "candidate_accepted": true,
+      "timing_recovery": {
+        "reason": "First ctrl+d left idle Pi UI present; original driver refused grading. Second ctrl+d exited. No model prompt, code repair, or grading feedback retry.",
+        "original_error": "RuntimeError: Root Pi did not exit; refusing to grade active submission",
+        "attempt_seconds_is": "Conservative upper bound recovered from first shutdown screen capture minus prompt file timestamp",
+        "attempt_seconds_interval": [
+          468.65011262893677,
+          470.32511019706726
+        ],
+        "interval_width_seconds": 1.6749975681304932,
+        "root_final_message_timestamp": "2026-11-05T19:50:02.790Z",
+        "root_timing_is": "Upper bound from last descendant-wait progress timestamp; settle upper bound also includes terminal-read latency.",
+        "shutdown_recovery_excluded_from_attempt": true
+      },
+      "team_id": "01a1ad3b-aacd-766e-b369-632db3a1d0a1",
+      "sessions": 3,
+      "assistant_messages": 79,
+      "assistant_errors": 0,
+      "assistant_aborts": 0,
+      "usage": {
+        "input": 140013,
+        "output": 20184,
+        "cacheRead": 2288128,
+        "cacheWrite": 0,
+        "reasoning": 1807,
+        "totalTokens": 2448325
+      },
+      "tool_calls": {
+        "bash": 16,
+        "read": 35,
+        "team_agent": 3,
+        "team_task": 14,
+        "write": 8,
+        "edit": 4,
+        "team_message": 10
+      },
+      "board_posts": 10,
+      "board_summary_bytes": 2074,
+      "board_detail_bytes": 3680,
+      "delivered_notice_bytes": 3460,
+      "history_search_response_text_bytes": 0,
+      "explicit_includeDetail_fetches": 0,
+      "byte_counts_are_token_proxies": true,
+      "failed_test_names": {
+        "visible": [],
+        "additional": []
+      },
+      "fixture_and_grader_unchanged": true,
+      "normalized_prompt_matches_baseline": true,
+      "child_inheritance": {
+        "exercised": true,
+        "members": [
+          {
+            "name": "persistence",
+            "status": "stopped",
+            "session_exists": true,
+            "selected_extension_ids": [
+              "user:package:acstack:assets/terminal-workspace/pi/acstack-question-blocked.ts",
+              "user:package:acstack:pi/extension.ts"
+            ],
+            "required_stack_ids_selected": true
+          },
+          {
+            "name": "review",
+            "status": "interrupted",
+            "session_exists": true,
+            "selected_extension_ids": [
+              "user:package:acstack:assets/terminal-workspace/pi/acstack-question-blocked.ts",
+              "user:package:acstack:pi/extension.ts"
+            ],
+            "required_stack_ids_selected": true
+          }
+        ]
+      },
+      "actual_descendant_count": 2,
+      "coordination_actions": {
+        "team_agent:list": 1,
+        "team_task:create": 1,
+        "team_agent:launch": 2,
+        "team_task:start": 5,
+        "team_message:send": 6,
+        "team_task:complete": 4,
+        "team_task:list": 1,
+        "team_message:wait": 3,
+        "team_task:read": 2,
+        "team_task:reopen": 1,
+        "team_message:watch": 1
+      },
+      "custom_record_types": {
+        "acstack-writing-style-reminder": 3,
+        "ac-teams-team": 1,
+        "ac-teams": 9
+      },
+      "recorded_tool_errors": {
+        "team_task": 1,
+        "bash": 1
+      },
+      "api_equivalent_catalog_estimate_usd": {
+        "input": 0.280026,
+        "output": 0.20184000000000002,
+        "cacheRead": 0.22881279999999998,
+        "cacheWrite": 0.0,
+        "total": 0.7106788000000002
+      },
+      "api_estimate_caveat": "Pi configured catalog rates, not provider-reported invoice or subscription charge; all root/children included, supervisor excluded.",
+      "observed_root_stack_skill_reads": [
+        "implement/SKILL.md",
+        "test-conventions/SKILL.md"
+      ],
+      "observed_child_stack_skill_reads": [
+        "implement/SKILL.md",
+        "test-conventions/SKILL.md"
+      ],
+      "observed_comparison": {
+        "baseline_attempt_seconds": 383.6458467999473,
+        "attempt_seconds_difference": 86.67926339711994,
+        "attempt_seconds_percent_change": 22.593562297135716,
+        "baseline_usage": {
+          "input": 41254,
+          "output": 11006,
+          "cacheRead": 1110784,
+          "cacheWrite": 0,
+          "reasoning": 652,
+          "totalTokens": 1163044
+        },
+        "baseline_sessions": 1,
+        "baseline_correctness": {
+          "reward": 1,
+          "visible": {
+            "ok": true,
+            "tests": 16,
+            "passed": 16,
+            "failed": 0
+          },
+          "additional": {
+            "ok": true,
+            "tests": 31,
+            "passed": 31,
+            "failed": 0
+          }
+        },
+        "usage_percent_change": {
+          "input": 239.39254375333303,
+          "output": 83.39087770307106,
+          "cacheRead": 105.99216409310901,
+          "totalTokens": 110.51009248145385
+        }
+      },
+      "observed_prior_candidate_comparison": {
+        "prior_attempt_seconds": 408.571876720991,
+        "attempt_seconds_percent_change": 15.114411195327282,
+        "prior_usage": {
+          "input": 149607,
+          "output": 18146,
+          "cacheRead": 2352256,
+          "cacheWrite": 0,
+          "reasoning": 1827,
+          "totalTokens": 2520009
+        },
+        "usage_percent_change": {
+          "input": -6.412801540034896,
+          "output": 11.231125316874246,
+          "cacheRead": -2.7262338793056506,
+          "totalTokens": -2.8445930153424004
+        }
+      },
+      "observed_child_stack_skill_reads_by_member": {
+        "f582c5f6-4b7f-4d": [
+          "implement/SKILL.md",
+          "test-conventions/SKILL.md"
+        ],
+        "b5b3202f-543d-4f": [
+          "test-conventions/SKILL.md"
+        ]
+      },
+      "watch_workflow_evidence": {
+        "reviewer_watch_count": 1,
+        "reviewer_wait_count": 2,
+        "root_wait_count": 1,
+        "watch_registered_at": "2026-11-05T19:46:43.858Z",
+        "watched_task": "9946b43b-68c0-490e-a9d7-7e7519d31589",
+        "watched_task_completed_watch_cleared_and_reviewer_resumed_observed": true,
+        "review_passed": true,
+        "blocked_start_error": "Task is blocked by unfinished dependencies: 9946b43b-68c0-490e-a9d7-7e7519d31589",
+        "blocked_start_at": "2026-11-05T19:46:30.536Z",
+        "review_final_timestamp": "2026-11-05T19:50:03.175Z",
+        "review_interrupted_status_is_shutdown_only": true,
+        "causal_benefit_established": false
+      }
+    }
+  ],
+  "api_equivalent_catalog_estimate_usd": {
+    "input": 0.42864599999999997,
+    "output": 0.36555000000000004,
+    "cacheRead": 0.37427199999999994,
+    "cacheWrite": 0.0,
+    "total": 1.168468
+  },
+  "api_catalog_rates_usd_per_million": {
+    "input": 2,
+    "output": 10,
+    "cacheRead": 0.1
+  },
+  "prior_candidate_aggregate_usage": {
+    "input": 221033,
+    "output": 33448,
+    "cacheRead": 3576320,
+    "cacheWrite": 0,
+    "totalTokens": 3830801,
+    "reasoning": 2348
+  },
+  "prior_candidate_results": "expanded-v2-parallel-preference-acstack-2026-11-05.json"
+}
