@@ -34,14 +34,18 @@ node --test eval/run.test.mjs eval/record.test.mjs
 
 `check` prepares disposable copies, verifies that original visible tests pass on the starter, verifies that new requirements are not already solved, then overlays the reference implementation and requires all tests to pass. It deletes only its own temporary directory. This is fixture development testing, not a model baseline trial.
 
-Expanded-system validation:
+Current expanded-system validation (strengthened covered-history grader):
 
 | Problem | Starter visible | Starter additional | Reference visible | Reference additional |
 | --- | ---: | ---: | ---: | ---: |
 | Event delivery | 15/15 | 0/19 | 15/15 | 19/19 |
-| Workspace indexer | 16/16 | 0/31 | 16/16 | 31/31 |
+| Workspace indexer | 16/16 | 0/32 | 16/16 | 32/32 |
 
-Both complete references pass all 81 checks. All 31 foundation checks pass on the starters; all 50 new checks fail there. Seventeen tooling tests pass, including original-test enforcement, v1 archive integrity, whole-team recording, metadata validation, cache invalidation, and active-process refusal. Repository TypeScript checking and strict checking of all current fixture/reference source pass. The [validation record and problem-file hashes](expanded-v2-validation.json) identify this revision. Historical v1 results are not v2 measurements.
+Both complete references pass all 82 checks. All 31 foundation checks pass on the starters; all 51 new checks fail there. Seventeen tooling tests pass, including original-test enforcement, v1 archive integrity, whole-team recording, metadata validation, cache invalidation, and active-process refusal. Repository TypeScript checking and strict checking of the changed indexer reference pass.
+
+The new persistence case opens journal history ending before its checkpoint. It verifies failed-write retryability, commits an update, then reopens. The reference now discards obsolete covered history before appending across a revision gap. Original attempt grades remain unchanged.
+
+The [initial validation record and problem-file hashes](expanded-v2-validation.json) preserve the earlier 81-check revision. Historical reports retain their original grader results; historical v1 results are not v2 measurements.
 
 ## Prepare a project for later use
 
