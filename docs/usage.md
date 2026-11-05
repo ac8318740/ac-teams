@@ -50,11 +50,32 @@ Tool summaries and team notification previews prefer teammate names over IDs. Me
 A team can have several main sessions, each a top-level Pi session a person drives. Members are the agents they launch. Every main session controls every member and can stop or resume other main sessions; a member controls only its own descendants and never a main session.
 
 - **Promote:** On the panel's Teammates tab, `P` stops a member and relaunches it as a main session. It keeps its session ID and history, its transcript moves to the normal Pi session folder so `/resume` lists it, and it stays in the team. Under Herdr it opens in a new tab of the workspace for its worktree; otherwise it runs in its own tmux server and ac-teams prints the attach command. A member with enforced access asks first, because the promoted session runs without the container.
-- **Join:** `/teams join` lists the teams in this project and adds this session to the chosen one as a main session, then posts a summary of open tasks, owners, and recent messages. It refuses a session already in that team, or one already in a team with other members.
+- **Join:** `/teams join` lists project teams and adds this session to the chosen team as a main. It posts open tasks, owners, and recent messages. `/teams join <team-id>` selects an exact team without a picker or a UI. Both forms refuse duplicate membership or a session whose current team has other members. Explicit IDs must match a team in the same project.
 - **Leave:** `/teams leave` returns this session's in-progress tasks to `todo`, clears their ownership, and drops its main-session role; its record keeps its history. The last main session cannot leave while members are live.
 - **Resume:** A session remembers its team in its transcript. Resuming it reconnects to the team; if no coordinator is running, ac-teams offers to run it here. Declining turns the team tools off for this session.
 
 One main session runs the coordinator; the others connect to it. When that session exits, another main session takes over automatically and resumes the members that were working. See [operations](operations.md#coordinator-handover).
+
+### Handoff through Herdr
+
+When a main Pi session successfully reads `handoff/SKILL.md` through Pi's `read` tool, ac-teams appends instructions to that tool result. This is a Pi extension hook, not an injection into Claude Code or Codex.
+
+The installation prefix does not matter; the skill file stays unchanged. The hook skips members, sessions with team tools disabled, failed reads, and other skill reads.
+
+The sender decides whether the receiver belongs in the same team. It considers the user's intent and whether shared tasks, messages, and team control suit the handoff. For a standalone receiver, follow the skill's normal launch instructions and agent-kind choice without joining. Only a same-team handoff uses the sender's team ID and this sequence:
+
+1. Start a blank Pi session through Herdr in the same project, with ac-teams loaded.
+2. Submit `/teams join <team-id>` to the receiver through Herdr.
+3. Confirm the receiver's joined-team details (expand the result with Ctrl+O if folded) and its new main-session membership in the sender's `team_agent list`. Match the team ID and receiver session ID.
+4. Only then submit the handoff prompt and follow the skill's acknowledgement steps.
+
+A slash command need not produce a model turn, so Herdr's `prompt --wait` is not proof of joining. Inspect output and membership after a timeout or stalled response before retrying.
+
+For a same-team handoff, stop without sending the handoff prompt if either check fails. A team-coordinator failure does not block an intentionally standalone handoff.
+
+Reading the handoff skill opens the sender's team coordinator if needed, so there is a team to join. Task ownership does not transfer automatically; the extension adds no startup prompt or launcher.
+
+This is agent guidance, not enforcement of arbitrary Herdr launches. Reads through shell commands do not trigger the hook.
 
 ## Show tasks and configure the displays
 
