@@ -2,28 +2,33 @@ import { basename } from "node:path";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Editor, indexedColor, matchesKey, sliceByColumn, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { contextSummary } from "./telemetry.ts";
-import { buildTaskGraph, moveTaskSelection, taskStatus, type TaskGraph } from "./graph.ts";
+import { buildTaskFocus, buildTaskGraph, moveTaskSelection, taskStatus, type TaskGraph } from "./graph.ts";
+import { addGraphJumps } from "./graph-jumps.ts";
 import { cleanText as clean } from "./render.ts";
 import type { PanelHost } from "./ui-types.ts";
 import { taskName, type Message, type TaskView } from "./types.ts";
 
-export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Promise<void> {
+export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost, view = { graph: false }): Promise<void> {
   if (ctx.mode !== "tui") throw new Error("Teams panel requires interactive terminal mode");
   let snapshot = await host.snapshot();
   let tasks = snapshot.tasks;
   let events = snapshot.messages.slice().reverse();
   // Zoom is the title width each box gets, from the longest title (100%) down to none (number and status only).
   const longest = () => Math.max(1, ...tasks.map(task => visibleWidth(clean(task.title))));
-  let graphs = new Map<number, TaskGraph | null>();
+  const graphs = new Map<number, TaskGraph | null>();
+  const jumpedGraphs = new WeakMap<TaskGraph, TaskGraph>();
   const graphAt = (budget: number) => { if (!graphs.has(budget)) graphs.set(budget, buildTaskGraph(tasks, budget)); return graphs.get(budget)!; };
   let zoom: number | "fit" = "fit", shownZoom = longest();
-  let taskGraph = graphAt(shownZoom);
+  let taskGraph: TaskGraph | null = null;
   const drafts = host.drafts;
   const name = (id: string | undefined) => id === "root" ? "Main" : clean(snapshot.members.find(member => member.id === id)?.name ?? id ?? "Unassigned");
   const creator = (task: TaskView) => (task as TaskView & { creator?: string }).creator ?? "root";
   const destination = await ctx.ui.custom<string | undefined>((tui, theme, _kb, done) => {
     let tab = 0, taskIndex = 0, memberIndex = 0, eventIndex = 0;
-    let graph = true, detail = false, scroll = 0, detailScroll = 0, columnScroll = 0;
+    let graph = view.graph, detail = false, scroll = 0, detailScroll = 0, columnScroll = 0;
+    let graphScope: "auto" | "all" | "focus" = "auto", focusGraph = false;
+    let neighborhood: { id: string; width: number; height: number; graph: TaskGraph | null } | undefined;
+    let renderedGraph: { graph: TaskGraph; selection: string; width: number; scroll: number; rows: Map<number, string> } | undefined;
     let height = 30, bodyHeight = 21, receipt = "";
     let compose: "new" | "feedback" | undefined;
     let sending = false, opening = false, disposed = false;
@@ -31,6 +36,7 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
     let timer: ReturnType<typeof setTimeout> | undefined;
     let focused = true;
     let memberQuery = "", searching = false, hideStopped = false;
+    let jump: { number: string; error: string } | undefined;
     const tabs = ["Tasks", "Teammates", "Board"];
     const selectedTask = () => tasks[taskIndex];
     const memberIds = () => ["root", ...snapshot.members.filter(member => member.id !== "root").map(member => member.id)]
@@ -51,7 +57,7 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
         taskIndex = Math.max(0, tasks.findIndex(task => task.id === taskId));
         memberIndex = Math.max(0, memberIds().indexOf(memberId));
         eventIndex = Math.max(0, events.findIndex(event => event.id === eventId));
-        if (changed) { graphs = new Map(); taskGraph = graphAt(Math.min(shownZoom, longest())); }
+        if (changed) { graphs.clear(); taskGraph = null; neighborhood = undefined; }
       } catch (error) { if (!disposed) receipt = `Refresh failed: ${clean(String(error))}`; }
       finally { if (!disposed) { refresh(); timer = setTimeout(() => void poll(), 2000); } }
     }
@@ -142,25 +148,49 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
     }
 
     function graphLines(width: number) {
-      if (zoom === "fit") {
-        // Largest title width that still fits the pane (binary search; graphs are cached per width).
-        const fits = (budget: number) => { const g = graphAt(budget); return !!g && g.art.width <= width && g.art.plain.length <= bodyHeight - 1; };
-        let low = 0, high = longest();
-        if (fits(high)) low = high;
-        else while (low < high - 1) { const mid = (low + high) >> 1; if (fits(mid)) low = mid; else high = mid; }
-        shownZoom = low;
-      } else shownZoom = zoom;
-      taskGraph = graphAt(shownZoom);
-      if (!taskGraph) return undefined;
+      const fits = (g: TaskGraph | null) => !!g && g.art.width <= width && g.art.plain.length <= bodyHeight - 2;
+      const minimumTitle = Math.min(12, longest());
+      focusGraph = graphScope === "focus" || graphScope === "auto" && !fits(graphAt(minimumTitle));
+      if (!focusGraph) {
+        if (zoom === "fit") {
+          // Never remove titles to claim a fit. Explicit zoom can still show number/status only.
+          let low = minimumTitle, high = longest();
+          if (fits(graphAt(high))) low = high;
+          else if (fits(graphAt(low))) while (low < high - 1) { const mid = (low + high) >> 1; if (fits(graphAt(mid))) low = mid; else high = mid; }
+          shownZoom = low;
+        } else shownZoom = zoom;
+        const raw = graphAt(shownZoom);
+        if (raw && !jumpedGraphs.has(raw)) jumpedGraphs.set(raw, addGraphJumps(tasks, raw));
+        taskGraph = raw ? jumpedGraphs.get(raw) ?? null : null;
+        if (graphScope === "auto" && !fits(taskGraph)) focusGraph = true;
+      }
+      if (focusGraph) {
+        const id = selectedTask()?.id ?? "";
+        const height = bodyHeight - 1;
+        if (neighborhood?.id !== id || neighborhood.width !== width || neighborhood.height !== height) {
+          neighborhood = { id, width, height, graph: buildTaskFocus(tasks, id, width, height) };
+        }
+        taskGraph = neighborhood.graph;
+      }
+      if (!taskGraph || bodyHeight < 3) return undefined;
       const { art, bounds } = taskGraph;
-      const selected = bounds.get(selectedTask()?.id ?? "");
+      const selection = selectedTask()?.id ?? "";
+      const selected = bounds.get(selection);
       if (!selected) return undefined;
       if (selected.left < columnScroll) columnScroll = selected.left;
       if (selected.right - selected.left + 1 >= width) columnScroll = selected.left;
       else if (selected.right >= columnScroll + width) columnScroll = selected.right - width + 1;
       columnScroll = Math.max(0, Math.min(columnScroll, Math.max(0, art.width - width)));
-      const rows = art.styled.map((spans, y) => {
-        const row = spans.map(span => fg(span.cls === "border" || span.cls === "edge" ? "dim" : "text", span.text)).join("");
+      if (renderedGraph?.graph !== taskGraph || renderedGraph.selection !== selection || renderedGraph.width !== width || renderedGraph.scroll !== columnScroll) {
+        renderedGraph = { graph: taskGraph, selection, width, scroll: columnScroll, rows: new Map() };
+      }
+      const cachedRows = renderedGraph.rows;
+      const rows = (start: number, end: number) => art.styled.slice(start, end).map((spans, index) => {
+        const y = start + index;
+        const cached = cachedRows.get(y);
+        if (cached !== undefined) return cached;
+        const row = spans.map(span => span.cls === "edgeLabel" ? theme.bold(fg("accent", span.text))
+          : fg(span.cls === "border" || span.cls === "edge" ? "dim" : "text", span.text)).join("");
         const replacements: { left: number; right: number; text: string }[] = [];
         for (const task of tasks) {
           const box = bounds.get(task.id);
@@ -187,9 +217,11 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
         });
         parts.push(sliceByColumn(row, column, art.width - column));
         const indent = " ".repeat(Math.max(0, Math.floor((width - art.width) / 2)));
-        return indent + sliceByColumn(parts.join(""), columnScroll, width);
+        const line = indent + sliceByColumn(parts.join(""), columnScroll, width);
+        cachedRows.set(y, line);
+        return line;
       });
-      return { rows, selectedRow: selected.top, selectedHeight: selected.bottom - selected.top + 1, width: art.width };
+      return { rows, height: art.plain.length, selectedRow: selected.top, selectedHeight: selected.bottom - selected.top + 1, width: art.width, fits: fits(taskGraph), focus: focusGraph, count: bounds.size };
     }
 
     function body(width: number): string[] {
@@ -203,7 +235,7 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
         return [...intro, ...input].slice(0, bodyHeight);
       }
       if (detail) {
-        const lines = tab === 0 ? taskDetails(width) : memberDetails(width);
+        const lines = tab === 0 ? taskDetails(width) : tab === 1 ? memberDetails(width) : eventDetails(width);
         detailScroll = Math.min(detailScroll, Math.max(0, lines.length - bodyHeight));
         return lines.slice(detailScroll, detailScroll + bodyHeight);
       }
@@ -212,10 +244,10 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
       const rightWidth = width - leftWidth - 3;
       let left: string[], right: string[], selectedRow: number;
       let selectedHeight = 1, graphWidth = 0;
+      const graphData = tab === 0 && graph ? graphLines(leftWidth) : undefined;
       if (tab === 0) {
-        const graphData = graph ? graphLines(leftWidth) : undefined;
         const titleWidth = Math.max(1, leftWidth - 12);
-        left = graphData ? graphData.rows : tasks.length ? [tableHeader(`  ${pad("Task", titleWidth)}   State`), "",
+        left = graphData ? [] : tasks.length ? [tableHeader(`  ${pad("Task", titleWidth)}   State`), "",
           ...tasks.map((task, index) => {
             const selected = index === taskIndex;
             const body = fg(taskStatus(task) === "Done" ? "dim" : "text", pad(taskTitle(task.id), titleWidth));
@@ -278,21 +310,26 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
         right = split ? eventDetails(rightWidth) : [];
       }
 
-      const viewHeight = Math.max(1, bodyHeight - (graphWidth ? 1 : 0));
+      const viewHeight = Math.max(1, bodyHeight - (graphWidth ? graphData?.focus ? 1 : 2 : 0));
+      if (graphData?.focus) scroll = 0;
       if (selectedRow < scroll) scroll = selectedRow;
       if (selectedRow + selectedHeight > scroll + viewHeight) scroll = selectedRow + selectedHeight - viewHeight;
-      scroll = Math.max(0, Math.min(scroll, Math.max(0, left.length - viewHeight)));
-      const viewport = left.slice(scroll, scroll + viewHeight);
+      const rowCount = graphData?.height ?? left.length;
+      scroll = Math.max(0, Math.min(scroll, Math.max(0, rowCount - viewHeight)));
+      const viewport = graphData ? graphData.rows(scroll, scroll + viewHeight) : left.slice(scroll, scroll + viewHeight);
       if (graphWidth) {
-        const hidden = scroll || left.length > scroll + viewHeight || graphWidth > leftWidth;
-        viewport.unshift(fg("muted", `Zoom ${Math.round(100 * shownZoom / longest())}%${zoom === "fit" ? " (fit)" : ""}`
-          + (hidden ? ` · ↑ ${scroll} rows · ↓ ${Math.max(0, left.length - scroll - viewHeight)} rows` : "")
+        if (!graphData?.focus) viewport.unshift(fg("dim", taskGraph?.jumps === null
+          ? "Line jumps unavailable; original wires retained"
+          : `Rounded bridges (${taskGraph?.jumps ?? 0}); other overlaps unchanged`));
+        const hidden = scroll || rowCount > scroll + viewHeight || graphWidth > leftWidth;
+        viewport.unshift(fg("muted", (graphData?.focus ? `Focus: ${graphData.count} of ${tasks.length} tasks · A Full map` : `Full map: ${tasks.length} tasks · Zoom ${Math.round(100 * shownZoom / longest())}%${zoom === "fit" ? graphData?.fits ? " (fit)" : " (pan to explore)" : ""}`)
+          + (hidden ? ` · ↑ ${scroll} rows · ↓ ${Math.max(0, rowCount - scroll - viewHeight)} rows` : "")
           + (graphWidth > leftWidth ? ` · ← ${columnScroll} cols · ${Math.max(0, graphWidth - columnScroll - leftWidth)} cols →` : "")));
       }
       return Array.from({ length: bodyHeight }, (_, index) => {
         let row = viewport[index] ?? "";
-        if (!graphWidth && index === 0 && scroll > 0) row = fg("muted", `↑ ${scroll} rows above`);
-        if (!graphWidth && index === bodyHeight - 1 && scroll + bodyHeight < left.length) row = fg("muted", `↓ ${left.length - scroll - bodyHeight} rows below`);
+        if (!graphWidth && index === 0 && scroll > 0 && selectedRow !== scroll) row = fg("muted", `↑ ${scroll} rows above`);
+        if (!graphWidth && index === bodyHeight - 1 && scroll + bodyHeight < left.length && selectedRow !== scroll + index) row = fg("muted", `↓ ${left.length - scroll - bodyHeight} rows below`);
         return split ? pad(row, leftWidth) + fg("dim", " │ ") + truncateToWidth(right[index] ?? "", rightWidth) : row;
       });
     }
@@ -367,11 +404,12 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
         const title = heading("Teams") + fg("muted", ` · ${name(host.self)} · ${snapshot.members.filter(member => member.id !== "root" && ["starting", "busy", "idle", "stopping"].includes(member.status)).length}/${snapshot.limit} live · depth ${snapshot.depth}`);
         const tabLine = tabs.map((text, index) => index === tab ? theme.bold(fg("accent", `[${text}]`)) : fg("muted", ` ${text} `)).join("  ") + (tab === 0 && inner >= 78 ? fg("muted", `    ${graph ? "Graph · prerequisites above · G List" : "List · G Graph"}`) : "");
         const filters = `${searching || memberQuery ? `/ Filter: ${memberQuery}${searching ? "▏" : ""}` : "/ Filter"} · H ${hideStopped ? "Stopped: hidden" : "Hide stopped"}`;
-        const help = searching ? `${filters} · Enter Apply · Esc Clear`
+        const help = jump ? `Go to task: ${jump.number}▏ · Enter Go · Esc Cancel${jump.error ? ` · ${jump.error}` : ""}`
+          : searching ? `${filters} · Enter Apply · Esc Clear`
           : compose ? "Enter Send · Shift+Enter Newline · Esc Keep draft"
           : detail ? tab === 0 ? "↑↓ Scroll · C Feedback · O Open owner · Esc Back"
             : tab === 1 ? "↑↓ Scroll · Enter Open session · Esc Back" : "↑↓ Scroll · O Open related session · Esc Back"
-          : tab === 0 ? `${graph ? "↑↓←→" : "↑↓"} Select · Enter Details · G Graph/List${graph ? " · +/- Zoom · F Fit" : ""} · C Feedback · N New task · Tab Next · Esc Close`
+          : tab === 0 ? `${graph ? "↑↓←→" : "↑↓"} Select · Enter Details · Shift+J Jump · G ${graph ? "List" : "Graph"}${graph ? " · A All/Focus · +/- Zoom · F Fit" : ""} · C Feedback · N New · Tab Next · Esc Close`
           : tab === 1 ? `${filters} · ↑↓ Select · → Details · Enter Open session · N New task · Tab Next · Esc Close`
           : "↑↓ Select · Enter Details · O Open related session · Tab Next · Esc Close";
         const teammates = snapshot.members.filter(member => member.id !== "root");
@@ -390,7 +428,7 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
         return [border("╭", "╮"), row(title), ...summary.map(row), row(tabLine), border("├", "┤"),
           ...Array.from({ length: bodyHeight }, (_, index) => row(content[index] ?? "")), border("├", "┤"), ...receipts.map(row), ...hints.map(row), border("╰", "╯")].slice(0, height).map(line => truncateToWidth(line, width));
       },
-      invalidate() { editor.invalidate(); },
+      invalidate() { editor.invalidate(); renderedGraph = undefined; },
       dispose() {
         disposed = true; clearTimeout(timer);
         if (compose) drafts.set(draftKey(), editor.getExpandedText());
@@ -405,6 +443,21 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
           refresh(); return;
         }
         if (opening) return;
+        if (jump) {
+          if (matchesKey(data, "escape")) jump = undefined;
+          else if (matchesKey(data, "enter")) {
+            const number = Number(jump.number.trim());
+            const index = tasks.findIndex(task => task.number === number);
+            if (!/^\d+$/.test(jump.number.trim()) || !Number.isSafeInteger(number) || number < 1) jump.error = "Enter a positive task number";
+            else if (index < 0) jump.error = `Task #${number} does not exist`;
+            else { taskIndex = index; scroll = 0; columnScroll = 0; jump = undefined; }
+          } else if (matchesKey(data, "backspace")) { jump.number = Array.from(jump.number).slice(0, -1).join(""); jump.error = ""; }
+          else {
+            const text = data.replace(/^\x1b\[200~|\x1b\[201~$/g, "");
+            if (!/[\x00-\x1f\x7f-\x9f]/.test(text)) { jump.number += clean(text); jump.error = ""; }
+          }
+          refresh(); return;
+        }
         if (searching) {
           if (matchesKey(data, "escape")) { memberQuery = ""; searching = false; }
           else if (matchesKey(data, "enter")) searching = false;
@@ -415,32 +468,39 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost): Pr
           }
           memberIndex = 0; scroll = 0; refresh(); return;
         }
-        if (tab === 1 && !detail && (data === "/" || data.toLowerCase() === "h")) {
+        if (tab === 1 && !detail && (data === "/" || data === "H")) {
           if (data === "/") searching = true;
           else hideStopped = !hideStopped;
           memberIndex = 0; scroll = 0; refresh(); return;
         }
-        const direction = (["up", "down", "left", "right"] as const).find(key => matchesKey(data, key));
-        if (matchesKey(data, "escape")) { if (detail) { detail = false; detailScroll = 0; } else done(undefined); }
+        const direction = (["up", "down", "left", "right"] as const).find(key =>
+          matchesKey(data, key) || data === ({ up: "k", down: "j", left: "h", right: "l" } as const)[key]);
+        const page = matchesKey(data, "pageDown") ? 1 : matchesKey(data, "pageUp") ? -1 : 0;
+        if (matchesKey(data, "escape") || detail && direction === "left") { if (detail) { detail = false; detailScroll = 0; } else done(undefined); }
         else if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) { tab = (tab + (matchesKey(data, "shift+tab") ? 2 : 1)) % 3; detail = false; scroll = 0; detailScroll = 0; }
         else if (tab === 0 && graph && !detail && taskGraph && selectedTask() && direction) {
           const id = moveTaskSelection(taskGraph.bounds, selectedTask()!.id, direction);
-          taskIndex = tasks.findIndex(task => task.id === id);
-        } else if (tab === 1 && matchesKey(data, "right")) { detail = true; detailScroll = 0; }
-        else if (matchesKey(data, "down") || matchesKey(data, "up")) {
-          const delta = matchesKey(data, "down") ? 1 : -1;
+          taskIndex = focusGraph && (direction === "left" || direction === "right")
+            ? Math.max(0, Math.min(tasks.length - 1, taskIndex + (direction === "right" ? 1 : -1)))
+            : tasks.findIndex(task => task.id === id);
+        } else if (!detail && direction === "right") { detail = true; detailScroll = 0; }
+        else if (page || direction === "down" || direction === "up") {
+          const delta = page ? page * Math.max(1, bodyHeight - (detail ? 0 : tab === 0 ? 2 : 1)) : direction === "down" ? 1 : -1;
           if (detail) detailScroll = Math.max(0, detailScroll + delta);
           else if (tab === 0) taskIndex = Math.max(0, Math.min(tasks.length - 1, taskIndex + delta));
           else if (tab === 1) memberIndex = Math.max(0, Math.min(memberIds().length - 1, memberIndex + delta));
           else eventIndex = Math.max(0, Math.min(events.length - 1, eventIndex + delta));
-        } else if (data.toLowerCase() === "g" && tab === 0 && !detail) { graph = !graph; scroll = 0; }
+        } else if (data === "J" && tab === 0 && !detail) { jump = { number: "", error: "" }; }
+        else if (data.toLowerCase() === "g" && tab === 0 && !detail) { graph = view.graph = !graph; scroll = 0; }
+        else if (data.toLowerCase() === "a" && graph && tab === 0 && !detail) { graphScope = focusGraph ? "all" : "focus"; scroll = 0; columnScroll = 0; taskGraph = null; }
         else if (tab === 0 && graph && !detail && ["+", "=", "-"].includes(data)) {
           // Steps of 1.25x title width, like a smooth zoom; always at least one column so each press shows a change.
+          graphScope = "all";
           const at = zoom === "fit" ? shownZoom : zoom;
           zoom = data === "-" ? Math.max(0, Math.min(at - 1, Math.floor(at / 1.25)))
             : Math.min(longest(), Math.max(at + 1, Math.ceil(at * 1.25)));
           scroll = 0; columnScroll = 0;
-        } else if (tab === 0 && graph && !detail && data.toLowerCase() === "f") { zoom = "fit"; scroll = 0; columnScroll = 0; }
+        } else if (tab === 0 && graph && !detail && data.toLowerCase() === "f") { graphScope = "auto"; zoom = "fit"; scroll = 0; columnScroll = 0; }
         else if (data.toLowerCase() === "n") begin("new");
         else if (data.toLowerCase() === "c" && tab === 0) begin("feedback");
         else if (data.toLowerCase() === "p" && tab === 1 && !host.child) {

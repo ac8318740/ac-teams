@@ -45,6 +45,7 @@ export default function teams(pi: ExtensionAPI) {
   let linking: Promise<void> | undefined;
   let linkedSession: string | undefined;
   const drafts = new Map<string, string>();
+  const panelView = { graph: false };
   const display = { ...defaultDisplaySettings };
   const teamTools = ["team_agent", "team_task", "team_message"];
   const memberId = () => child ? environment[1]! : team?.member ?? "root";
@@ -294,6 +295,23 @@ export default function teams(pi: ExtensionAPI) {
   pi.on("turn_end", (_event, ctx) => reconcile(ctx));
   pi.on("agent_settled", (_event, ctx) => { inputCount = 0; reconcile(ctx); report(ctx, { type: "agent_settled" }); });
   pi.on("tool_execution_start", (event, ctx) => report(ctx, { type: "activity", text: `Running ${event.toolName}`.slice(0, 500) }));
+  pi.on("tool_result", async (event, ctx) => {
+    if (child || disabled || exiting || event.toolName !== "read" || event.isError || typeof event.input.path !== "string" || !/(?:^|[\\/\\\\])handoff[\\/\\\\]SKILL\.md$/.test(event.input.path)) return;
+    let guidance: string;
+    try {
+      await link(ctx);
+      guidance = [
+        "AC Teams handoff (Pi senders only): Decide whether the receiving agent should be in the same team, based on the user's intent and whether shared tasks, messages, and team control are appropriate. Joining is not automatic. If the receiver should be standalone, follow the skill's normal launch instructions and agent-kind choice without using team join. Only if you choose a same-team handoff through Herdr, use the following steps instead of the skill's standalone launch:",
+        "1. Record team_agent list before launch. Start a fresh Pi with Herdr (--kind pi), in the same project, without the handoff prompt. Do not launch a different agent kind or inherit member credentials.",
+        `2. Once the new Pi is ready, submit /teams join ${teamId(ctx)} in THAT session using herdr agent prompt <receiver> ${JSON.stringify(`/teams join ${teamId(ctx)}`)} (or the equivalent Herdr API). Do not run it in the sender.`,
+        "3. Verify the receiver's joined-team details (expand with Ctrl+O if folded) and a new main with its sessionId in the sender's team_agent list. Slash commands may not produce a model turn: do not use prompt --wait as proof of joining. On a stalled response or timeout, inspect receiver output and team membership before retrying. If joining fails or cannot be confirmed, stop and report; do not send the handoff prompt.",
+        "4. Only after both checks confirm membership, seed the handoff prompt through Herdr and follow the skill's acknowledgement steps. Task ownership does not transfer automatically.",
+      ].join("\n");
+    } catch (error) {
+      guidance = `AC Teams same-team handoff unavailable: ${cleanText(String(error))}. If the receiver should share this team, stop and report; do not send its handoff prompt until membership can be established. If the receiver should be standalone, follow the skill's normal launch instructions and agent-kind choice without using team join.`;
+    }
+    return { content: [...event.content, { type: "text", text: guidance }], structuredContent: event.structuredContent };
+  });
   pi.on("message_end", (event, ctx) => {
     const change = assistantEvent(event.message);
     if (change) report(ctx, change);
@@ -313,7 +331,8 @@ export default function teams(pi: ExtensionAPI) {
     promptSnippet: "Plan and track multi-step work, alone or with teammates",
     promptGuidelines: [
       "Use team_task before substantial work with 3+ steps, when the user gives an explicit task list, or when coordinating deliverables. This includes your own research, design, implementation, and verification; no teammate is required. Skip single trivial tasks, conversation, and tool-by-tool bookkeeping.",
-      "Create the initial plan in one team_task call with tasks:[{title,description},...]. Titles are required; labels and descriptions default from titles. Include acceptance criteria for substantial or delegated work. Dependencies must reference existing task UUIDs; create prerequisites before dependent tasks. Reuse relevant existing tasks rather than duplicating them.",
+      "Before creating team_task entries, identify the outputs each task needs from other tasks. If it cannot start correctly without another task's verified output, add that task's UUID to dependencies. Consider shared contracts/setup before consumers, implementation before integration verification, and multiple outputs before final assembly. Keep independent work parallel; never add edges just to make a graph. Reassess dependencies when scope changes.",
+      "Create the team_task plan in dependency order: batch independent tasks with tasks:[{title,description},...], then create dependent tasks in later calls using the returned prerequisite UUIDs. Include every required prerequisite in dependencies; all prerequisites must be done before start. Dependencies cannot refer to siblings in the same batch. Titles are required; labels and descriptions default from titles. Include acceptance criteria for substantial or delegated work. Reuse relevant existing tasks rather than duplicating them.",
       "Call team_task start BEFORE beginning a task; it claims unowned ready work atomically. Use claim only to reserve work in advance, including blocked work. Complete each task IMMEDIATELY after checking its result with acceptance=true; never complete partial work or work with unresolved failures. Report blockers. Each agent should normally work on one task at a time; teammates can work in parallel.",
       taskTrackingGuidance, taskRequestGuidance,
       "team_task list returns compact summaries; read a task for its full description and acceptance criteria. Use returned UUIDs for API references and stable task numbers/names when reporting to people. Add dependencies only for real prerequisites, never merely to connect the diagram.",
@@ -371,10 +390,10 @@ export default function teams(pi: ExtensionAPI) {
     try { return (await promisify(execFile)("git", ["-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"], { timeout: 5000 })).stdout.trim(); }
     catch { return cwd; }
   }
-  /** /teams join: adds this session to another team in the same project as a main session. */
-  async function joinTeam(ctx: ExtensionContext) {
+  /** /teams join [team-id]: adds this session to another team in the same project as a main session. */
+  async function joinTeam(ctx: ExtensionContext, id?: string) {
     if (child) throw new Error("A member cannot join another team");
-    if (!ctx.hasUI) throw new Error("/teams join requires an interactive session");
+    if (!id && !ctx.hasUI) throw new Error("/teams join requires an interactive session or an explicit team ID");
     const sessionId = ctx.sessionManager.getSessionId(), home = teamsHome();
     const current = existsSync(join(home, teamId(ctx), "state.json")) ? readState(join(home, teamId(ctx))) : undefined;
     if (current && Object.values(current.members).some(member => member.id !== memberId() && member.role)) throw new Error("This session is already in a team with other members; use /teams leave first");
@@ -385,13 +404,14 @@ export default function teams(pi: ExtensionAPI) {
         if (state.id !== current?.id && main && await repository(main.cwd) === repo) teams.push(state);
       } catch { /* Unreadable or foreign team folders are not offered. */ }
     }
+    if (id && !teams.some(state => state.id === id)) throw new Error("No team with that ID in this project");
     if (!teams.length) { ctx.ui.notify("No other teams in this project", "info"); return; }
     const describe = (state: TeamState) => {
       const members = Object.values(state.members);
       return `${members.filter(isMain).map(memberName).join(", ")} · ${members.filter(member => member.role === "member").length} member(s) · ${Object.values(state.tasks).filter(task => task.status !== "done").length} open task(s) · ${state.id.slice(0, 8)}`;
     };
-    const labels = teams.map(describe), choice = await ctx.ui.select("Join which team?", labels);
-    const chosen = teams[labels.indexOf(choice ?? "")];
+    const labels = teams.map(describe);
+    const chosen = id ? teams.find(state => state.id === id) : teams[labels.indexOf(await ctx.ui.select("Join which team?", labels) ?? "")];
     if (!chosen) return;
     if (Object.values(chosen.members).some(member => member.sessionId === sessionId)) throw new Error("This session is already in that team");
     await close(); exiting = false; enable();
@@ -412,7 +432,7 @@ export default function teams(pi: ExtensionAPI) {
     const state = readState(dir), name = (id?: string) => id ? memberName(state.members[id] ?? { id }) : "unowned";
     const open = Object.values(state.tasks).filter(task => task.status !== "done");
     const recent = state.messages.slice(-5);
-    pi.sendMessage({ customType: "ac-teams", display: true, details: { through: state.messages.at(-1)?.seq ?? 0, messages: recent }, content: [
+    pi.sendMessage({ customType: "ac-teams", display: true, details: { joined: { team: state.id, member: team!.member, sessionId }, through: state.messages.at(-1)?.seq ?? 0, messages: recent }, content: [
       `Joined team ${state.id} as ${name(team!.member)}, a main session.`,
       open.length ? `Open tasks:\n${open.map(task => `- ${taskName(task)} (${task.status}, ${name(task.owner)})`).join("\n")}` : "No open tasks.",
       recent.length ? `Recent messages:\n${recent.map(message => `- ${name(message.from)}: ${message.summary.split("\n")[0].slice(0, 200)}`).join("\n")}` : "No messages yet.",
@@ -490,7 +510,7 @@ export default function teams(pi: ExtensionAPI) {
     handler: async ctx => { if (ctx.mode === "tui") await host(ctx).visit("root"); },
   });
   pi.registerCommand("teams", {
-    description: "Team panel; /teams teammate <name-or-id>, config, back, stop, status, join, or leave",
+    description: "Team panel; /teams teammate <name-or-id>, config, back, stop, status, join [team-id], or leave",
     async getArgumentCompletions(prefix) {
       if (!prefix.includes(" ")) return teamsCompletions(prefix, []);
       if (!context) return null;
@@ -507,8 +527,9 @@ export default function teams(pi: ExtensionAPI) {
         catch (error) { ctx.ui.notify(cleanText(String(error)), "error"); }
         return;
       }
-      if (args.trim() === "join" || args.trim() === "leave") {
-        try { await (args.trim() === "join" ? joinTeam(ctx) : leaveTeam(ctx)); }
+      const joinArgs = /^join(?:\s+(.+))?$/.exec(args.trim());
+      if (joinArgs || args.trim() === "leave") {
+        try { await (joinArgs ? joinTeam(ctx, joinArgs[1]) : leaveTeam(ctx)); }
         catch (error) { ctx.ui.notify(cleanText(String(error instanceof Error ? error.message : error)), "error"); }
         return;
       }
@@ -530,8 +551,8 @@ export default function teams(pi: ExtensionAPI) {
           if (id) await api.visit(id);
           else ctx.ui.notify(`Unknown teammate: ${cleanText(value)}. Use autocomplete or /teams panel.`, "error");
         }
-        else if (!args.trim() || args.trim() === "panel") await showTeamsPanel(ctx, api);
-        else ctx.ui.notify("Usage: /teams [panel|teammate <name-or-id>|config|back|stop|status|join|leave]", "info");
+        else if (!args.trim() || args.trim() === "panel") await showTeamsPanel(ctx, api, panelView);
+        else ctx.ui.notify("Usage: /teams [panel|teammate <name-or-id>|config|back|stop|status|join [team-id]|leave]", "info");
       } else {
         const status = await handle("agent", { action: "list" }, ctx);
         ctx.ui.notify(JSON.stringify(status, null, 2), "info");

@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
 import { initTheme, type ExtensionAPI, type ExtensionContext, type ExtensionToolContext, type ToolDefinition, type ToolRenderers } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import { cleanText } from "../src/render.ts";
 import { theme } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import teams from "../src/index.ts";
@@ -44,7 +45,7 @@ function fixture() {
   };
   // SAFETY: lifecycle and tool callbacks here only access the mocked context fields below.
   const ctx = { cwd: home, mode: "rpc", hasUI: true, model: { provider: "test", id: "model" }, tools: [], executeTool() { throw new Error("Unexpected nested tool"); },
-    getContextUsage: () => undefined,
+    getContextUsage: () => undefined, isProjectTrusted: () => true,
     sessionManager: { getSessionId: () => id, getSessionFile: () => join(home, "root.jsonl"), getSessionDir: () => home, getEntries: () => entries },
     ui: { notify(message: string) { warnings.push(message); }, async confirm() { confirmations++; return approval; }, async select(_title: string, options: string[]) { return options[0]; } },
   } as unknown as ExtensionToolContext;
@@ -55,7 +56,7 @@ function fixture() {
     return (await tools.get(name)!.execute(randomUUID(), args, new AbortController().signal, undefined, ctx)).details;
   }
   return { ctx, id, home, entries, get active() { return active; }, flags, warnings, messages, tools, commands, execute, events, approve(value: boolean) { approval = value; }, get confirmations() { return confirmations; },
-    async event(name: string) { return handlers.get(name)?.({ type: name }, ctx); },
+    async event(name: string, data: Record<string, unknown> = {}) { return handlers.get(name)?.({ type: name, ...data }, ctx); },
     async close() {
       try { await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, ctx); }
       finally { if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome; if (oldPi === undefined) delete process.env.AC_TEAMS_PI; else process.env.AC_TEAMS_PI = oldPi; rmSync(home, { recursive: true, force: true }); }
@@ -125,6 +126,27 @@ test("footer snapshots omit history while the panel still loads messages and com
     assert.equal(message.mock.calls.length, before + 1);
     assert.equal(message.mock.calls.at(-1)!.arguments[1].action, "history");
     assert.equal((message.mock.calls.at(-1)!.result as { summary: string }[])[0].summary, "Keep this message");
+  } finally { await f.close(); }
+});
+
+test("teams command starts in list mode and remembers graph/list choice across reopenings", async () => {
+  const f = fixture();
+  initTheme("dark");
+  const graphModes: boolean[] = [];
+  Object.assign(f.ctx, { mode: "tui" });
+  Object.assign(f.ctx.ui, {
+    custom(factory: Function) {
+      return new Promise<void>(done => {
+        const component = factory({ terminal: { rows: 32, columns: 100 }, requestRender() {} }, theme, {}, done) as Component & { handleInput(data: string): void; dispose(): void };
+        graphModes.push(component.render(100).map(cleanText).join("\n").includes("+/- Zoom"));
+        if (graphModes.length < 3) component.handleInput("g");
+        component.dispose(); done();
+      });
+    },
+  });
+  try {
+    for (let i = 0; i < 3; i++) await f.commands.get("teams")!.handler("panel", f.ctx);
+    assert.deepEqual(graphModes, [false, true, false]);
   } finally { await f.close(); }
 });
 
@@ -241,6 +263,15 @@ test("team tools guide solo planning and task-backed delegation without tracking
     assert.match(task.promptGuidelines!.join(" "), /3\+ steps/);
     assert.match(task.promptGuidelines!.join(" "), /trivial/);
     assert.ok(task.promptGuidelines!.includes(taskRequestGuidance));
+    const taskGuidance = task.promptGuidelines!.join(" ");
+    assert.match(taskGuidance, /outputs each task needs/);
+    assert.match(taskGuidance, /verified output/);
+    assert.match(taskGuidance, /Keep independent work parallel/);
+    assert.match(taskGuidance, /dependent tasks in later calls using the returned prerequisite UUIDs/);
+    assert.match(taskGuidance, /all prerequisites must be done/);
+    assert.match(taskGuidance, /Reassess dependencies when scope changes/);
+    assert.doesNotMatch(taskGuidance, /initial plan in one team_task call/);
+    assert.match(JSON.stringify(task.parameters), /Existing prerequisite task UUIDs/);
   } finally { await f.close(); }
 });
 
@@ -345,12 +376,12 @@ test("tool wiring refuses malformed requests and preserves task acceptance check
 });
 
 /** Writes a team where this session is the main session "second", beside the creator and one stopped member. */
-function seedTeam(f: ReturnType<typeof fixture>, sessionId = f.id) {
+function seedTeam(f: ReturnType<typeof fixture>, sessionId = f.id, cwd = f.home) {
   const team = randomUUID();
   const store = new Store({ version: 5, id: team, key: randomUUID(), limit: 10, depth: 2, tasks: {}, messages: [], members: {
-    root: { id: "root", role: "main", depth: 0, token: "a", cwd: f.home, status: "stopped", notified: 0, sessionId: randomUUID() },
-    second: { id: "second", name: "main-2", role: "main", depth: 0, token: "b", cwd: f.home, status: "stopped", notified: 0, sessionId },
-    w1: { id: "w1", name: "worker", role: "member", parent: "root", depth: 1, token: "c", cwd: f.home, status: "stopped", notified: 0 },
+    root: { id: "root", role: "main", depth: 0, token: "a", cwd, status: "stopped", notified: 0, sessionId: randomUUID() },
+    second: { id: "second", name: "main-2", role: "main", depth: 0, token: "b", cwd, status: "stopped", notified: 0, sessionId },
+    w1: { id: "w1", name: "worker", role: "member", parent: "root", depth: 1, token: "c", cwd, status: "stopped", notified: 0 },
   } }, teamsHome());
   store.close();
   return team;
@@ -366,6 +397,7 @@ test("a resumed main session with no coordinator offers takeover; declining turn
     assert.equal(f.confirmations, 1);
     assert.deepEqual(f.active, []);
     await assert.rejects(f.execute("team_agent", { action: "list" }), /declined to run the team coordinator/);
+    assert.equal(await f.event("tool_result", { toolName: "read", input: { path: "/skills/handoff/SKILL.md" }, content: [], isError: false }), undefined);
   } finally { await f.close(); }
 });
 
@@ -407,6 +439,110 @@ test("/teams join adds this session as a main session and writes the team entry"
     const status = await f.execute("team_agent", { action: "list" }) as { members: { id: string; role?: string; sessionId?: string }[] };
     assert.equal(status.members.find(member => member.sessionId === f.id)?.role, "main");
     assert.match(String((f.messages.at(-1) as { content: string }).content), /Joined team/);
+  } finally { await f.close(); }
+});
+
+test("/teams join <id> chooses the exact team without a picker or UI", async () => {
+  const f = fixture();
+  try {
+    seedTeam(f, randomUUID());
+    const team = seedTeam(f, randomUUID());
+    Object.assign(f.ctx, { hasUI: false });
+    Object.assign(f.ctx.ui, { async select() { assert.fail("explicit join must not open a picker"); } });
+    await f.event("session_start");
+    await f.commands.get("teams")!.handler(`join ${team}`, f.ctx);
+    assert.equal((f.entries.at(-1)?.data as { team: string }).team, team);
+    const status = await f.execute("team_agent", { action: "list" }) as { members: { role?: string; sessionId?: string }[] };
+    assert.equal(status.members.find(member => member.sessionId === f.id)?.role, "main");
+    assert.match((f.messages.at(-1) as { content: string }).content, new RegExp(`Joined team ${team}`));
+  } finally { await f.close(); }
+});
+
+test("explicit join connects to the live sender before sharing its tasks", async () => {
+  const sender = fixture();
+  let receiver: ReturnType<typeof fixture> | undefined;
+  try {
+    const task = await sender.execute("team_task", { action: "create", title: "Continue work" }) as { id: string };
+    receiver = fixture();
+    process.env.HOME = sender.home;
+    Object.assign(receiver.ctx, { cwd: sender.home });
+    await receiver.event("session_start");
+    await receiver.commands.get("teams")!.handler(`join ${sender.id}`, receiver.ctx);
+    const status = await sender.execute("team_agent", { action: "list" }) as { members: { role?: string; sessionId?: string; status: string }[] };
+    assert.equal(status.members.find(member => member.sessionId === receiver!.id)?.role, "main");
+    assert.equal(status.members.find(member => member.sessionId === receiver!.id)?.status, "idle");
+    const tasks = await receiver.execute("team_task", { action: "list" }) as { tasks: { id: string }[] };
+    assert.equal(tasks.tasks[0].id, task.id);
+    const joined = receiver.messages.at(-1) as { content: string; details: { joined: { team: string; member: string; sessionId: string } } };
+    assert.match(joined.content, new RegExp(`Joined team ${sender.id}`));
+    assert.equal(joined.details.joined.team, sender.id);
+    assert.equal(joined.details.joined.sessionId, receiver.id);
+    assert.ok(joined.details.joined.member);
+  } finally { await receiver?.close(); await sender.close(); }
+});
+
+test("explicit join rejects unknown, foreign, and path-like IDs without changing teams", async () => {
+  const f = fixture();
+  try {
+    const foreign = seedTeam(f, randomUUID(), join(f.home, "other-project"));
+    await f.event("session_start");
+    for (const id of [randomUUID(), foreign, "../escape", `${foreign} extra`]) {
+      await f.commands.get("teams")!.handler(`join ${id}`, f.ctx);
+      assert.match(f.warnings.at(-1)!, /No team with that ID in this project/);
+      assert.equal(f.entries.length, 0);
+      assert.equal(f.messages.length, 0);
+    }
+    const duplicate = seedTeam(f);
+    await f.commands.get("teams")!.handler(`join ${duplicate}`, f.ctx);
+    assert.match(f.warnings.at(-1)!, /already in that team/);
+    await f.execute("team_agent", { action: "launch", name: "helper", brief: "hello" });
+    await f.commands.get("teams")!.handler(`join ${foreign}`, f.ctx);
+    assert.match(f.warnings.at(-1)!, /already in a team with other members/);
+  } finally { await f.close(); }
+});
+
+test("reading a handoff skill anywhere appends join-first guidance with the sender's actual team", async () => {
+  const f = fixture();
+  try {
+    const team = seedTeam(f, randomUUID());
+    await f.event("session_start");
+    await f.commands.get("teams")!.handler(`join ${team}`, f.ctx);
+    for (const path of ["/opt/skills/handoff/SKILL.md", "skills/handoff/SKILL.md", "C:\\skills\\handoff\\SKILL.md"]) {
+      const content = [{ type: "text", text: "Original skill instructions" }];
+      const structuredContent = { original: true };
+      const patch = await f.event("tool_result", { toolName: "read", input: { path }, content, structuredContent, isError: false }) as { content: { type: string; text: string }[]; structuredContent: unknown };
+      assert.deepEqual(patch.content[0], content[0]);
+      assert.deepEqual(patch.structuredContent, structuredContent);
+      const text = patch.content.at(-1)!.text;
+      assert.ok(text.includes(`/teams join ${team}`));
+      assert.match(text, /Pi senders only/);
+      assert.match(text, /Decide whether.*same team/);
+      assert.match(text, /shared tasks, messages, and team control/);
+      assert.match(text, /standalone.*normal launch instructions and agent-kind choice/);
+      assert.match(text, /Only if.*same-team handoff.*steps/);
+      assert.match(text, /--kind pi/);
+      assert.match(text, /without.*handoff prompt/);
+      assert.match(text, /main.*sessionId/);
+      assert.match(text, /--wait/);
+      assert.match(text, /stalled/);
+      assert.match(text, /Only after.*confirm/);
+      assert.ok(!text.includes("acstack"));
+    }
+  } finally { await f.close(); }
+});
+
+test("the handoff read hook ignores errors, other tools, and other skills", async () => {
+  const f = fixture();
+  try {
+    await f.event("session_start");
+    const event = { toolName: "read", input: { path: "/skills/handoff/SKILL.md" }, content: [{ type: "text", text: "Skill" }], isError: false };
+    for (const change of [{ isError: true }, { toolName: "bash" }, { input: { path: "/skills/implement/SKILL.md" } }, { input: { path: "/skills/handoff/launch-herdr.md" } }]) {
+      assert.equal(await f.event("tool_result", { ...event, ...change }), undefined);
+    }
+    assert.equal(existsSync(join(teamsHome(), f.id)), false, "unrelated reads must not start a team");
+    await f.event("tool_result", event);
+    assert.ok(existsSync(join(teamsHome(), f.id)), "a fresh sender needs a team the receiver can join");
+    assert.match(((await f.event("tool_result", event)) as { content: { text: string }[] }).content.at(-1)!.text, new RegExp(`/teams join ${f.id}`));
   } finally { await f.close(); }
 });
 

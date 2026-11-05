@@ -22,12 +22,16 @@ Context shows Pi's reported token estimate, window size, and percentage, for exa
 
 - Press Down from an empty editor to focus Main in the agent selector. Up/Down select members; Enter opens the selected live session; Esc returns to editing.
 - Ctrl+Shift+Left returns from a member to Main. Switching preserves the member's process, session, and draft. Returning does not stop it.
-- `/teams` opens three tabs. Tab moves between Tasks, Teammates, and Board; Esc closes the panel.
-    - **Tasks:** Arrow keys select nodes in the dependency graph. G toggles graph/list, and Enter shows full details. The graph opens fitted to the pane; `-` and `+` shorten or restore titles gradually (number and status always stay), and F returns to fit. The selected box has a heavy border and accent text. Green means Done, red Blocked, cyan Working, and neutral Ready; written labels remain visible. Large or unsupported graphs fall back to the list.
+- `/teams` opens three tabs. Tab moves between Tasks, Teammates, and Board; Esc closes the panel. Lowercase h/j/k/l mirror Left/Down/Up/Right outside text inputs. Right opens list details; Left returns. Page Up/Down move a viewport of entries or scroll details.
+    - **Tasks:** Opens as a list by default. G toggles graph/list; reopening `/teams` remembers that choice within the current Pi instance (not across reloads or restarts). Graphs are built only when displayed. Arrow keys select tasks, and Enter shows full details. **Shift+J** opens Go to task: enter a task number and press Enter to select it in either view. Invalid or missing numbers show an error; Esc cancels.
+        - Small graphs show the whole map when it fits with readable titles. Dense graphs open in **Focus**, with three labeled, accent-colored sections: Prerequisites, Focused task, and Dependents. The selected box stays at the same top-left position as selection changes; resizing may move that anchor. Neighbor titles wrap, and each neighbor section shows complete boxes or an explicit remaining count. The header reports visible/total tasks. Empty sections stay labeled. Extra prerequisites remain numbered references; status and details use the complete task data.
+        - In focus, Up/Down select displayed neighbors and update the neighborhood without moving the anchor; Left/Right browse all tasks, including hidden neighbors and unrelated tasks. **A** toggles focus/full map. Full maps retain spatial arrow navigation. A map that overflows says **pan to explore**, not **fit**.
+        - In full maps, connected rounded bridges mark verified independent crossings. Extra wire-only rows make room for each bridge without splitting task boxes. Shared junctions, turns, ambiguous overlaps, and crossings without safe clearance stay unchanged. The legend counts rendered bridges. If route validation fails or exceeds its work limit, the original wires remain and the legend says line jumps are unavailable.
+        - `-` and `+` select full-map mode and shorten or restore titles gradually (number and status always stay). **F** returns to automatic fit/focus. The selected box has a heavy border and accent text. Green means Done, red Blocked, cyan Working, and neutral Ready; written labels remain visible. Unsupported graphs and viewports too short for the anchored selected box fall back to the list.
     - **Teammates:** Shows working, idle, stopped, and needs-input counts; interrupted sessions count as needing input. Enter opens a live member, or quietly resumes a stopped member's saved session before opening it. Right opens details; Esc returns to the roster. Model, context, and directory appear above session IDs and paths. Root can open any member; member views can open their descendants.
         - Wider rosters also show Tasks (completed / currently assigned total) and the directory's final folder name. Reassigned tasks leave the previous owner's counts. Narrower views drop Directory first, then Tasks; full paths and counts remain in details.
         - Press `/` to filter names (case-insensitive). Enter applies the filter; Esc while editing clears it. Backspace edits the query. Press `/` again to edit an applied filter.
-        - H hides or shows stopped members. Interrupted sessions remain visible for recovery. All members are visible by default; filters affect only this panel, not team state.
+        - Shift+H hides or shows stopped members. Interrupted sessions remain visible for recovery. All members are visible by default; filters affect only this panel, not team state.
     - **Board:** Shows the latest 100 posts, one row each with sender, kind (post, reply, or outcome), summary, task, and time. The details pane shows recipients, task, summary, detail, and replies. Use `team_message history` to read older posts.
 - N composes a task request for Main. C on a task sends feedback to its creator. Enter sends; Shift+Enter adds a newline; Esc cancels without losing the draft. These messages do not directly edit the task graph. Feedback resumes a stopped creator when possible; otherwise, the receipt explicitly reports delivery to Main instead.
 
@@ -46,11 +50,32 @@ Tool summaries and team notification previews prefer teammate names over IDs. Me
 A team can have several main sessions, each a top-level Pi session a person drives. Members are the agents they launch. Every main session controls every member and can stop or resume other main sessions; a member controls only its own descendants and never a main session.
 
 - **Promote:** On the panel's Teammates tab, `P` stops a member and relaunches it as a main session. It keeps its session ID and history, its transcript moves to the normal Pi session folder so `/resume` lists it, and it stays in the team. Under Herdr it opens in a new tab of the workspace for its worktree; otherwise it runs in its own tmux server and ac-teams prints the attach command. A member with enforced access asks first, because the promoted session runs without the container.
-- **Join:** `/teams join` lists the teams in this project and adds this session to the chosen one as a main session, then posts a summary of open tasks, owners, and recent messages. It refuses a session already in that team, or one already in a team with other members.
+- **Join:** `/teams join` lists project teams and adds this session to the chosen team as a main. It posts open tasks, owners, and recent messages. `/teams join <team-id>` selects an exact team without a picker or a UI. Both forms refuse duplicate membership or a session whose current team has other members. Explicit IDs must match a team in the same project.
 - **Leave:** `/teams leave` returns this session's in-progress tasks to `todo`, clears their ownership, and drops its main-session role; its record keeps its history. The last main session cannot leave while members are live.
 - **Resume:** A session remembers its team in its transcript. Resuming it reconnects to the team; if no coordinator is running, ac-teams offers to run it here. Declining turns the team tools off for this session.
 
 One main session runs the coordinator; the others connect to it. When that session exits, another main session takes over automatically and resumes the members that were working. See [operations](operations.md#coordinator-handover).
+
+### Handoff through Herdr
+
+When a main Pi session successfully reads `handoff/SKILL.md` through Pi's `read` tool, ac-teams appends instructions to that tool result. This is a Pi extension hook, not an injection into Claude Code or Codex.
+
+The installation prefix does not matter; the skill file stays unchanged. The hook skips members, sessions with team tools disabled, failed reads, and other skill reads.
+
+The sender decides whether the receiver belongs in the same team. It considers the user's intent and whether shared tasks, messages, and team control suit the handoff. For a standalone receiver, follow the skill's normal launch instructions and agent-kind choice without joining. Only a same-team handoff uses the sender's team ID and this sequence:
+
+1. Start a blank Pi session through Herdr in the same project, with ac-teams loaded.
+2. Submit `/teams join <team-id>` to the receiver through Herdr.
+3. Confirm the receiver's joined-team details (expand the result with Ctrl+O if folded) and its new main-session membership in the sender's `team_agent list`. Match the team ID and receiver session ID.
+4. Only then submit the handoff prompt and follow the skill's acknowledgement steps.
+
+A slash command need not produce a model turn, so Herdr's `prompt --wait` is not proof of joining. Inspect output and membership after a timeout or stalled response before retrying.
+
+For a same-team handoff, stop without sending the handoff prompt if either check fails. A team-coordinator failure does not block an intentionally standalone handoff.
+
+Reading the handoff skill opens the sender's team coordinator if needed, so there is a team to join. Task ownership does not transfer automatically; the extension adds no startup prompt or launcher.
+
+This is agent guidance, not enforcement of arbitrary Herdr launches. Reads through shell commands do not trigger the hook.
 
 ## Show tasks and configure the displays
 
@@ -74,13 +99,24 @@ Hiding a display does not stop agents, change tasks, or disable `/teams`. With t
 
 The tool guidance asks agents to use `team_task` for substantial work with three or more steps, explicit task lists, and coordinated deliverables, including solo research, design, implementation, and verification. Single trivial tasks and conversation need no list. This is guidance, not automatic task creation or enforcement.
 
+Before creating tasks, identify which outputs each task needs. If a task cannot start correctly without another task's verified output, record that prerequisite in `dependencies`. Keep independent work parallel, and do not add edges just to fill the graph.
+
 Create independent tasks in one call:
 
 ```json
 {"action":"create","tasks":[{"title":"Review parser behavior","description":"Acceptance: identify malformed-input failures with reproduction steps."},{"title":"Review display ordering","description":"Acceptance: compare implementation and display tests, and report mismatches."}]}
 ```
 
-A batch creates 1–100 tasks atomically: invalid input leaves no tasks created. Use either `tasks` or top-level task fields, not both. Existing single-task creation remains supported. A title is enough for a simple task; description defaults to title and label defaults to its first three words, capped at 60 characters. Supply explicit acceptance criteria for substantial or delegated work. Dependencies must reference existing task UUIDs, so create prerequisites before dependent tasks.
+A batch creates 1–100 tasks atomically: invalid input leaves no tasks created. Use either `tasks` or top-level task fields, not both. Existing single-task creation remains supported. A title is enough for a simple task; description defaults to title and label defaults to its first three words, capped at 60 characters. Supply explicit acceptance criteria for substantial or delegated work. Dependencies must reference existing task UUIDs, so create prerequisites before dependent tasks. Tasks in the same batch cannot refer to each other.
+
+Create dependent tasks in later calls using the UUIDs returned by earlier calls. For example, API and UI implementations may both need a shared contract; integration verification may need both implementations:
+
+```text
+Shared contract ──┬──> API ──┐
+                  └──> UI ───┴──> Integration verification
+```
+
+Give API and UI the contract task's UUID in `dependencies`. Give integration verification both implementation UUIDs. It can start only when both are done; `blockedBy` automatically lists unfinished prerequisites. Write tests before implementation when useful; that alone is not a reason to block test-writing behind implementation. Reassess dependencies when scope changes, subject to task ownership and edit rules.
 
 Start a task before working and complete it immediately after checking the result. One agent normally works on one task at a time; teammates can work in parallel. Never complete partial work or work with unresolved failures.
 
@@ -123,7 +159,7 @@ Children can delegate through the same coordinator, subject to depth and capacit
 
 Start ready work directly; `start` claims an unowned task and begins it atomically. Use `claim` only to reserve work in advance. Complete work after checking acceptance criteria or report blockers. Starting requires every dependency to be done.
 
-Each task has a stable team-local `number` and a 1–3-word `label` (at most 60 characters). The graph and list show `#3 Parser review`; details retain the full title, description, and UUID.
+Each task has a stable team-local `number` and a 1–3-word `label` (at most 60 characters). Compact tool summaries and the editor task summary prefer `#3 Parser review`. The panel uses task titles: lists and full maps may shorten them, while focused graphs wrap them. Details retain the full title, description, and UUID.
 
 Numbers follow creation order. Editing, filtering, or reopening tasks never changes their numbers. An omitted label is derived from the title's first three words, capped at 60 characters. An explicit label must satisfy the same limits.
 
