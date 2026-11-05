@@ -6,7 +6,7 @@ ac-teams provides three tools for planning and tracking solo and delegated work.
 | --- | --- | --- |
 | `team_agent` | `launch`, `list`, `status`, `stop`, `resume`, `limits`, `cleanup` | A parent controls its descendants, not peers or ancestors |
 | `team_task` | `create`, `list`, `read`, `edit`, `claim`, `start`, `release`, `complete`, `reopen` | Claim reserves work; dependencies gate starting, not ownership |
-| `team_message` | `send`, `history`, `search`, `wait` | Routing selects who is notified, not who can read |
+| `team_message` | `send`, `history`, `search`, `watch`, `unwatch`, `wait` | Routing selects who is notified, not who can read |
 
 In interactive Pi, `/teams` or `/teams panel` opens the team panel. `/teams teammate <name-or-id>` opens a live teammate directly; autocomplete suggests subcommands and teammate names. You can also enter an exact teammate ID. The older `/teams open <id>` form remains supported. Headless roots retain the status listing. `/teams stop` stops every member; main sessions keep running. `/teams join` and `/teams leave` change which team this session belongs to. See [operations](operations.md) for limits, recovery, and worktree cleanup.
 
@@ -16,7 +16,7 @@ The agent selector sits below the input editor, above the existing footer. It sh
 
 A red **Needs input** label beside a member's name marks an open question. Open that member's Pi session to answer it. Ctrl+Shift+Left returns to Main without dismissing the question.
 
-With Herdr's Pi integration and the question adapter installed, Main reports the team's status through the shared event bus. Any open question keeps Herdr blocked; otherwise, active work keeps it working. When all members settle, it becomes idle. Members do not report directly to the shared Herdr pane.
+With Herdr's Pi integration and the question adapter installed, each parent session reports its own subtree's attention through the shared event bus, including joined mains and grandchildren. An open descendant question keeps Herdr blocked. Otherwise, delegated activity or an explicit `wait` keeps it working, even while the parent is individually idle. A normal final assistant reply hands control back to the user; an explicit pause followed by notification-only wakes does not signal done. Watch registration alone does not mark work active. Closing or disconnecting balances this session's signals; reconnecting restores attention from team state. Members do not write another session's Herdr pane directly.
 
 Context shows Pi's reported token estimate, window size, and percentage, for example `Claude Opus 4.6 · 48k / 200k (24%)`. Reports refresh about once a second when they change. Unknown usage stays marked unknown, not zero. Stopped members retain their last report. These are context estimates, not billing totals.
 
@@ -127,11 +127,13 @@ Create this graph in one call:
 
 Before starting or delegating, check that recorded dependencies match the outputs each task needs. Creating tasks together does not make them independent. Integration verification can start only when both implementations are done; `blockedBy` automatically lists unfinished prerequisites. Write tests before implementation when useful; that alone is not a reason to block test-writing behind implementation. Reassess dependencies when scope changes, subject to task ownership and edit rules.
 
-Start a task before working and complete it immediately after checking the result. One agent normally works on one task at a time; teammates can work in parallel. Never complete partial work or work with unresolved failures.
+Start a task before working and complete it immediately when its own acceptance checks pass. Separately assigned review gates parent integration, not implementation-task completion, unless the task's criteria require it. One agent normally works on one task at a time; teammates can work in parallel. Never complete partial work or work with unresolved failures.
 
 Task list and mutation responses give the model compact summaries, including UUIDs, revisions, owners, and dependencies. `read` returns full descriptions and acceptance criteria. Expanded tool responses retain full records for people to inspect.
 
 ## Give members bounded assignments
+
+Prefer parallel execution for independent, meaningful work when it is likely to shorten completion time. Establish shared interfaces and launch independent work early rather than implementing it yourself first. The lead may orchestrate, implement, or combine both, whichever gets to a correct, maintainable, verified result fastest. Give each implementer a coherent outcome, including tests. Avoid duplicate work and unnecessary handoffs; do not split planning, implementation, and testing into mandatory separate roles. Keep small or tightly coupled tasks solo. Fresh scrutiny or context isolation can also justify delegation. Preserve project-required checks and independent review.
 
 Before delegating a deliverable, create or reuse a shared task and pass it as the launch `task`. The new member owns it, you become its delegator, and its posts and completion outcome reach you. Track independently owned outcomes, not every agent, tool call, or procedural step. For example:
 
@@ -162,7 +164,7 @@ Launch returns the name, a stable member ID, PID, cwd, and native session ID/pat
 
 Children load ac-teams explicitly and seed only the parent's actually loaded extension set. Configure presets by talking with Pi through `/teams config` (no file editing required), then optionally pass `extensions: {preset: "worker", include: ["<parent-extension-id>"], exclude: ["<optional-id>"]}` on launch. `full` can retain only that parent's set; nested delegation cannot widen it. Required safety/provider extensions cannot be excluded. Resume retains saved IDs and current installed versions, not a new preset. Skills, authentication storage, and cwd instructions still use native Pi behavior; any provider extension itself must be retained. Children receive their brief, not the parent's conversation. Load ac-teams only once in the root, either through Pi package settings or an explicit extension path.
 
-Children can delegate through the same coordinator, subject to depth and capacity. Delegation still needs user authorization. Keep briefs bounded, agree on file ownership, and use separate worktrees for concurrent writers.
+Children can delegate through the same coordinator, subject to depth and capacity. You may delegate within the user's approved task unless the user restricts delegation. This does not expand filesystem, network, spending, or publishing permissions. Keep briefs bounded, agree on file ownership, and use separate worktrees for concurrent writers.
 
 ## Track progress separately from ownership
 
@@ -198,7 +200,9 @@ Include `dependencies` on creation or `edit`. Any member can edit unowned to-do 
 
 ## Post to the board instead of polling
 
-Every post has a one-line `summary` that stands alone, optional `detail`, and an existing `task` or a `replyTo` post. Example `team_message` arguments:
+Post when the recipient needs a decision, question, blocker, or changed result. Task state already records ownership and start, and `team_task complete` publishes the outcome. Do not announce those again or acknowledge a notice.
+
+Every post has a readable one-line `summary` that stands alone, optional `detail`, and an existing `task` or a `replyTo` post. Keep normal word spacing. Put required actions and critical caveats in the summary; keep supporting evidence in detail or a referenced artifact. Example `team_message` arguments:
 
 ```json
 {"action":"send","task":"<task-id>","summary":"Parser rejects empty input with a clear error; two malformed cases still crash.","detail":"Repro: ..."}
@@ -206,17 +210,39 @@ Every post has a one-line `summary` that stands alone, optional `detail`, and an
 
 Use exact teammate names (such as `"oom-review"`) or member IDs in `recipients`; IDs remain valid. A post reaches its named `recipients`, the linked task's owner and delegator (the creator when there is none), the author of a replied-to post, and members waiting on that task, never the sender. A reply inherits its post's task. Posts are never broadcast: one with no recipients, task, or reply is rejected, as are unknown member IDs. All team members can read the full history.
 
-Receipts and stored history retain resolved IDs.
+Receipts and stored history retain resolved IDs. Every launch brief includes the delegator's exact recipient ID; use it rather than guessing `Main` or `lead`.
 
 ```json
-{"action":"history","after":0,"limit":20}
+{"action":"history","task":"<task-id>","after":0,"limit":20}
+{"action":"history","seq":42,"includeDetail":true}
 ```
 
-Use the last returned `seq` as the next `after` cursor. `search` adds a case-sensitive literal `query` over summaries and detail; results remain cursor-paged. Reads never consume posts. Task and message result pages are limited to 100 items.
+History and search show summaries in model output by default, with `hasDetail` indicating supporting evidence. Use a notice's `seq` with `includeDetail: true` to retrieve that post's full detail, or `task` to narrow a discussion. Full records remain stored and available in the expanded tool display. These filters do not change routing or board access.
 
-Notices carry each post's summary and steer into the recipient's next safe point: an idle member wakes, a busy one sees them after its current tool batch. Read history only for detail your own work needs. A notice is acknowledged once it is persisted in the recipient's session, so a crash before that redelivers it.
+Use the last returned `seq` as the next `after` cursor for the same filter. `search` adds a case-sensitive literal `query` over summaries and detail, even when detail is hidden in the result. Task, sequence, query, and cursor filters combine before pagination. Reads never consume posts. Task and message result pages are limited to 100 items.
 
-`wait` with `tasks` yields: if a post is already waiting it returns at once; otherwise the turn ends without another model request, and the next post addressed to you or on those tasks starts a new one. Starting any turn clears the wait.
+Notices carry each post's summary and steer into the recipient's next safe point: an idle member wakes, a busy one sees them after its current tool batch. Read history only for detail your own work needs. A notice is acknowledged once it is persisted in the recipient's session, so a crash before that redelivers it. Receipts are scoped to the team and member, and failed acknowledgements remain retryable. Old receipts without that identity may be replayed once after upgrading rather than risk skipping another team's posts.
+
+### Set notifications once, pause separately
+
+Completion already notifies the task's delegator. For additional notifications, register a one-shot watch without pausing:
+
+```json
+{"action":"watch","tasks":["<task-id>"],"event":"completed"}
+```
+
+`completed` is the default. Progress posts do not consume it. Use `event: "message"` for the next task-linked post instead. Registration checks for missed events atomically; a completion watch on an already-completed task returns its outcome immediately. Repeating an active watch does not duplicate it. Each member can have up to 100 task/event watches.
+
+Watches live in team state, survive unrelated messages and work, and trigger once per task/event. After triggering, they remain pending until the notification is persisted and acknowledged. A single post reaches each recipient once even when both direct routing and a watch match.
+
+```json
+{"action":"unwatch","tasks":["<task-id>"]}
+{"action":"wait"}
+```
+
+`unwatch` cancels the named tasks (omit `tasks` to cancel all; optionally specify `event`). `wait` pauses the agent without changing its watches. If unseen posts are already available, it returns them instead of pausing. Otherwise the turn ends without another model request; a new addressed post resumes it. There is no timeout or polling loop. The display says "Agent paused", not "Finished waiting".
+
+For compatibility, `wait` with `tasks` also registers one-shot next-message watches for those tasks. Prefer explicit `watch` when the desired trigger is completion. No need to re-register after an unrelated message. Task starts, edits, and releases do not themselves send notifications.
 
 Messages survive crashes; exactly-once delivery or model execution does not. Avoid acknowledgement-only replies.
 

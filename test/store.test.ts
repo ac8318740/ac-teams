@@ -23,6 +23,52 @@ function fixture(t: test.TestContext) {
   return { home, store };
 }
 
+test("task watches persist, distinguish completion from messages, and can be cancelled", t => {
+  const { store } = fixture(t);
+  const task = store.task("child", { action: "create", title: "Build" }) as Task;
+  store.message("other", { action: "watch", tasks: [task.id] });
+  store.message("other", { action: "watch", tasks: [task.id] });
+  assert.equal(store.state.members.other.watches?.length, 1, "registration is idempotent");
+  const progress = store.message("child", { action: "send", task: task.id, summary: "Working" }) as Message;
+  assert.ok(!progress.recipients.includes("other"), "progress does not consume a completion watch");
+  const unrelated = store.message("root", { action: "send", recipients: ["other"], summary: "Another question" }) as Message;
+  assert.ok(unrelated.recipients.includes("other"));
+  assert.equal(store.state.members.other.watches?.[0].seq, undefined);
+  store.task("child", { action: "start", id: task.id });
+  store.task("child", { action: "complete", id: task.id, acceptance: true, summary: "Built and checked" });
+  const outcome = store.state.messages.at(-1)!;
+  assert.ok(outcome.recipients.includes("other"));
+  assert.equal(store.state.members.other.watches?.[0].seq, outcome.seq, "retain triggered registration until delivery acknowledgement");
+  const later = store.message("child", { action: "send", task: task.id, summary: "More context" }) as Message;
+  assert.ok(!later.recipients.includes("other"), "a one-shot watch triggers only once");
+  store.message("other", { action: "unwatch", tasks: [task.id] });
+  assert.deepEqual(store.state.members.other.watches, []);
+});
+
+test("watch catch-up is atomic, preserves other registrations, and validates tasks", t => {
+  const { store } = fixture(t);
+  const a = store.task("child", { action: "create", title: "A" }) as Task;
+  const b = store.task("child", { action: "create", title: "B" }) as Task;
+  store.message("other", { action: "watch", tasks: [b.id] });
+  const posted = store.message("child", { action: "send", task: a.id, summary: "Ready" }) as Message;
+  const result = store.message("other", { action: "watch", tasks: [a.id], event: "message", after: 0 }) as { updates: Message[] };
+  assert.deepEqual(result.updates.map(m => m.seq), [posted.seq]);
+  assert.deepEqual(store.state.members.other.watches?.map(w => w.task), [b.id]);
+  store.task("child", { action: "start", id: a.id });
+  store.task("child", { action: "complete", id: a.id, acceptance: true, summary: "A checked" });
+  const done = store.message("other", { action: "watch", tasks: [a.id] }) as { updates: Message[] };
+  assert.equal(done.updates[0].kind, "outcome", "already-completed tasks return immediately");
+  store.update(state => { delete state.messages.find(message => message.id === state.tasks[a.id].outcome)!.kind; });
+  const legacy = store.message("other", { action: "watch", tasks: [a.id] }) as { watching: unknown[]; updates: Message[] };
+  assert.equal(legacy.updates.length, 1);
+  assert.equal(legacy.watching.length, 1, "legacy outcome without kind must not leave a completion watch on A");
+  assert.deepEqual(store.state.members.other.watches?.map(w => w.task), [b.id]);
+  assert.throws(() => store.message("other", { action: "watch", tasks: ["missing"] }), /existing task/);
+  assert.throws(() => store.message("other", { action: "watch", tasks: [] }), /1-100/);
+  store.message("other", { action: "unwatch" });
+  assert.deepEqual(store.state.members.other.watches, []);
+});
+
 test("member labels reuse unchanged snapshots and refresh after writes, team switches, and unsafe replacements", t => {
   const { store } = fixture(t);
   const labels = createMemberLabels();
@@ -134,6 +180,25 @@ test("posts route to named recipients, never broadcast, and provide bounded lite
   assert.deepEqual(store.message("other", { action: "history", after: first.seq, limit: 1 }), [second]);
   assert.throws(() => store.message("root", { action: "send", recipients: ["child"], summary: "x".repeat(16001) }));
   assert.throws(() => store.message("root", { action: "history", limit: 101 }));
+});
+
+test("message reads filter by task and exact sequence before pagination without consuming notices", t => {
+  const { store } = fixture(t);
+  const task = store.task("root", { action: "create", title: "Parser" }) as Task;
+  store.message("root", { action: "send", recipients: ["child"], summary: "Unrelated" });
+  const first = store.message("root", { action: "send", task: task.id, recipients: ["child"], summary: "Review", detail: "Boundary evidence" }) as Message;
+  const second = store.message("child", { action: "send", replyTo: first.id, summary: "Fixed" }) as Message;
+  const before = readFileSync(join(store.dir, "state.json"), "utf8");
+  assert.deepEqual(store.message("child", { action: "history", task: task.id, limit: 1 }), [first]);
+  assert.deepEqual(store.message("child", { action: "history", task: task.id, after: first.seq }), [second]);
+  assert.deepEqual(store.message("child", { action: "history", seq: first.seq }), [first]);
+  assert.deepEqual(store.message("child", { action: "search", task: task.id, query: "Boundary" }), [first]);
+  assert.deepEqual(store.message("child", { action: "search", seq: first.seq, query: "Fixed" }), []);
+  assert.deepEqual(store.message("child", { action: "history", seq: first.seq, after: first.seq }), []);
+  assert.deepEqual(store.message("child", { action: "history", seq: 999 }), []);
+  assert.throws(() => store.message("child", { action: "history", task: "missing" }), /existing task/);
+  assert.throws(() => store.message("child", { action: "history", seq: 0 }), /sequence/);
+  assert.equal(readFileSync(join(store.dir, "state.json"), "utf8"), before);
 });
 
 test("message aliases resolve to durable IDs and reject invalid sets atomically", t => {

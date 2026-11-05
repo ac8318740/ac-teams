@@ -206,6 +206,61 @@ test("team attention aggregates busy members and questions, and clears on settle
   } finally { await f.close(); }
 });
 
+test("an explicit team pause survives notification turns, but final replies and cancellation yield to the user", async () => {
+  const f = await setup();
+  const busy = () => f.states.filter(state => state.kind === "busy").at(-1)?.active ?? false;
+  try {
+    const task = await f.team.handle("root", "task", { action: "create", title: "Observe" }) as { id: string };
+    await f.team.handle("root", "message", { action: "watch", tasks: [task.id] });
+    assert.equal(busy(), false, "watch registration alone is not a pause");
+    await f.team.handle("root", "message", { action: "wait" });
+    assert.equal(busy(), true);
+    f.team.recordEvent("root", { type: "agent_settled" });
+    assert.equal(f.team.store.state.members.root.status, "idle");
+    f.team.recordEvent("root", { type: "agent_start" });
+    f.team.recordEvent("root", { type: "agent_settled" });
+    assert.equal(busy(), true, "an unrelated notification-only turn must not flash done");
+    f.team.recordEvent("root", { type: "summary", text: "Should I continue?" });
+    assert.equal(busy(), false, "ordinary final replies hand control to the user without parsing words");
+    await f.team.handle("root", "message", { action: "wait" });
+    f.team.recordEvent("root", { type: "cancelled" });
+    assert.equal(busy(), false);
+  } finally { await f.close(); }
+});
+
+test("attention snapshots follow each parent's subtree, including grandchildren and joined mains", async () => {
+  const f = await setup();
+  let connection: Connection | undefined;
+  const rootBusy = () => f.states.filter(state => state.kind === "busy").at(-1)?.active ?? false;
+  const snapshots: { busy: boolean; blocked: boolean }[] = [];
+  try {
+    const added = await addMain(f.team, f.home);
+    const main = f.team.store.state.members[added.id];
+    connection = new Connection(f.team.socketPath, main.id, main.token);
+    connection.on("attention", value => snapshots.push(value));
+    await connection.open();
+    await connection.request("join", { sessionId: main.sessionId, sessionFile: main.sessionFile, tools: ["team_agent", "team_task", "team_message"], trusted: true, extensionPaths: [] });
+    const child = await f.team.handle(main.id, "agent", { ...launch, brief: "WAIT" }) as { id: string };
+    await until(() => snapshots.at(-1)?.busy === true);
+    assert.equal(rootBusy(), false, "another main's child must not light up the coordinator owner's pane");
+    const grandchild = await f.team.handle(child.id, "agent", { ...launch, name: "grandchild", brief: "WAIT" }) as { id: string };
+    f.team.recordEvent(child.id, { type: "agent_settled" });
+    await until(() => f.team.store.state.members[grandchild.id].activity === "Working");
+    assert.equal(snapshots.at(-1)?.busy, true);
+    assert.equal(f.team.store.state.members[main.id].status, "idle", "pane attention does not rewrite individual status");
+    f.team.recordEvent(grandchild.id, { type: "blocked", active: true });
+    await until(() => snapshots.at(-1)?.blocked === true);
+    f.team.recordEvent(main.id, { type: "summary", text: "Please check the proposed API." });
+    await until(() => snapshots.at(-1)?.busy === false);
+    assert.equal(snapshots.at(-1)?.blocked, true, "question-tool attention still takes precedence");
+    f.team.recordEvent(grandchild.id, { type: "blocked", active: false });
+    f.team.recordEvent(main.id, { type: "agent_start" });
+    await until(() => snapshots.at(-1)?.busy === true);
+    await f.team.stopTree(child.id);
+    await until(() => snapshots.at(-1)?.busy === false);
+  } finally { connection?.close(); await f.close(); }
+});
+
 test("unchanged events and notification cursors do not rewrite state; real changes remain durable", async () => {
   const f = await setup();
   const path = join(f.team.store.dir, "state.json");
@@ -249,6 +304,34 @@ test("repeated identical member errors still deliver separate durable parent mes
     assert.equal(f.team.store.state.messages.length, before + 2);
     assert.equal(JSON.parse(readFileSync(join(f.team.store.dir, "state.json"), "utf8")).messages.length, before + 2);
     await until(() => f.notices.includes(f.team.store.state.messages.at(-1)!.seq));
+  } finally { await f.close(); }
+});
+
+test("task watches survive unrelated turns and restart, then clear only on matching delivery acknowledgement", async () => {
+  const f = await setup();
+  try {
+    const member = await f.team.handle("root", "agent", launch) as { id: string };
+    const task = await f.team.handle(member.id, "task", { action: "create", title: "Work" }) as { id: string };
+    await f.team.handle("root", "message", { action: "watch", tasks: [task.id] });
+    await f.team.handle(member.id, "message", { action: "send", recipients: ["root"], summary: "Unrelated question" });
+    const unrelated = f.team.store.state.messages.at(-1)!;
+    await f.team.handle("root", "event", { type: "agent_start" });
+    f.team.ack("root", unrelated.seq);
+    assert.equal(f.team.store.state.members.root.watches?.length, 1);
+    await f.team.handle(member.id, "task", { action: "start", id: task.id });
+    await f.team.handle(member.id, "task", { action: "complete", id: task.id, acceptance: true, summary: "Verified" });
+    const outcome = f.team.store.state.messages.at(-1)!;
+    assert.deepEqual(outcome.recipients, ["root"], "routing and subscription do not duplicate a recipient");
+    assert.equal(f.team.store.state.members.root.watches?.[0].seq, outcome.seq);
+    await f.team.close();
+    const reopened = await Coordinator.open(f.options);
+    try {
+      assert.equal(reopened.store.state.members.root.watches?.[0].seq, outcome.seq);
+      reopened.ack("root", unrelated.seq);
+      assert.equal(reopened.store.state.members.root.watches?.length, 1, "older acknowledgements cannot consume the trigger");
+      reopened.ack("root", outcome.seq);
+      assert.deepEqual(reopened.store.state.members.root.watches, []);
+    } finally { await reopened.close(); }
   } finally { await f.close(); }
 });
 
@@ -549,7 +632,11 @@ test("native members keep PID while idle, stop cleanly, and quietly resume for c
     assert.equal(member.token, undefined);
     await until(() => f.team.store.state.members[member.id].status === "idle");
     const saved = () => ({ prompts: readFileSync(member.sessionFile, "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(entry => entry.type === "message").map(entry => entry.message.content[0].text as string) });
-    assert.deepEqual(saved().prompts, ["hello"]);
+    const launchPrompt = saved().prompts[0];
+    assert.ok(launchPrompt.startsWith("hello\n\n"));
+    assert.match(launchPrompt, /recipient ID: root/);
+    assert.match(launchPrompt, /task-linked posts already reach/);
+    assert.equal(saved().prompts.length, 1);
     const task = await f.team.handle(member.id, "task", { action: "create", title: "Creator task", description: "Do not mutate from feedback" }) as { id: string; creator: string };
     assert.equal(task.creator, member.id);
     const before = JSON.stringify(f.team.store.state.tasks[task.id]);
@@ -567,7 +654,7 @@ test("native members keep PID while idle, stop cleanly, and quietly resume for c
     assert.notEqual(resumed.pid, member.pid);
     assert.equal(resumed.sessionId, member.sessionId);
     assert.equal(resumed.sessionFile, member.sessionFile);
-    assert.deepEqual(saved().prompts, ["hello"], "UI resume must not replay a made-up assignment");
+    assert.deepEqual(saved().prompts, [launchPrompt], "UI resume must not replay a made-up assignment");
     assert.equal(JSON.stringify(f.team.store.state.tasks[task.id]), before);
     assert.deepEqual(f.team.store.state.messages.at(-1)!.recipients, [member.id]);
     assert.match(f.team.store.state.messages.at(-1)!.summary, /User feedback on task/);
@@ -883,8 +970,10 @@ test("a new owner resumes each member to its recorded state after a handover", a
     try {
       await until(() => [idle.id, busy.id, asking.id].every(id => ["idle", "busy"].includes(next.store.state.members[id].status) && next.store.state.members[id].handover === undefined));
       const prompts = (file: string) => lines(file).filter(entry => entry.type === "message").map(entry => ((entry.message as { content: { text: string }[] }).content[0].text));
-      assert.equal(prompts(busy.sessionFile).at(-1), handoverPrompt);
-      assert.equal(prompts(idle.sessionFile).at(-1), "hello", "idle members resume without a new prompt");
+      assert.ok(prompts(busy.sessionFile).at(-1)!.startsWith(handoverPrompt + "\n\n"));
+      assert.ok(prompts(busy.sessionFile).at(-1)!.includes(`recipient ID: ${second.id}`));
+      assert.equal(prompts(idle.sessionFile).length, 1, "idle members resume without a new prompt");
+      assert.ok(prompts(idle.sessionFile)[0].startsWith("hello\n\n"));
       assert.equal(next.store.state.members[asking.id].needsInput, true);
       assert.equal(next.store.state.members.root.status, "stopped");
       const restored = next.store.state.members[idle.id];

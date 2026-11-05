@@ -45,6 +45,8 @@ export interface Member {
   summary?: string;
   terminal?: boolean;
   needsInput?: boolean;
+  /** Pane attention is separate from this member's execution status. */
+  attention?: "waiting" | "handoff";
   access?: Access;
   /** Provider fixed at an enforced member's first launch; member telemetry cannot change it. */
   provider?: string;
@@ -52,8 +54,10 @@ export interface Member {
   role?: "main" | "member";
   /** State recorded when the coordinator owner stopped this member; the next owner's resume pass consumes it. */
   handover?: "busy" | "idle" | "input";
-  /** Registered by a yield: posts on these tasks reach this member and wake it. Cleared when it next works. */
+  /** Legacy yield registration, retained for existing snapshots. */
   waiting?: { tasks: string[] };
+  /** One-shot notifications survive unrelated turns; seq is retained until delivery is acknowledged. */
+  watches?: TaskWatch[];
   /** Promotion in progress: the last completed step and what a rollback restores. */
   promotion?: { step: "stopped" | "moved" | "role" | "entry"; sessionFile: string; parent?: string; access?: Access; provider?: string };
 }
@@ -140,8 +144,17 @@ export interface TaskArgs {
   summary?: string;
   detail?: string;
 }
+export interface TaskWatch {
+  task: string;
+  event: "message" | "completed";
+  seq?: number;
+}
+export interface WatchResult { watching: TaskWatch[]; updates: Message[] }
 export interface MessageArgs {
-  action: "send" | "history" | "search" | "wait";
+  action: "send" | "history" | "search" | "wait" | "watch" | "unwatch";
+  event?: "message" | "completed";
+  seq?: number;
+  includeDetail?: boolean;
   /** Wait: also wake on posts linked to these tasks. */
   tasks?: string[];
   recipients?: string[];

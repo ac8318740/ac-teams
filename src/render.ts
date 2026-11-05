@@ -87,7 +87,7 @@ export function teamToolDetails(tool: string, args: unknown, result: Result | un
     return posts.length ? posts.flatMap((post, index) => [
       ...(index ? [""] : []), `Message ${index + 1} · ${messagePresentation(post, labels, self).category === "undelivered message" ? "Not delivered" : object(post).from === self ? "Sent" : "Received"}`,
       ...messageDetails(post, labels, self),
-    ]) : [result ? action === "wait" ? "No new messages from teammates." : "No matching messages." : "Waiting for results..."];
+    ]) : [result ? action === "wait" ? "Agent paused. Notifications remain active; a new addressed post will resume it." : "No matching messages." : "Waiting for results..."];
   }
   if (tool === "team_agent" && ["list", "status"].includes(action)) {
     const members = Array.isArray(value.members) ? value.members : value.id ? [value] : [];
@@ -132,10 +132,19 @@ export function teamToolPresentation(tool: string, args: unknown, result: Result
     const destination = Array.isArray(recipients) && recipients.length ? recipients.map(id => agentName(id, labels, self)).join(", ") : fields.task ? `agents linked to ${inline(labels[String(fields.task)] ?? fields.task)}` : "linked recipients";
     return { title: `${pending ? "Sending message" : "Message sent"} · ${agentName(self, labels, self)} → ${destination}`, body, category: pending ? "message send" : "sent message" };
   }
+  if (tool === "team_message" && (action === "watch" || action === "unwatch")) {
+    const watches = Array.isArray(value.watching) ? value.watching : [];
+    const updates = Array.isArray(value.updates) ? value.updates : [];
+    const body = watches.map(watch => { const item = object(watch); return `${inline(labels[String(item.task)] ?? item.task)}: ${item.seq ? "triggered; delivery pending" : item.event === "completed" ? "notify on completion" : "notify on next message"}`; });
+    for (const post of updates) { const item = messagePresentation(post, labels, self); body.push(item.title, ...item.body); }
+    return { title: pending ? action === "watch" ? "Setting task notifications" : "Cancelling task notifications" : `Task notifications · ${watches.length} active${updates.length ? ` · ${updates.length} updates available` : ""}`, body, category: "task notifications", activity: action === "watch" ? "Set task notifications" : "Cancelled task notifications", problem: failed };
+  }
   if (tool === "team_message" && action === "wait") {
     const posts = Array.isArray(data) ? data.filter(post => object(post).from !== self) : [];
     const body = posts.flatMap(post => { const item = messagePresentation(post, labels, self); return [item.title, ...item.body]; });
-    return { title: pending ? "Waiting for teammate updates" : `Finished waiting for teammate updates${posts.length ? ` · ${posts.length} message${posts.length === 1 ? "" : "s"} received` : " · No new messages from teammates"}`, body, category: "wait for teammate updates", activity: pending ? "Waiting for teammate updates" : "Waited for teammate updates", problem: failed };
+    if (Array.isArray(fields.tasks) && fields.tasks.length) body.push(`Next-message notifications: ${fields.tasks.map(task => inline(labels[String(task)] ?? task)).join(", ")}`);
+    if (!pending && !posts.length) body.push("Existing task notifications remain active. A new addressed post will resume the agent.");
+    return { title: pending ? "Pausing agent" : posts.length ? `${posts.length} update${posts.length === 1 ? "" : "s"} available · Continuing` : "Agent paused · Notifications active", body, category: "pause agent", activity: pending ? "Pausing agent" : posts.length ? "Received updates" : "Paused for updates", problem: failed };
   }
   if (tool === "team_message" && (action === "history" || action === "search")) {
     const posts = Array.isArray(data) ? data : [];

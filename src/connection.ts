@@ -47,6 +47,7 @@ export class Connection extends EventEmitter {
     this.socket = socket;
     readLines(socket, value => {
       if (!isRecord(value)) throw new Error("Invalid coordinator response");
+      if (value.type === "attention" && typeof value.busy === "boolean" && typeof value.blocked === "boolean") { this.emit("attention", { busy: value.busy, blocked: value.blocked }); return; }
       if (value.type === "notice" && Number.isSafeInteger(value.through)) { this.emit("notice", value.through, Array.isArray(value.messages) ? value.messages : []); return; }
       if (value.type === "command" && typeof value.id === "string" && typeof value.command === "string" && isRecord(value.args)) {
         this.emit("command", { id: value.id, command: value.command, args: value.args }); return;

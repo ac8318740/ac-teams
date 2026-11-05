@@ -7,9 +7,22 @@ import { bindNoticeGroups } from "../src/group.ts";
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 import { ToolExecutionComponent } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/tool-execution.js";
 import { CustomMessageComponent } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/custom-message.js";
-import { teamMessageRenderer } from "../src/render.ts";
+import { teamMessageRenderer, teamToolPresentation } from "../src/render.ts";
 import teams from "../src/index.ts";
 import { theme } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
+
+test("pause and watch displays distinguish registration from updates", () => {
+  const labels = { a: "Parser", b: "Storage" };
+  const paused = teamToolPresentation("team_message", { action: "wait", tasks: ["a"] }, { content: [], details: [] }, labels);
+  assert.equal(paused.title, "Agent paused · Notifications active");
+  assert.ok(paused.body.some(line => line.includes("Parser")));
+  assert.ok(!paused.title.includes("Finished"));
+  const updated = teamToolPresentation("team_message", { action: "wait" }, { content: [], details: [{ from: "child", recipients: ["root"], summary: "Ready" }] }, labels);
+  assert.equal(updated.title, "1 update available · Continuing");
+  const watching = teamToolPresentation("team_message", { action: "watch", tasks: ["a", "b"] }, { content: [], details: { watching: [{ task: "a", event: "completed" }, { task: "b", event: "message" }], updates: [] } }, labels);
+  assert.equal(watching.title, "Task notifications · 2 active");
+  assert.deepEqual(watching.body, ["Parser: notify on completion", "Storage: notify on next message"]);
+});
 
 initTheme("dark", false);
 setKeybindings(new KeybindingsManager());

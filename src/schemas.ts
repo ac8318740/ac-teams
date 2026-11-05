@@ -47,12 +47,15 @@ export const TaskSchema = Type.Object({
   }, { additionalProperties: false }), { minItems: 1, maxItems: 100, description: "Create several tasks atomically. Use instead of top-level task fields. Dependencies accept existing UUIDs and @key references to entries in this batch. Missing keys, duplicates, self-dependencies, and cycles reject the whole batch." })),
 }, { additionalProperties: false });
 export const MessageSchema = Type.Object({
-  action: Type.Union(["send", "history", "search", "wait"].map(v => Type.Literal(v))),
-  tasks: Type.Optional(Type.Array(id, { maxItems: 100, uniqueItems: true, description: "Wait: also wake on posts linked to these tasks, e.g. ones you delegated." })),
+  action: Type.Union(["send", "history", "search", "wait", "watch", "unwatch"].map(v => Type.Literal(v))),
+  event: Type.Optional(Type.Union([Type.Literal("message"), Type.Literal("completed")], { description: "Watch: trigger on task completion (default) or the next task-linked message. Unwatch: optionally cancel only this event." })),
+  seq: Type.Optional(Type.Integer({ minimum: 1, description: "History/search: retrieve only this post's sequence number, shown in notices." })),
+  includeDetail: Type.Optional(Type.Boolean({ description: "History/search: include full supporting detail in model output (default false). Prefer seq or task to avoid fetching unrelated evidence." })),
+  tasks: Type.Optional(Type.Array(id, { maxItems: 100, uniqueItems: true, description: "Watch: register persistent one-shot notifications for these tasks without pausing. Unwatch: cancel these tasks (omit to cancel all). Wait: optionally watch their next messages before pausing; existing watches survive." })),
   recipients: Type.Optional(Type.Array(id, { minItems: 1, maxItems: 100, uniqueItems: true, description: "Exact teammate names or member IDs." })),
   summary: Type.Optional(Type.String({ minLength: 1, maxLength: 16000, description: "Send: brief outcome, question, or update, with any required action and critical caveats, delivered directly to recipients. Put supporting evidence, file references, and check-by-check results in detail." })),
   detail: Type.Optional(Type.String({ minLength: 1, maxLength: 16000, description: "Send: optional supporting evidence, checks run, file references, and fuller limitations, read only when needed." })),
-  task: Type.Optional(Type.String({ minLength: 1, maxLength: 128, description: "Send: link an existing task; its owner and delegator receive the post." })),
+  task: Type.Optional(Type.String({ minLength: 1, maxLength: 128, description: "Send: link an existing task; its owner and delegator receive the post. History/search: filter to this task." })),
   replyTo: Type.Optional(Type.String({ minLength: 1, maxLength: 128, description: "Send: the post ID this answers; its author receives the reply and it stays on that post's task." })),
   query: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
   after: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
@@ -71,7 +74,7 @@ const ContextUsageSchema = Type.Object({
 const EventSchema = Type.Union([Type.Object({
   type: Type.Literal("blocked"), active: Type.Boolean(),
 }, { additionalProperties: false }), Type.Object({
-  type: Type.Union(["agent_start", "agent_settled", "activity", "summary", "model_error", "telemetry"].map(v => Type.Literal(v))),
+  type: Type.Union(["agent_start", "agent_settled", "activity", "summary", "model_error", "cancelled", "telemetry"].map(v => Type.Literal(v))),
   text: Type.Optional(Type.String({ maxLength: 2000 })),
   model: Type.Optional(Type.String({ maxLength: 256 })),
   modelName: Type.Optional(Type.String({ maxLength: 256 })),

@@ -12,7 +12,8 @@ import type { Component } from "@earendil-works/pi-tui";
 import { cleanText } from "../src/render.ts";
 import { theme } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import teams from "../src/index.ts";
-import { taskRequestGuidance } from "../src/coordinator.ts";
+import { Coordinator, taskRequestGuidance } from "../src/coordinator.ts";
+import { Connection } from "../src/connection.ts";
 import { Store, readState, teamsHome } from "../src/store.ts";
 import { teamEntryType } from "../src/mains.ts";
 
@@ -373,6 +374,33 @@ test("message sends return receipts while history and search preserve the full m
   } finally { await f.close(); }
 });
 
+test("message reads show summaries by default and fetch selected detail explicitly", async () => {
+  const f = fixture();
+  const tool = f.tools.get("team_message")!;
+  const call = (args: unknown) => tool.execute(randomUUID(), args, new AbortController().signal, undefined, f.ctx);
+  const text = (result: Awaited<ReturnType<typeof call>>) => result.content.filter(block => block.type === "text").map(block => block.text).join("\n");
+  try {
+    const task = await f.execute("team_task", { action: "create", title: "Review" }) as { id: string };
+    await call({ action: "send", recipients: ["root"], summary: "Unrelated" });
+    const sent = await call({ action: "send", task: task.id, summary: "Review complete", detail: "Evidence ".repeat(1000) });
+    const { seq } = sent.details as { seq: number };
+    const history = await call({ action: "history", task: task.id });
+    const posts = JSON.parse(text(history));
+    assert.equal(posts.length, 1);
+    assert.equal(posts[0].seq, seq);
+    assert.equal(posts[0].hasDetail, true);
+    assert.equal(posts[0].detail, undefined);
+    assert.ok(text(history).length < 1000);
+    assert.ok((history.details as { detail: string }[])[0].detail.includes("Evidence"), "UI and persistence retain full detail");
+    const search = await call({ action: "search", task: task.id, query: "Evidence" });
+    assert.deepEqual(JSON.parse(text(search)), posts, "search still matches hidden detail");
+    const selected = await call({ action: "history", seq, includeDetail: true });
+    assert.equal(JSON.parse(text(selected))[0].detail, "Evidence ".repeat(1000));
+    const plain = await call({ action: "history", seq: 1 });
+    assert.equal(JSON.parse(text(plain))[0].hasDetail, false);
+  } finally { await f.close(); }
+});
+
 test("message tool accepts aliases and renders resolved recipients by name", async () => {
   const f = fixture();
   try {
@@ -643,6 +671,120 @@ async function until(check: () => boolean) {
   const end = Date.now() + 5000;
   while (!check()) { if (Date.now() > end) throw new Error("Condition timed out"); await delay(10); }
 }
+
+test("team pauses drive balanced Herdr attention across notification turns, final replies, reload and abort", async () => {
+  const f = fixture();
+  const busy: boolean[] = [];
+  f.events.on("herdr:busy", (event: { active: boolean; source: string }) => { if (event.source === "ac-teams") busy.push(event.active); });
+  try {
+    await f.event("session_start");
+    await f.execute("team_message", { action: "wait" });
+    await f.event("agent_settled");
+    await f.event("agent_start");
+    await f.event("agent_settled");
+    assert.deepEqual(busy, [true], "notification-only turns retain the original busy interval");
+    await f.event("message_end", { message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Please approve the next step." }] } });
+    assert.deepEqual(busy, [true, false]);
+    await f.execute("team_message", { action: "wait" });
+    await f.event("session_shutdown");
+    assert.deepEqual(busy, [true, false, true, false], "closing balances the interval");
+    await f.event("session_start");
+    await f.execute("team_agent", { action: "list" });
+    assert.equal(busy.at(-1), true, "the explicit pause is restored from the team snapshot");
+    await f.event("message_end", { message: { role: "assistant", stopReason: "aborted", content: [] } });
+    assert.equal(busy.at(-1), false);
+  } finally { await f.close(); }
+});
+
+test("watch and unwatch register without pausing; pause leaves watches intact", async () => {
+  const f = fixture();
+  try {
+    await f.event("session_start");
+    const task = await f.execute("team_task", { action: "create", title: "Observe" }) as { id: string };
+    const watched = await f.tools.get("team_message")!.execute(randomUUID(), { action: "watch", tasks: [task.id] }, new AbortController().signal, undefined, f.ctx) as { terminate?: boolean; details: { watching: { task: string; event: string }[] } };
+    assert.equal(watched.terminate, undefined);
+    assert.deepEqual(watched.details.watching, [{ task: task.id, event: "completed" }]);
+    const pause = await f.tools.get("team_message")!.execute(randomUUID(), { action: "wait" }, new AbortController().signal, undefined, f.ctx) as { terminate?: boolean };
+    assert.equal(pause.terminate, true);
+    await f.event("agent_start");
+    const cancelled = await f.execute("team_message", { action: "unwatch", tasks: [task.id] }) as { watching: unknown[] };
+    assert.deepEqual(cancelled.watching, []);
+  } finally { await f.close(); }
+});
+
+test("receipt cursors belong to one team/member across joins and session reloads", async () => {
+  const f = fixture();
+  try {
+    await f.event("session_start");
+    for (let n = 0; n < 100; n++) await f.execute("team_message", { action: "send", recipients: ["root"], summary: `Old post ${n}` });
+    f.entries.push({ type: "custom_message", id: "old", customType: "ac-teams", details: { team: f.id, member: "root", through: 100 } } as never);
+    await f.event("turn_end");
+    const target = seedTeam(f, randomUUID());
+    await f.commands.get("teams")!.handler(`join ${target}`, f.ctx);
+    const joined = f.messages.at(-1) as { details: { team: string; member: string } };
+    assert.equal(joined.details.team, target);
+    f.entries.push({ type: "custom_message", id: "foreign-member", customType: "ac-teams", details: { team: target, member: "root", through: 999 } } as never);
+    f.entries.push({ type: "custom_message", id: "legacy", customType: "ac-teams", details: { through: 999 } } as never);
+    await f.event("session_start");
+    await f.execute("team_agent", { action: "launch", name: "new-worker", model: "test/model", brief: "ERROR" });
+    await until(() => f.messages.some(message => (message as { content: string }).content.includes("Provider rejected this model")));
+    const notice = f.messages.at(-1) as { details: { team: string; member: string; through: number } };
+    assert.equal(notice.details.team, target);
+    assert.equal(notice.details.member, joined.details.member);
+    assert.equal(notice.details.through, 1, "old team's cursor must not suppress this team's first post");
+    f.entries.push({ type: "custom_message", id: "new", customType: "ac-teams", details: notice.details } as never);
+    await f.event("session_start");
+    assert.equal(readState(join(teamsHome(), target)).members[joined.details.member].notified, 1);
+    assert.ok(!f.warnings.some(warning => warning.includes("Invalid notification cursor")));
+  } finally { await f.close(); }
+});
+
+for (const remote of [false, true]) test(`failed ${remote ? "RPC" : "local"} acknowledgement stays retryable`, async () => {
+  const sender = fixture();
+  let receiver: ReturnType<typeof fixture> | undefined;
+  const originalAck = Coordinator.prototype.ack, originalRequest = Connection.prototype.request;
+  let attempts = 0, release: (() => void) | undefined;
+  try {
+    await sender.event("session_start");
+    if (remote) {
+      await sender.execute("team_task", { action: "create", title: "Shared team" });
+      receiver = fixture();
+      process.env.HOME = sender.home;
+      Object.assign(receiver.ctx, { cwd: sender.home });
+      await receiver.event("session_start");
+      await receiver.commands.get("teams")!.handler(`join ${sender.id}`, receiver.ctx);
+    }
+    const f = receiver ?? sender;
+    if (receiver) {
+      const joined = receiver.messages.at(-1) as { details: { member: string } };
+      await sender.execute("team_message", { action: "send", recipients: [joined.details.member], summary: "Persist this" });
+    } else await f.execute("team_agent", { action: "launch", name: "worker", model: "test/model", brief: "REPORT:Persist this" });
+    await until(() => f.messages.some(message => (message as { content: string }).content.includes("Persist this")));
+    const notice = f.messages.at(-1) as { details: { member: string; through: number } };
+    f.entries.push({ type: "custom_message", id: "notice", customType: "ac-teams", details: notice.details } as never);
+    if (remote) Connection.prototype.request = function(operation, args) {
+      if (operation === "ack" && ++attempts === 1) return new Promise((_resolve, reject) => { release = () => reject(new Error("Temporary ack failure")); });
+      return originalRequest.call(this, operation, args);
+    };
+    else Coordinator.prototype.ack = function(id, through) {
+      if (++attempts === 1) throw new Error("Temporary ack failure");
+      originalAck.call(this, id, through);
+    };
+    await f.event("turn_end");
+    if (remote) {
+      await f.event("agent_settled");
+      assert.equal(attempts, 1, "only one ack may be in flight");
+      release!();
+      await until(() => f.warnings.some(warning => warning.includes("Temporary ack failure")));
+    }
+    await f.event("turn_end");
+    await until(() => readState(join(teamsHome(), sender.id)).members[notice.details.member].notified === notice.details.through);
+    assert.equal(attempts, 2);
+  } finally {
+    Coordinator.prototype.ack = originalAck; Connection.prototype.request = originalRequest;
+    await receiver?.close(); await sender.close();
+  }
+});
 
 test("notices steer in summaries once, are acknowledged only after persistence, and a wait with nothing new ends the turn", async () => {
   const f = fixture();
