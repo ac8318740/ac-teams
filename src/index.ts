@@ -36,6 +36,7 @@ export default function teams(pi: ExtensionAPI) {
   let warned = false;
   let exiting = false;
   let disposeUI: (() => void) | undefined;
+  let disposeNoticeGroups: (() => void) | undefined;
   let telemetryTimer: NodeJS.Timeout | undefined;
   let inputCount = 0;
   /** This main session's team, from its transcript's team entry; a session with no entry leads its own team as "root". */
@@ -429,6 +430,8 @@ export default function teams(pi: ExtensionAPI) {
       await root(ctx, { id: chosen.id, member });
       remember({ team: chosen.id, member });
     }
+    startTelemetry(ctx);
+    installUI(ctx);
     const state = readState(dir), name = (id?: string) => id ? memberName(state.members[id] ?? { id }) : "unowned";
     const open = Object.values(state.tasks).filter(task => task.status !== "done");
     const recent = state.messages.slice(-5);
@@ -472,7 +475,8 @@ export default function teams(pi: ExtensionAPI) {
     }
     // Notices persisted before a crash or reconnect count as delivered; acknowledge them so they are not shown twice.
     reconcile(ctx);
-    bindNoticeGroups(ctx, memberLabels, memberId, line => ownWarnings.has(line));
+    disposeNoticeGroups?.();
+    disposeNoticeGroups = bindNoticeGroups(ctx, memberLabels, memberId, line => ownWarnings.has(line));
     startTelemetry(ctx);
     if (!warned) {
       warned = true;
@@ -480,14 +484,18 @@ export default function teams(pi: ExtensionAPI) {
       if (competitors.length) warn(`Other delegation tools are active (${competitors.map(tool => tool.name).join(", ")}). ac-teams limits do not cover them; disable competing launchers for a single team authority.`);
     }
   });
-  // CLI-loaded teammates run session_start before other extensions install their editors.
-  pi.on("resources_discover", (_event, ctx) => {
+  function installUI(ctx: ExtensionContext) {
     if (ctx.mode !== "tui") return;
     try { Object.assign(display, readDisplaySettings()); }
     catch (error) { Object.assign(display, defaultDisplaySettings); warn(String(error)); }
     disposeUI?.(); disposeUI = installTeamFooter(pi, ctx, host(ctx), display);
+  }
+  // CLI-loaded teammates run session_start before other extensions install their editors.
+  pi.on("resources_discover", (_event, ctx) => installUI(ctx));
+  pi.on("session_shutdown", async () => {
+    disposeNoticeGroups?.(); disposeNoticeGroups = undefined;
+    await close();
   });
-  pi.on("session_shutdown", close);
   const switchGuard = () => {
     if (child || coordinator?.live().length || connection) {
       warn("Stop team members before switching/forking/traversing sessions (team_agent stop, or /teams stop)");
@@ -505,9 +513,13 @@ export default function teams(pi: ExtensionAPI) {
     if (!count) return;
     if (!ctx.hasUI || !await ctx.ui.confirm("Stop active team and exit?", `${count} live member(s), including idle members, will be stopped. Worktrees and native sessions are retained.`)) return { cancel: true };
   });
-  if (child) pi.registerShortcut("ctrl+shift+left", {
+  pi.registerShortcut("ctrl+shift+left", {
     description: "Return to Main",
-    handler: async ctx => { if (ctx.mode === "tui") await host(ctx).visit("root"); },
+    handler: async ctx => {
+      if (ctx.mode !== "tui") return;
+      try { await host(ctx).visit("root"); }
+      catch (error) { ctx.ui.notify(cleanText(error instanceof Error ? error.message : String(error)), "error"); }
+    },
   });
   pi.registerCommand("teams", {
     description: "Team panel; /teams teammate <name-or-id>, config, back, stop, status, join [team-id], or leave",

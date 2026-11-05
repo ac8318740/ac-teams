@@ -135,7 +135,9 @@ export function groupTeamRows(children: unknown[], width: number, style: (header
 /** Pi has no row-grouping API; unexpected private layout shapes leave the transcript native. */
 export function bindNoticeGroups(ctx: ExtensionContext, labels: () => Labels, self: () => string, ours: (line: string) => boolean) {
   if (ctx.mode !== "tui") return;
+  let dispose: (() => void) | undefined;
   ctx.ui.setWidget(widget, tui => {
+    dispose?.(); dispose = undefined;
     // SAFETY: Pi's private layout (document, then chat last); reject anything else.
     const chat = (tui as unknown as { children?: { children?: unknown[] }[] }).children?.[0]?.children?.at(-1) as Chat | undefined;
     if (chat && Array.isArray(chat.children) && typeof chat.render === "function" && !Object.hasOwn(chat, hook)) {
@@ -145,13 +147,20 @@ export function bindNoticeGroups(ctx: ExtensionContext, labels: () => Labels, se
         ...wrapTextWithAnsi(theme.fg("accent", theme.bold(header)), width),
         ...warnings.flatMap(warning => wrapTextWithAnsi(theme.fg("warning", warning), width)),
       ];
-      Object.defineProperty(chat, hook, { value: true });
-      chat.render = function (this: Chat, width: number) {
+      Object.defineProperty(chat, hook, { value: true, configurable: true });
+      const render = function (this: Chat, width: number) {
         const children = this.children;
         this.children = groupTeamRows(children, width, style, labels(), self(), ours, () => tui.requestRender(), ctx.ui.getToolsExpanded(), line => styleRecordLine(line, theme));
         try { return original.call(this, width); } finally { this.children = children; }
       };
+      chat.render = render;
+      dispose = () => {
+        if (chat.render !== render) return;
+        chat.render = original;
+        Reflect.deleteProperty(chat, hook);
+      };
     }
     return { render: () => [], invalidate() {} };
   }, { placement: "belowEditor" });
+  return () => { dispose?.(); dispose = undefined; };
 }
