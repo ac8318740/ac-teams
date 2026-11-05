@@ -36,6 +36,7 @@ export default function teams(pi: ExtensionAPI) {
   let warned = false;
   let exiting = false;
   let disposeUI: (() => void) | undefined;
+  let disposeNoticeGroups: (() => void) | undefined;
   let telemetryTimer: NodeJS.Timeout | undefined;
   let inputCount = 0;
   /** This main session's team, from its transcript's team entry; a session with no entry leads its own team as "root". */
@@ -474,7 +475,8 @@ export default function teams(pi: ExtensionAPI) {
     }
     // Notices persisted before a crash or reconnect count as delivered; acknowledge them so they are not shown twice.
     reconcile(ctx);
-    bindNoticeGroups(ctx, memberLabels, memberId, line => ownWarnings.has(line));
+    disposeNoticeGroups?.();
+    disposeNoticeGroups = bindNoticeGroups(ctx, memberLabels, memberId, line => ownWarnings.has(line));
     startTelemetry(ctx);
     if (!warned) {
       warned = true;
@@ -490,7 +492,10 @@ export default function teams(pi: ExtensionAPI) {
   }
   // CLI-loaded teammates run session_start before other extensions install their editors.
   pi.on("resources_discover", (_event, ctx) => installUI(ctx));
-  pi.on("session_shutdown", close);
+  pi.on("session_shutdown", async () => {
+    disposeNoticeGroups?.(); disposeNoticeGroups = undefined;
+    await close();
+  });
   const switchGuard = () => {
     if (child || coordinator?.live().length || connection) {
       warn("Stop team members before switching/forking/traversing sessions (team_agent stop, or /teams stop)");

@@ -120,6 +120,38 @@ test("folded chat blocks align with native rows when later text follows them", (
   }
 });
 
+test("notice grouping releases its old context and rebinds after reload", () => {
+  const chat = new Container();
+  const create = row("team_task", { action: "create", title: "Reload task" });
+  finish(create, { title: "Reload task", status: "todo" });
+  chat.addChild(create);
+  const nativeRender = chat.render;
+  let stale = false, toolsExpanded = false;
+  const ui = { theme, getToolsExpanded: () => toolsExpanded, setWidget(_key: string, factory: unknown) {
+    if (typeof factory === "function") factory({ children: [{ children: [chat] }], requestRender() {} }, theme);
+  } };
+  // SAFETY: this host double rejects the same expired context access as Pi 1.5.
+  const ctx = { mode: "tui", get ui() {
+    if (stale) throw new Error("This extension ctx is stale after session replacement or reload.");
+    return ui;
+  } } as ExtensionContext;
+  const dispose = bindNoticeGroups(ctx, () => ({}), () => "root", () => false);
+  assert.match(chat.render(120).map(stripVTControlCharacters).join("\n"), /ac-teams activity/);
+  dispose?.();
+  stale = true;
+  assert.doesNotThrow(() => chat.render(120), "shutdown must remove the wrapper before Pi expires its context");
+  assert.equal(chat.render, nativeRender);
+  const unbind = bindNoticeGroups({ mode: "tui", ui } as ExtensionContext, () => ({}), () => "root", () => false);
+  dispose?.();
+  assert.notEqual(chat.render, nativeRender, "repeated old cleanup must not remove the new wrapper");
+  toolsExpanded = true;
+  const rendered = chat.render(120).map(stripVTControlCharacters).join("\n");
+  assert.equal((rendered.match(/ac-teams activity/g) ?? []).length, 1, "reload installs exactly one fresh wrapper");
+  assert.match(rendered, /Title: Reload task/, "the fresh wrapper reads the current expansion state");
+  unbind?.();
+  assert.equal(chat.render, nativeRender);
+});
+
 test("folded groups toggle independently through native mouse dispatch and retain Ctrl+O", () => {
   const chat = new Container();
   const create = row("team_task", { action: "create", title: "First task" });
