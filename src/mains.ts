@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import type { Member } from "./types.ts";
 
 const exec = promisify(execFile);
 /** Pi custom entry in a main session's transcript: which team it belongs to. Holds no secrets. */
@@ -15,6 +16,21 @@ export function mainEnv(env: NodeJS.ProcessEnv = process.env): Record<string, st
     clean[key] = value;
   }
   return clean;
+}
+
+export async function visitMain(member: Pick<Member, "sessionId" | "sessionFile">): Promise<void> {
+  if (process.env.HERDR_ENV !== "1") throw new Error("Open this main in its own terminal. Tab switching requires Herdr.");
+  try {
+    const result = JSON.parse((await exec("herdr", ["agent", "list"], { timeout: 5000, maxBuffer: 4 * 1024 * 1024 })).stdout);
+    const agents = result.result?.agents;
+    if (!Array.isArray(agents)) throw new Error("Missing agents");
+    const matches = agents.filter(agent => agent?.agent === "pi" && typeof agent.pane_id === "string" && (
+      (member.sessionFile && agent.agent_session?.kind === "path" && agent.agent_session.value === member.sessionFile) ||
+      (member.sessionId && agent.agent_session?.kind === "id" && agent.agent_session.value === member.sessionId)
+    ));
+    if (matches.length !== 1) throw new Error("Main is unavailable or ambiguous");
+    await exec("herdr", ["agent", "focus", matches[0].pane_id], { timeout: 5000, maxBuffer: 65536 });
+  } catch { throw new Error("Could not find or switch to this main in Herdr. Open its tab manually."); }
 }
 
 export interface MainLaunch { id: string; name: string; cwd: string; command: string[]; env: Record<string, string>; socket: string }

@@ -13,17 +13,19 @@ import { cleanText } from "../src/render.ts";
 import { theme } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import teams from "../src/index.ts";
 import { taskRequestGuidance } from "../src/coordinator.ts";
-import { Store, teamsHome } from "../src/store.ts";
+import { Store, readState, teamsHome } from "../src/store.ts";
 import { teamEntryType } from "../src/mains.ts";
 
 // SAFETY: this bounded test double implements only the Pi host calls used by the extension.
 function fixture() {
   const home = mkdtempSync(join(tmpdir(), "at-ext-"));
-  const oldHome = process.env.HOME, oldPi = process.env.AC_TEAMS_PI;
+  const oldHome = process.env.HOME, oldPi = process.env.AC_TEAMS_PI, oldHerdr = process.env.HERDR_ENV;
+  process.env.HERDR_ENV = "0";
   process.env.HOME = home;
   process.env.AC_TEAMS_PI = fileURLToPath(new URL("./fixtures/pi-peer.mjs", import.meta.url));
   const tools = new Map<string, ToolDefinition>();
   const commands = new Map<string, { handler(args: string, ctx: ExtensionToolContext): Promise<void> }>();
+  const shortcuts = new Map<string, { handler(ctx: ExtensionContext): Promise<void> }>();
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
   const flags = new Map<string, unknown>();
   const warnings: string[] = [], messages: unknown[] = [];
@@ -33,7 +35,7 @@ function fixture() {
   let active = ["team_agent", "team_task", "team_message"];
   const api = {
     events,
-    registerFlag() {}, registerCommand(name: string, command: { handler(args: string, ctx: ExtensionToolContext): Promise<void> }) { commands.set(name, command); }, registerMessageRenderer() {},
+    registerShortcut(key: string, shortcut: { handler(ctx: ExtensionContext): Promise<void> }) { shortcuts.set(key, shortcut); }, registerFlag() {}, registerCommand(name: string, command: { handler(args: string, ctx: ExtensionToolContext): Promise<void> }) { commands.set(name, command); }, registerMessageRenderer() {},
     registerTool(tool: ToolDefinition) { tools.set(tool.name, tool); },
     on(name: string, handler: (...args: unknown[]) => unknown) { handlers.set(name, handler); },
     getFlag(name: string) { return flags.get(name); },
@@ -55,11 +57,11 @@ function fixture() {
   async function execute(name: string, args: unknown) {
     return (await tools.get(name)!.execute(randomUUID(), args, new AbortController().signal, undefined, ctx)).details;
   }
-  return { ctx, id, home, entries, get active() { return active; }, flags, warnings, messages, tools, commands, execute, events, approve(value: boolean) { approval = value; }, get confirmations() { return confirmations; },
+  return { ctx, id, home, entries, get active() { return active; }, flags, warnings, messages, tools, commands, shortcuts, execute, events, approve(value: boolean) { approval = value; }, get confirmations() { return confirmations; },
     async event(name: string, data: Record<string, unknown> = {}) { return handlers.get(name)?.({ type: name, ...data }, ctx); },
     async close() {
       try { await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, ctx); }
-      finally { if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome; if (oldPi === undefined) delete process.env.AC_TEAMS_PI; else process.env.AC_TEAMS_PI = oldPi; rmSync(home, { recursive: true, force: true }); }
+      finally { if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome; if (oldPi === undefined) delete process.env.AC_TEAMS_PI; else process.env.AC_TEAMS_PI = oldPi; if (oldHerdr === undefined) delete process.env.HERDR_ENV; else process.env.HERDR_ENV = oldHerdr; rmSync(home, { recursive: true, force: true }); }
     },
   };
 }
@@ -496,6 +498,50 @@ test("explicit join connects to the live sender before sharing its tasks", async
     assert.equal(joined.details.joined.team, sender.id);
     assert.equal(joined.details.joined.sessionId, receiver.id);
     assert.ok(joined.details.joined.member);
+  } finally { await receiver?.close(); await sender.close(); }
+});
+
+for (const live of [false, true]) test(`joining a ${live ? "live" : "stopped"} team restores panels and telemetry`, async () => {
+  const sender = fixture();
+  let receiver: ReturnType<typeof fixture> | undefined;
+  type Factory = NonNullable<ReturnType<ExtensionContext["ui"]["getEditorComponent"]>>;
+  const previous: Factory = () => { throw new Error("Editor is not needed for rendering widgets"); };
+  let active: Factory | undefined = previous;
+  const widgets = new Map<string, Component>();
+  initTheme("dark");
+  try {
+    const team = live ? sender.id : seedTeam(sender, randomUUID());
+    if (live) await sender.execute("team_task", { action: "create", title: "Shared work" });
+    receiver = fixture();
+    process.env.HOME = sender.home;
+    Object.assign(receiver.ctx, { cwd: sender.home, mode: "tui" });
+    Object.assign(receiver.ctx.ui, {
+      getEditorComponent: () => active,
+      setEditorComponent(factory: Factory | undefined) { active = factory; },
+      setWidget(key: string, factory: ((...args: unknown[]) => Component) | undefined) {
+        if (key !== "ac-teams-tasks" && key !== "ac-teams-agents") return;
+        if (factory) widgets.set(key, factory({ requestRender() {} }, theme));
+        else widgets.delete(key);
+      },
+      setStatus() {},
+    });
+    await receiver.event("session_start");
+    await receiver.event("resources_discover");
+    assert.equal(widgets.size, 2, "startup installs both widgets");
+    await receiver.commands.get("teams")!.handler(`join ${team}`, receiver.ctx);
+    assert.equal(widgets.size, 2, "join reinstalls both widgets without another resources_discover event");
+    assert.notEqual(active, previous, "join reinstalls editor navigation");
+    const member = (receiver.entries.at(-1)!.data as { member: string }).member;
+    await until(() => readState(join(teamsHome(), team)).members[member]?.model === "test/model");
+    await until(() => widgets.get("ac-teams-agents")!.render(200).some(row => row.includes("● main-")));
+    if (live) {
+      await until(() => widgets.get("ac-teams-tasks")!.render(200).some(row => row.includes("Shared work")));
+      await receiver.shortcuts.get("ctrl+shift+left")!.handler(receiver.ctx);
+      assert.equal(receiver.warnings.at(-1), "Open this main in its own terminal. Tab switching requires Herdr.", "joined mains register the return shortcut and show a plain error without Herdr");
+    }
+    await receiver.event("session_shutdown");
+    assert.equal(widgets.size, 0, "shutdown removes the replacement widgets");
+    assert.equal(active, previous, "shutdown restores the original editor");
   } finally { await receiver?.close(); await sender.close(); }
 });
 
