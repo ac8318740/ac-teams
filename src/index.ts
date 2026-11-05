@@ -1,5 +1,5 @@
 import { bindNoticeGroups } from "./group.ts";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionStartEvent, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "node:url";
 import { AgentSchema, TaskSchema, MessageSchema, validate } from "./schemas.ts";
 import type { AgentArgs, Message, TaskView, UserAction } from "./types.ts";
@@ -21,9 +21,18 @@ import { Coordinator, assistantEvent, taskRequestGuidance } from "./coordinator.
 import { Connection, isRecord } from "./connection.ts";
 import { policy, readDisplaySettings, defaultDisplaySettings } from "./config.ts";
 import { providerRoutes } from "./egress.ts";
-import { VERSION, readStoredCredential } from "@earendil-works/pi-coding-agent";
+import { configureWorker, WorkerConfigSchema, workerConfigPrompt } from "./worker-config-ui.ts";
+import { observeLoadedExtensions } from "./loaded-extensions.ts";
+import { extensionInventory } from "./worker-extensions.ts";
+import { DefaultResourceLoader, VERSION, readStoredCredential } from "@earendil-works/pi-coding-agent";
 
 export default function teams(pi: ExtensionAPI) {
+  const observedExtensions = observeLoadedExtensions(DefaultResourceLoader);
+  let loadedPaths: string[] | undefined;
+  const parentInventory = async () => {
+    if (!loadedPaths || !context) throw new Error("Cannot observe this Pi runtime's loaded extensions. Preset launches are disabled; reload on a supported stock Pi version.");
+    return extensionInventory(context.cwd, undefined, loadedPaths.filter(path => path !== fileURLToPath(import.meta.url)));
+  };
   pi.registerFlag("teams-limit", { description: "Explicit maximum live ac-teams members (default 10, idle members count)", type: "string" });
   pi.registerFlag("teams-depth", { description: "Maximum descendant depth (root is 0, default 2)", type: "string" });
   pi.registerFlag("teams-project-config", { description: "Trust .pi/ac-teams.json policy in the current project", type: "boolean", default: false });
@@ -36,6 +45,7 @@ export default function teams(pi: ExtensionAPI) {
   let warned = false;
   let exiting = false;
   let disposeUI: (() => void) | undefined;
+  let disposeNoticeGroups: (() => void) | undefined;
   let telemetryTimer: NodeJS.Timeout | undefined;
   let inputCount = 0;
   /** This main session's team, from its transcript's team entry; a session with no entry leads its own team as "root". */
@@ -127,7 +137,7 @@ export default function teams(pi: ExtensionAPI) {
       connection = undefined;
       if (!exiting) void takeover(ctx);
     });
-    try { await link.request("join", { sessionId: ctx.sessionManager.getSessionId(), sessionFile: ctx.sessionManager.getSessionFile(), tools: pi.getAllTools().map(tool => tool.name), trusted: ctx.isProjectTrusted() }); }
+    try { await link.request("join", { sessionId: ctx.sessionManager.getSessionId(), sessionFile: ctx.sessionManager.getSessionFile(), tools: pi.getAllTools().map(tool => tool.name), trusted: ctx.isProjectTrusted(), extensionPaths: loadedPaths }); }
     catch (error) { link.close(); throw error; }
     connection = link; linkedSession = ctx.sessionManager.getSessionId();
     if (!team) remember({ team: teamId(ctx), member: record.id });
@@ -172,6 +182,7 @@ export default function teams(pi: ExtensionAPI) {
       cwd: ctx.cwd, sessionFile: ctx.sessionManager.getSessionFile(), sessionDir: ctx.sessionManager.getSessionDir(),
       ...policy(ctx.cwd, pi.getFlag("teams-project-config") === true, { limit: pi.getFlag("teams-limit") as string | undefined, depth: pi.getFlag("teams-depth") as string | undefined }),
       extension: fileURLToPath(import.meta.url), notice: notify, warning: warn, piVersion: VERSION,
+      projectConfig: pi.getFlag("teams-project-config") === true, extensions: parentInventory,
       status: (kind, active) => pi.events.emit(`herdr:${kind}`, { active, source: "ac-teams" }),
       credentials: async (provider, modelId) => {
         // Only providers whose request shape was verified are brokered; anything else fails closed.
@@ -317,22 +328,30 @@ export default function teams(pi: ExtensionAPI) {
     if (change) report(ctx, change);
   });
   function output(data: unknown) { return { content: [{ type: "text" as const, text: JSON.stringify(data) }], details: data }; }
-  const guidance = "Team launches use real long-lived Pi sessions. Idle members count against the shared ceiling and retain their processes and extensions. Check team_agent list resources before adding concurrency; teammate launch/resume results include pre-launch host headroom. Resource warnings are advisory, not a memory reservation or capacity guarantee. Choose concurrency using resource readings and observed progress, not low headroom alone. If contention slows progress, stop unneeded idle members and resume their saved sessions later. Use teammate names for messaging and stable IDs for member control and tasks; never acknowledge notifications. Limits cover only ac-teams, not other launchers or shell commands.";
+  const guidance = "Team launches use real long-lived Pi sessions. Idle members count against the shared ceiling and retain their processes and extensions. Check team_agent list resources before adding concurrency; teammate launch/resume results include pre-launch host headroom. Resource warnings are advisory, not a memory reservation or capacity guarantee. Choose concurrency using resource readings and observed progress, not low headroom alone. Use configured extension presets for scoped workers, with optional include/exclude IDs; choose broader presets only when the task needs them. Required coordination/safety/auth cannot be excluded. Every worker is limited to the actual parent-loaded set, including full and unconfigured launches. Include can only restore IDs from that parent; nested delegation cannot widen it. Run /teams config to configure lean presets. Missing presets fail rather than silently loading everything; resumes keep saved IDs and report installed-code changes. If contention slows progress, stop unneeded idle members and resume their saved sessions later. Use teammate names for messaging and stable IDs for member control and tasks; never acknowledge notifications. Limits cover only ac-teams, not other launchers or shell commands.";
   const taskTrackingGuidance = "Before delegating a deliverable through team_agent, create or reuse a team_task and pass it as the launch task; its owner's completion outcome reports back to you. Use one shared task list for your own work and delegated work; do not create one task per teammate by default. Quick lookups and brief second opinions need no separate task unless their results need coordination or follow-up.";
-  pi.registerTool({
+  const teamAgentTool = {
     name: "team_agent", label: "Team agent", description: "Launch/resume Pi members, list/status, stop owned subtrees, change root limits, and explicitly clean stopped worktrees. Create or reuse team_task entries for delegated deliverables; quick lookups need no task unless results need coordination or follow-up.",
     promptGuidelines: [guidance, taskTrackingGuidance, "Analysis defaults to auto: request existing pi-lens same-workspace reuse, possibly from sessions outside this team. If pi-lens is absent or disabled, launch proceeds without enabling it. Explicit environment opt-outs win; restricted members stay separate. Choose analysis: separate for different environments or rules, uncertain compatibility, suspicious diagnostics, or independent analyzer state. Different assignments alone do not require separation. This is a launch/resume preference, not proof of attachment or compatibility; an existing leader participates only if warm attach was already enabled there.", "Delegation needs the user's authorization. Give each new member a unique descriptive name (one or two lowercase words, hyphenated if two), plus a bounded brief. Names remain stable on resume. Avoid concurrent writers in the same cwd. Worktrees are opt-in."],
     parameters: AgentSchema,
     ...teamToolRenderers("team_agent", memberLabels, memberId),
     async execute(_id, args, _signal, _update, ctx) { return output(await handle("agent", args, ctx)); },
+  } satisfies ToolDefinition<typeof AgentSchema>;
+  pi.registerTool(teamAgentTool);
+  pi.registerTool({
+    name: "team_config", label: "Team configuration", description: "Read worker extension inventory and policy, or save a user-approved policy. Ask preferences in conversation first; never ask the user to edit configuration files. Save validates the policy and requests final confirmation without starting a team.",
+    parameters: WorkerConfigSchema,
+    async execute(_id, args, _signal, _update, ctx) {
+      return output(await configureWorker(ctx, pi.getFlag("teams-project-config") === true, parentInventory, args));
+    },
   });
   pi.registerTool({
     name: "team_task", label: "Team task", description: "Plan and track multi-step solo and team work in one shared list. Create one task or a batch with tasks:[{title,...}], list compact summaries, read full details, edit, claim a reservation, start, complete, release, or reopen. Start atomically claims unowned ready work. Progress is todo/in_progress/done; blockedBy is derived from unfinished dependencies. Mutations support revision checks.",
     promptSnippet: "Plan and track multi-step work, alone or with teammates",
     promptGuidelines: [
       "Use team_task before substantial work with 3+ steps, when the user gives an explicit task list, or when coordinating deliverables. This includes your own research, design, implementation, and verification; no teammate is required. Skip single trivial tasks, conversation, and tool-by-tool bookkeeping.",
-      "Before creating team_task entries, identify the outputs each task needs from other tasks. If it cannot start correctly without another task's verified output, add that task's UUID to dependencies. Consider shared contracts/setup before consumers, implementation before integration verification, and multiple outputs before final assembly. Keep independent work parallel; never add edges just to make a graph. Reassess dependencies when scope changes.",
-      "Create the team_task plan in dependency order: batch independent tasks with tasks:[{title,description},...], then create dependent tasks in later calls using the returned prerequisite UUIDs. Include every required prerequisite in dependencies; all prerequisites must be done before start. Dependencies cannot refer to siblings in the same batch. Titles are required; labels and descriptions default from titles. Include acceptance criteria for substantial or delegated work. Reuse relevant existing tasks rather than duplicating them.",
+      "Before creating team_task entries, identify the outputs each task needs from other tasks. If it cannot start correctly without another task's verified output, record that prerequisite in dependencies (UUID or @key within a create batch). Consider shared contracts/setup before consumers, implementation before integration verification, and multiple outputs before final assembly. Keep independent work parallel; never add edges just to make a graph. Reassess dependencies when scope changes.",
+      "Create connected team_task plans atomically with batch keys: tasks:[{key:'worker',title:'Worker'},{title:'Bridge',dependencies:['@worker']}]. Dependencies accept existing UUIDs and @key references to any entry in this batch, including later entries. Include every required prerequisite; all prerequisites must be done before start. Before starting or delegating, check that the recorded dependencies match the outputs each task needs; creating tasks together does not make them independent. Keys are batch-only; use returned UUIDs in later calls. Titles are required; labels and descriptions default from titles. Include acceptance criteria for substantial or delegated work. Reuse relevant existing tasks rather than duplicating them.",
       "Call team_task start BEFORE beginning a task; it claims unowned ready work atomically. Use claim only to reserve work in advance, including blocked work. Complete each task IMMEDIATELY after checking its result with acceptance=true; never complete partial work or work with unresolved failures. Report blockers. Each agent should normally work on one task at a time; teammates can work in parallel.",
       taskTrackingGuidance, taskRequestGuidance,
       "team_task list returns compact summaries; read a task for its full description and acceptance criteria. Use returned UUIDs for API references and stable task numbers/names when reporting to people. Add dependencies only for real prerequisites, never merely to connect the diagram.",
@@ -429,6 +448,8 @@ export default function teams(pi: ExtensionAPI) {
       await root(ctx, { id: chosen.id, member });
       remember({ team: chosen.id, member });
     }
+    startTelemetry(ctx);
+    installUI(ctx);
     const state = readState(dir), name = (id?: string) => id ? memberName(state.members[id] ?? { id }) : "unowned";
     const open = Object.values(state.tasks).filter(task => task.status !== "done");
     const recent = state.messages.slice(-5);
@@ -450,7 +471,8 @@ export default function teams(pi: ExtensionAPI) {
     disable("This session left its team; use /teams join to join one");
     ctx.ui.notify(String(result), "info");
   }
-  pi.on("session_start", async (_event, ctx) => {
+  const startSession = async (_event: SessionStartEvent, ctx: ExtensionContext) => {
+    loadedPaths ??= observedExtensions(extension => Object.is(extension.tools.get("team_agent")?.definition, teamAgentTool));
     if (!child && linkedSession && linkedSession !== ctx.sessionManager.getSessionId()) { await close(); drafts.clear(); }
     context = ctx; exiting = false; inputCount = 0; sent = acked = 0;
     if (child) {
@@ -461,7 +483,7 @@ export default function teams(pi: ExtensionAPI) {
       link.on("disconnect", () => { warn("Team coordinator disconnected; this member is shutting down"); ctx.abort(); ctx.shutdown(); });
       link.on("command", onCommand(ctx, link));
       await link.open();
-      await link.request("join", { sessionId: ctx.sessionManager.getSessionId(), sessionFile: ctx.sessionManager.getSessionFile(), tools: pi.getAllTools().map(tool => tool.name), trusted: ctx.isProjectTrusted() });
+      await link.request("join", { sessionId: ctx.sessionManager.getSessionId(), sessionFile: ctx.sessionManager.getSessionFile(), tools: pi.getAllTools().map(tool => tool.name), trusted: ctx.isProjectTrusted(), extensionPaths: loadedPaths });
     } else if (!linkedSession) {
       const entry = ctx.sessionManager.getEntries().filter(entry => entry.type === "custom" && entry.customType === teamEntryType).at(-1);
       const data = entry?.type === "custom" ? entry.data as TeamEntry : undefined;
@@ -472,22 +494,28 @@ export default function teams(pi: ExtensionAPI) {
     }
     // Notices persisted before a crash or reconnect count as delivered; acknowledge them so they are not shown twice.
     reconcile(ctx);
-    bindNoticeGroups(ctx, memberLabels, memberId, line => ownWarnings.has(line));
+    disposeNoticeGroups?.();
+    disposeNoticeGroups = bindNoticeGroups(ctx, memberLabels, memberId, line => ownWarnings.has(line));
     startTelemetry(ctx);
     if (!warned) {
       warned = true;
       const competitors = pi.getAllTools().filter(tool => ["Agent", "SubagentWorkflow", "subagent"].includes(tool.name));
       if (competitors.length) warn(`Other delegation tools are active (${competitors.map(tool => tool.name).join(", ")}). ac-teams limits do not cover them; disable competing launchers for a single team authority.`);
     }
-  });
-  // CLI-loaded teammates run session_start before other extensions install their editors.
-  pi.on("resources_discover", (_event, ctx) => {
+  };
+  pi.on("session_start", startSession);
+  function installUI(ctx: ExtensionContext) {
     if (ctx.mode !== "tui") return;
     try { Object.assign(display, readDisplaySettings()); }
     catch (error) { Object.assign(display, defaultDisplaySettings); warn(String(error)); }
     disposeUI?.(); disposeUI = installTeamFooter(pi, ctx, host(ctx), display);
+  }
+  // CLI-loaded teammates run session_start before other extensions install their editors.
+  pi.on("resources_discover", (_event, ctx) => installUI(ctx));
+  pi.on("session_shutdown", async () => {
+    disposeNoticeGroups?.(); disposeNoticeGroups = undefined;
+    await close();
   });
-  pi.on("session_shutdown", close);
   const switchGuard = () => {
     if (child || coordinator?.live().length || connection) {
       warn("Stop team members before switching/forking/traversing sessions (team_agent stop, or /teams stop)");
@@ -505,14 +533,18 @@ export default function teams(pi: ExtensionAPI) {
     if (!count) return;
     if (!ctx.hasUI || !await ctx.ui.confirm("Stop active team and exit?", `${count} live member(s), including idle members, will be stopped. Worktrees and native sessions are retained.`)) return { cancel: true };
   });
-  if (child) pi.registerShortcut("ctrl+shift+left", {
+  pi.registerShortcut("ctrl+shift+left", {
     description: "Return to Main",
-    handler: async ctx => { if (ctx.mode === "tui") await host(ctx).visit("root"); },
+    handler: async ctx => {
+      if (ctx.mode !== "tui") return;
+      try { await host(ctx).visit("root"); }
+      catch (error) { ctx.ui.notify(cleanText(error instanceof Error ? error.message : String(error)), "error"); }
+    },
   });
   pi.registerCommand("teams", {
     description: "Team panel; /teams teammate <name-or-id>, config, back, stop, status, join [team-id], or leave",
     async getArgumentCompletions(prefix) {
-      if (!prefix.includes(" ")) return teamsCompletions(prefix, []);
+      if (!prefix.includes(" ") || prefix.startsWith("config ")) return teamsCompletions(prefix, []);
       if (!context) return null;
       try {
         const members = child || opening || connection ? (await handle("agent", { action: "list" }, context) as Pick<TeamSnapshot, "members">).members : [{ id: "root", status: "idle" as const }];
@@ -521,9 +553,15 @@ export default function teams(pi: ExtensionAPI) {
     },
     async handler(args, ctx) {
       context = ctx;
-      if (args.trim() === "config") {
+      if (args.trim() === "config" || args.trim() === "config display") {
         if (ctx.mode !== "tui") { ctx.ui.notify("/teams config requires an interactive terminal", "error"); return; }
-        try { Object.assign(display, readDisplaySettings()); await showDisplayConfig(ctx, display); }
+        try {
+          if (args.trim() === "config display") { Object.assign(display, readDisplaySettings()); await showDisplayConfig(ctx, display); }
+          else {
+            pi.setActiveTools([...new Set([...pi.getActiveTools(), "team_config"])]);
+            pi.sendUserMessage(workerConfigPrompt, { deliverAs: "followUp" });
+          }
+        }
         catch (error) { ctx.ui.notify(cleanText(String(error)), "error"); }
         return;
       }

@@ -21,7 +21,8 @@ With Herdr's Pi integration and the question adapter installed, Main reports the
 Context shows Pi's reported token estimate, window size, and percentage, for example `Claude Opus 4.6 · 48k / 200k (24%)`. Reports refresh about once a second when they change. Unknown usage stays marked unknown, not zero. Stopped members retain their last report. These are context estimates, not billing totals.
 
 - Press Down from an empty editor to focus Main in the agent selector. Up/Down select members; Enter opens the selected live session; Esc returns to editing.
-- Ctrl+Shift+Left returns from a member to Main. Switching preserves the member's process, session, and draft. Returning does not stop it.
+- Selecting another main session focuses its Herdr pane, including its tab and workspace. Outside Herdr, ac-teams asks you to open that main's terminal manually.
+- Ctrl+Shift+Left returns from a member or joined main to Main. Switching preserves the process, session, and draft. Returning does not stop it.
 - `/teams` opens three tabs. Tab moves between Tasks, Teammates, and Board; Esc closes the panel. Lowercase h/j/k/l mirror Left/Down/Up/Right outside text inputs. Right opens list details; Left returns. Page Up/Down move a viewport of entries or scroll details.
     - **Tasks:** Opens as a list by default. G toggles graph/list; reopening `/teams` remembers that choice within the current Pi instance (not across reloads or restarts). Graphs are built only when displayed. Arrow keys select tasks, and Enter shows full details. **Shift+J** opens Go to task: enter a task number and press Enter to select it in either view. Invalid or missing numbers show an error; Esc cancels.
         - Small graphs show the whole map when it fits with readable titles. Dense graphs open in **Focus**, with three labeled, accent-colored sections: Prerequisites, Focused task, and Dependents. The selected box stays at the same top-left position as selection changes; resizing may move that anchor. Neighbor titles wrap, and each neighbor section shows complete boxes or an explicit remaining count. The header reports visible/total tasks. Empty sections stay labeled. Extra prerequisites remain numbered references; status and details use the complete task data.
@@ -91,7 +92,7 @@ The summary shows at most five tasks; `/teams` retains the full list. Completion
 
 ac-teams leaves your existing footer intact and publishes a compact summary under the `ac-teams` extension-status key. Custom footers must support extension statuses to show it. In Zentui, use `/zentui extensions` to choose a placement for `ac-teams` if statuses are hidden by default. Agent navigation remains available in its own row even when the footer hides statuses.
 
-Use `/teams config` to toggle **Task summary** and **Agent selector** independently. Up/Down select a setting; Space or Enter toggles it; Esc closes. Changes save immediately for the current and future sessions. Other running sessions are not updated automatically. Both displays default to On.
+Use `/teams config display` to toggle **Task summary** and **Agent selector** independently. Up/Down select a setting; Space or Enter toggles it; Esc closes. Changes save immediately for the current and future sessions. Other running sessions are not updated automatically. Both displays default to On.
 
 Hiding a display does not stop agents, change tasks, or disable `/teams`. With the agent selector hidden, ordinary editor Down behavior returns. These global display preferences do not change the team's resource ceilings.
 
@@ -107,16 +108,24 @@ Create independent tasks in one call:
 {"action":"create","tasks":[{"title":"Review parser behavior","description":"Acceptance: identify malformed-input failures with reproduction steps."},{"title":"Review display ordering","description":"Acceptance: compare implementation and display tests, and report mismatches."}]}
 ```
 
-A batch creates 1–100 tasks atomically: invalid input leaves no tasks created. Use either `tasks` or top-level task fields, not both. Existing single-task creation remains supported. A title is enough for a simple task; description defaults to title and label defaults to its first three words, capped at 60 characters. Supply explicit acceptance criteria for substantial or delegated work. Dependencies must reference existing task UUIDs, so create prerequisites before dependent tasks. Tasks in the same batch cannot refer to each other.
+A batch creates 1–100 tasks atomically: invalid input leaves no tasks created. Use either `tasks` or top-level task fields, not both. Existing single-task creation remains supported. A title is enough for a simple task; description defaults to title and label defaults to its first three words, capped at 60 characters. Supply explicit acceptance criteria for substantial or delegated work.
 
-Create dependent tasks in later calls using the UUIDs returned by earlier calls. For example, API and UI implementations may both need a shared contract; integration verification may need both implementations:
+For dependent tasks, give prerequisites unique batch-only `key` names and reference them with `@key` in `dependencies`. References can point forward or backward within the batch, alongside existing task UUIDs. Keys start with a letter, contain only letters, digits, underscores, or hyphens, and have at most 64 characters. Missing keys, duplicate keys or dependencies, self-dependencies, and cycles reject the whole batch without changing stored tasks. Keys are not stored; responses and later calls use UUIDs.
+
+For example, API and UI implementations may both need a shared contract; integration verification may need both implementations:
 
 ```text
 Shared contract ──┬──> API ──┐
                   └──> UI ───┴──> Integration verification
 ```
 
-Give API and UI the contract task's UUID in `dependencies`. Give integration verification both implementation UUIDs. It can start only when both are done; `blockedBy` automatically lists unfinished prerequisites. Write tests before implementation when useful; that alone is not a reason to block test-writing behind implementation. Reassess dependencies when scope changes, subject to task ownership and edit rules.
+Create this graph in one call:
+
+```json
+{"action":"create","tasks":[{"key":"contract","title":"Define shared contract"},{"key":"api","title":"Implement API","dependencies":["@contract"]},{"key":"ui","title":"Implement UI","dependencies":["@contract"]},{"title":"Verify integration","dependencies":["@api","@ui"]}]}
+```
+
+Before starting or delegating, check that recorded dependencies match the outputs each task needs. Creating tasks together does not make them independent. Integration verification can start only when both implementations are done; `blockedBy` automatically lists unfinished prerequisites. Write tests before implementation when useful; that alone is not a reason to block test-writing behind implementation. Reassess dependencies when scope changes, subject to task ownership and edit rules.
 
 Start a task before working and complete it immediately after checking the result. One agent normally works on one task at a time; teammates can work in parallel. Never complete partial work or work with unresolved failures.
 
@@ -151,7 +160,7 @@ Every launch needs a unique descriptive `name`: one or two lowercase words, hyph
 
 Launch returns the name, a stable member ID, PID, cwd, and native session ID/path. Interactive roots launch native Pi terminals in a team-private tmux server; headless roots keep the RPC transport. Finishing a turn makes the member idle only after Pi reports `agent_settled`. It does not stop the process.
 
-Children load ac-teams explicitly and otherwise keep normal Pi extensions, skills, authentication, and cwd instructions. They receive their brief, not the parent's conversation. Load ac-teams only once in the root, either through Pi package settings or an explicit extension path.
+Children load ac-teams explicitly and seed only the parent's actually loaded extension set. Configure presets by talking with Pi through `/teams config` (no file editing required), then optionally pass `extensions: {preset: "worker", include: ["<parent-extension-id>"], exclude: ["<optional-id>"]}` on launch. `full` can retain only that parent's set; nested delegation cannot widen it. Required safety/provider extensions cannot be excluded. Resume retains saved IDs and current installed versions, not a new preset. Skills, authentication storage, and cwd instructions still use native Pi behavior; any provider extension itself must be retained. Children receive their brief, not the parent's conversation. Load ac-teams only once in the root, either through Pi package settings or an explicit extension path.
 
 Children can delegate through the same coordinator, subject to depth and capacity. Delegation still needs user authorization. Keep briefs bounded, agree on file ownership, and use separate worktrees for concurrent writers.
 

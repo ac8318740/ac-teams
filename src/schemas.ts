@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { taskLabelMaxLength, taskLabelPattern, memberNameMaxLength, memberNamePattern } from "./types.ts";
+import { taskLabelMaxLength, taskLabelPattern, memberNameMaxLength, memberNamePattern, batchTaskKeyMaxLength, batchTaskKeyPattern } from "./types.ts";
 
 const id = Type.String({ minLength: 1, maxLength: 128 });
 const text = Type.String({ minLength: 1, maxLength: 16000 });
@@ -11,6 +11,11 @@ export const AgentSchema = Type.Object({
   model: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
   thinking: Type.Optional(Type.Union(["off", "minimal", "low", "medium", "high", "xhigh"].map(v => Type.Literal(v)))),
   analysis: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("separate")], { description: "Launch/resume only: auto (default) requests existing pi-lens same-workspace reuse, possibly outside this team; explicit environment opt-outs win. Choose separate for different environments or rules, uncertain compatibility, or independent analyzer state. Does not disable checks or guarantee attachment. Resume keeps the saved preference unless overridden; restricted members always use separate analysis." })),
+  extensions: Type.Optional(Type.Object({
+    preset: Type.Optional(Type.String({ minLength: 1, maxLength: 40 })),
+    include: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 4096 }), { maxItems: 512, uniqueItems: true })),
+    exclude: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 4096 }), { maxItems: 512, uniqueItems: true })),
+  }, { additionalProperties: false, description: "Launch only: choose a user-configured extension preset and optional ID additions/removals before imports. Required safety/auth and coordination cannot be excluded. Omit to use the configured default, or the actual parent-loaded set if unconfigured. Full and include cannot exceed that parent set. Resume keeps saved IDs and loads current installed versions. See /teams config for IDs and configuration; do not invent a preset or silently fall back to full." })),
   worktree: Type.Optional(Type.Boolean()), base: Type.Optional(id), target: Type.Optional(id),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
   depth: Type.Optional(Type.Integer({ minimum: 0, maximum: 10 })),
@@ -27,7 +32,7 @@ const taskFields = {
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
   label: Type.Optional(Type.String({ minLength: 1, maxLength: taskLabelMaxLength, pattern: taskLabelPattern.source, description: "Optional 1–3-word label. Derived from title when omitted." })),
   description: Type.Optional(Type.String({ maxLength: 16000, description: "Details and acceptance criteria. Defaults to title; include explicit criteria for substantial or delegated work." })),
-  dependencies: Type.Optional(Type.Array(id, { maxItems: 100, uniqueItems: true, description: "Existing prerequisite task UUIDs whose verified outputs this task needs before it can start; all must be done. Include multiple prerequisites when needed; leave empty for independent work. blockedBy is derived automatically." })),
+  dependencies: Type.Optional(Type.Array(id, { maxItems: 100, uniqueItems: true, description: "Prerequisite task UUIDs whose verified outputs this task needs before it can start; all must be done. In a create batch, use @key to reference another entry's key, including later entries. Include every real prerequisite; leave independent work unlinked. blockedBy is derived automatically." })),
 };
 export const TaskSchema = Type.Object({
   revision: Type.Optional(Type.Integer({ minimum: 1 })), acceptance: Type.Optional(Type.Boolean()),
@@ -36,7 +41,10 @@ export const TaskSchema = Type.Object({
   id: Type.Optional(id), ...taskFields,
   summary: Type.Optional(Type.String({ minLength: 1, maxLength: 16000, description: "Complete: brief outcome, required action, and critical caveats, published atomically with done and delivered in notices. Put supporting evidence, file references, and check-by-check results in detail." })),
   detail: Type.Optional(Type.String({ minLength: 1, maxLength: 16000, description: "Complete: optional supporting evidence, checks run, file references, and fuller limitations, read on demand." })),
-  tasks: Type.Optional(Type.Array(Type.Object({ ...taskFields, title: Type.String({ minLength: 1, maxLength: 500 }) }, { additionalProperties: false }), { minItems: 1, maxItems: 100, description: "Create several tasks atomically. Use instead of top-level task fields. Dependencies must refer to existing task IDs, not items in this batch." })),
+  tasks: Type.Optional(Type.Array(Type.Object({ ...taskFields,
+    key: Type.Optional(Type.String({ minLength: 1, maxLength: batchTaskKeyMaxLength, pattern: batchTaskKeyPattern.source, description: "Unique batch-only name, e.g. worker. Other entries reference it with dependencies: ['@worker']. Not stored; use returned UUIDs after creation." })),
+    title: Type.String({ minLength: 1, maxLength: 500 }),
+  }, { additionalProperties: false }), { minItems: 1, maxItems: 100, description: "Create several tasks atomically. Use instead of top-level task fields. Dependencies accept existing UUIDs and @key references to entries in this batch. Missing keys, duplicates, self-dependencies, and cycles reject the whole batch." })),
 }, { additionalProperties: false });
 export const MessageSchema = Type.Object({
   action: Type.Union(["send", "history", "search", "wait"].map(v => Type.Literal(v))),
@@ -77,6 +85,7 @@ export function validate(operation: string, value: unknown): void {
     if (args.action === "launch" && !args.name) throw new Error("A descriptive teammate name is required on launch");
     if (args.action !== "launch" && args.name !== undefined) throw new Error("A teammate name can only be set on launch");
     if (args.action !== "launch" && args.action !== "resume" && (value as { analysis?: unknown }).analysis !== undefined) throw new Error("Analysis can only be set on launch or resume");
+    if (args.action !== "launch" && (value as { extensions?: unknown }).extensions !== undefined) throw new Error("Extensions can only be selected on launch; resume keeps saved IDs");
     if (args.action !== "launch" && (value as { task?: unknown }).task !== undefined) throw new Error("A task can only be assigned on launch");
     if (args.action !== "launch" && (value as { access?: unknown }).access !== undefined) throw new Error("Access can only be set on launch; resume keeps the member's access");
   }

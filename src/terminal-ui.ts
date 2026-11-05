@@ -8,6 +8,7 @@ import { saveDisplaySettings, type DisplaySettings } from "./config.ts";
 import { modelContext, readTelemetry } from "./telemetry.ts";
 import { renderTaskSummary } from "./task-summary.ts";
 import type { PanelHost } from "./ui-types.ts";
+import { visitMain } from "./mains.ts";
 
 const exec = promisify(execFile);
 export async function visitMember(ctx: ExtensionContext, host: PanelHost, socket: string, id: string): Promise<void> {
@@ -17,7 +18,7 @@ export async function visitMember(ctx: ExtensionContext, host: PanelHost, socket
   // A member returns to whichever main session attached it by detaching.
   if (host.child && member?.role === "main") { await exec("tmux", ["-S", socket, "detach-client", "-s", host.self], { timeout: 5000, maxBuffer: 65536 }); return; }
   if (!member || !isLive(member)) throw new Error(`Member ${id} is stopped or unavailable; resume it from /teams`);
-  if (member.role === "main") throw new Error(`${memberName(member)} is a main session in its own terminal; switch to it there`);
+  if (member.role === "main") { await visitMain(member); return; }
   if (!member.terminal) throw new Error("This member has no live terminal (it was launched headlessly)");
   if (host.child) {
     await exec("tmux", ["-S", socket, "switch-client", "-t", id], { timeout: 5000, maxBuffer: 65536 });
@@ -161,7 +162,7 @@ export function installTeamFooter(_pi: ExtensionAPI, ctx: ExtensionContext, host
         else if (matchesKey(input, "escape")) selected = undefined;
         else if (matchesKey(input, "enter")) {
           const id = selected; selected = undefined;
-          void host.visit(id).catch(error => ctx.ui.notify(cleanText(String(error)), "error"));
+          void host.visit(id).catch(error => ctx.ui.notify(cleanText(error instanceof Error ? error.message : String(error)), "error"));
         } else { selected = undefined; handleInput(input); }
         current.focused = selected === undefined; reveal(); redraw(); return;
       }

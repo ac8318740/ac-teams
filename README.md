@@ -25,10 +25,11 @@ Your Pi session is the root; its child agents are members. Ask Pi to delegate a 
 | `team_agent` | Launch, inspect, stop, and resume members; manage limits and worktrees |
 | `team_task` | Plan solo or team work, create tasks in batches, and track ownership and dependencies |
 | `team_message` | Send notifications and read or search team history |
+| `team_config` | Read worker extension inventory and save an approved configuration |
 
 `/teams` or `/teams panel` opens Tasks, Teammates, and Board. `/teams teammate <name-or-id>` opens a teammate directly; subcommands and teammate names autocomplete. Use the task graph or list, send feedback, and open a member's full live Pi session.
 
-The task summary sits above the input. The agent selector sits below the input, above your existing footer, and shows descriptive names, models, and context usage. ac-teams publishes a compact team status without replacing the footer or editor supplied by other extensions. `/teams config` toggles these displays independently.
+The task summary sits above the input. The agent selector sits below the input, above your existing footer, and shows descriptive names, models, and context usage. ac-teams publishes a compact team status without replacing the footer or editor supplied by other extensions. `/teams config display` toggles these displays independently. `/teams config` starts a conversation with Pi to configure lean worker extension presets, without editing files or navigating a wizard. A worker can only retain or remove extensions already loaded by its parent; it cannot add installed-but-unloaded or child-directory extensions. See [worker configuration](docs/operations.md#configure-lean-workers-without-adding-extensions).
 
 From an empty editor, press Down to select the team row, then Enter to open a member. A red **Needs input** label marks a member with an open question. Ctrl+Shift+Left returns to Main without stopping the member or dismissing its question. `/teams stop` stops every member; main sessions keep running. `/teams join` and `/teams leave` add this session to another team or take it out.
 

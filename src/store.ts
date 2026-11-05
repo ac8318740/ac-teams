@@ -2,9 +2,10 @@ import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdi
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { stateRoot } from "./config.ts";
+import { validExtensionSelection } from "./worker-extensions.ts";
 import { validatePolicy } from "./egress.ts";
 import { stripVTControlCharacters } from "node:util";
-import { isDescendant, isMain, memberName, memberNamePattern, memberNameMaxLength, taskLabelMaxLength, taskLabelPattern } from "./types.ts";
+import { isDescendant, isMain, memberName, memberNamePattern, memberNameMaxLength, taskLabelMaxLength, taskLabelPattern, batchTaskKeyMaxLength, batchTaskKeyPattern } from "./types.ts";
 import type { TeamState, TaskArgs, MessageArgs, Task, TaskView, Message, Worktree } from "./types.ts";
 
 // UI envelopes add task context after the public 16,000-character input limit.
@@ -117,6 +118,7 @@ function validate(state: unknown): asserts state is TeamState {
     requireValue(member.promotion === undefined || (object(member.promotion) && ["stopped", "moved", "role", "entry"].includes(String(member.promotion.step)) && text(member.promotion.sessionFile)), "Invalid member promotion");
     requireValue(member.waiting === undefined || (object(member.waiting) && Array.isArray(member.waiting.tasks) && member.waiting.tasks.every(task => typeof task === "string" && Object.hasOwn(state.tasks as object, task))), "Invalid member wait");
     requireValue(member.analysis === undefined || member.analysis === "auto" || member.analysis === "separate", "Invalid member analysis preference");
+    requireValue(member.extensions === undefined || validExtensionSelection(member.extensions), "Invalid member extension selection");
     requireValue(member.terminal === undefined || typeof member.terminal === "boolean", "Invalid member terminal flag");
     requireValue(member.needsInput === undefined || typeof member.needsInput === "boolean", "Invalid member input flag");
     requireValue(member.pid === undefined || integer(member.pid, 1), "Invalid member PID");
@@ -356,19 +358,37 @@ export class Store {
         requireValue(args.tasks === undefined || [args.title, args.label, args.description, args.dependencies].every(value => value === undefined), "Use tasks or top-level task fields, not both");
         const inputs = args.tasks ?? [args];
         let number = Object.values(state.tasks).reduce((max, task) => Math.max(max, task.number), 0);
-        const existing = new Set(Object.keys(state.tasks));
-        const created = inputs.map(input => {
+        const ids = inputs.map(() => randomUUID());
+        const keys = new Map<string, string>();
+        args.tasks?.forEach((input, index) => {
+          requireValue(object(input), "Invalid task input");
+          if (input.key === undefined) return;
+          requireValue(text(input.key, batchTaskKeyMaxLength) && batchTaskKeyPattern.test(input.key), `Invalid batch task key (1-${batchTaskKeyMaxLength} letters, digits, underscores, or hyphens; starts with a letter)`);
+          requireValue(!keys.has(input.key), `Duplicate batch task key: ${input.key}`);
+          keys.set(input.key, ids[index]);
+        });
+        const created = inputs.map((input, index) => {
           requireValue(object(input) && text(input.title, 500), "Task requires a title (max 500)");
           const description = input.description === undefined ? input.title : input.description;
           requireValue(text(description), "Task requires a description (max 16000)");
           const label = input.label === undefined ? taskLabel(input.title) : input.label;
           requireValue(text(label, taskLabelMaxLength) && taskLabelPattern.test(label), "Task requires a 1–3-word label (max 60 characters)");
-          const dependencies = input.dependencies === undefined ? [] : structuredClone(input.dependencies);
-          requireValue(Array.isArray(dependencies) && dependencies.length <= 100 && dependencies.every(dep => existing.has(dep)), "Dependencies must refer to existing tasks");
-          const task: Task = { id: randomUUID(), number: ++number, label, revision: 1, creator: actor, title: input.title, description, dependencies, status: "todo" };
+          const refs = input.dependencies === undefined ? [] : input.dependencies;
+          requireValue(Array.isArray(refs) && refs.length <= 100, "Invalid task dependencies (max 100)");
+          const dependencies = refs.map(ref => {
+            requireValue(typeof ref === "string", "Invalid task dependency");
+            if (args.tasks !== undefined && ref.startsWith("@")) {
+              const id = keys.get(ref.slice(1));
+              requireValue(id, `Unknown batch task reference: ${ref}`);
+              return id;
+            }
+            requireValue(Object.hasOwn(state.tasks, ref), "Dependencies must refer to existing tasks or @keys in this batch");
+            return ref;
+          });
+          const task: Task = { id: ids[index], number: ++number, label, revision: 1, creator: actor, title: input.title, description, dependencies, status: "todo" };
           state.tasks[task.id] = task;
-          return taskView(state, task);
-        });
+          return task;
+        }).map(task => taskView(state, task));
         return args.tasks === undefined ? created[0] : { tasks: created, total: created.length };
       }
       requireValue(args.id && Object.hasOwn(state.tasks, args.id), "Unknown task");

@@ -12,6 +12,9 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { Coordinator, assistantEvent, taskRequestGuidance, type CoordinatorOptions } from "../src/coordinator.ts";
 import { Connection } from "../src/connection.ts";
+import { saveWorkerConfiguration } from "../src/config.ts";
+import { extensionInventory } from "../src/worker-extensions.ts";
+import { mkdirSync } from "node:fs";
 
 const fixture = fileURLToPath(new URL("./fixtures/pi-peer.mjs", import.meta.url));
 chmodSync(fixture, 0o755);
@@ -19,7 +22,7 @@ async function setup(limit = 10, depth = 2, interactive = false) {
   const home = mkdtempSync(join(tmpdir(), "at-"));
   const notices: number[] = [], warnings: string[] = [];
   const states: { kind: "busy" | "blocked"; active: boolean }[] = [];
-  const options: CoordinatorOptions = { resources: () => ({ scope: "host", memory: { totalBytes: 10000, availableBytes: 5000, swapUsedBytes: 0 }, memoryPressure: { someAvg10: 0, fullAvg10: 0, fullAvg60: 0 }, warnings: [] }), status: (kind, active) => { states.push({ kind, active }); }, id: randomUUID(), cwd: home, limit, depth, interactive, extension: "unused", command: fixture, home, notice: (through: number) => { notices.push(through); }, warning: (message: string) => { warnings.push(message); } };
+  const options: CoordinatorOptions = { extensions: () => extensionInventory(home), resources: () => ({ scope: "host", memory: { totalBytes: 10000, availableBytes: 5000, swapUsedBytes: 0 }, memoryPressure: { someAvg10: 0, fullAvg10: 0, fullAvg60: 0 }, warnings: [] }), status: (kind, active) => { states.push({ kind, active }); }, id: randomUUID(), cwd: home, limit, depth, interactive, extension: "unused", command: fixture, home, notice: (through: number) => { notices.push(through); }, warning: (message: string) => { warnings.push(message); } };
   const team = await Coordinator.open(options);
   return { team, home, options, notices, warnings, states, async close() { await team.close(); rmSync(home, { recursive: true, force: true }); } };
 }
@@ -36,6 +39,73 @@ function repository(home: string) {
   writeFileSync(join(repo, "file"), "test"); git("add", "file"); git("commit", "-m", "initial");
   return repo;
 }
+
+for (const interactive of [false, true]) test(`extension presets select before spawn, preserve resume IDs, and forward heap/config (${interactive ? "native" : "RPC"})`, async () => {
+  const f = await setup();
+  const keys = ["HOME", "PI_CODING_AGENT_DIR", "NODE_OPTIONS", "BILLION_CONTEXT_ATTACH"];
+  const previous = keys.map(key => process.env[key]);
+  process.env.HOME = f.home;
+  process.env.PI_CODING_AGENT_DIR = join(f.home, "agent");
+  process.env.NODE_OPTIONS = "--max-old-space-size=6144 --no-warnings";
+  process.env.BILLION_CONTEXT_ATTACH = "http://127.0.0.1:19999";
+  mkdirSync(join(process.env.PI_CODING_AGENT_DIR, "extensions"), { recursive: true });
+  const guard = join(process.env.PI_CODING_AGENT_DIR, "extensions", "guard.ts");
+  writeFileSync(guard, "throw new Error('fixture must not import');\n");
+  f.options.interactive = interactive;
+  try {
+    const inventory = await extensionInventory(f.home);
+    const id = inventory.entries.find(entry => entry.path === guard)!.id;
+    saveWorkerConfiguration(f.home, "user", { defaultPreset: "worker", required: [id], presets: { worker: { extensions: [], heapMb: 1536 }, full: { extensions: "all" } } });
+    const member = await f.team.handle("root", "agent", launch) as { id: string; pid: number; extensions: { ids: string[]; heapMb: number } };
+    assert.deepEqual(member.extensions.ids, [id]);
+    const args = readFileSync(`/proc/${member.pid}/cmdline`, "utf8").split("\0");
+    assert.ok(args.includes("-ne"));
+    assert.ok(args.includes(guard));
+    const env = readFileSync(`/proc/${member.pid}/environ`, "utf8").split("\0");
+    assert.ok(env.includes("NODE_OPTIONS=--no-warnings --max-old-space-size=1536"));
+    assert.ok(env.includes(`PI_CODING_AGENT_DIR=${process.env.PI_CODING_AGENT_DIR}`));
+    assert.ok(env.includes("BILLION_CONTEXT_ATTACH=http://127.0.0.1:19999"));
+    await assert.rejects(f.team.handle("root", "agent", { ...launch, name: "unsafe", extensions: { exclude: [id] } }), /required/i);
+    await f.team.stopTree(member.id);
+    saveWorkerConfiguration(f.home, "user", { defaultPreset: "full", required: [id], presets: { full: { extensions: "all" } } });
+    const resumed = await f.team.handle("root", "agent", { action: "resume", id: member.id, brief: "continue", model: "test/model" }) as typeof member;
+    assert.deepEqual(resumed.extensions.ids, [id]);
+    assert.equal(resumed.extensions.heapMb, 1536);
+    await f.team.stopTree(member.id);
+  } finally { await f.close(); keys.forEach((key, i) => { if (previous[i] === undefined) delete process.env[key]; else process.env[key] = previous[i]; }); }
+});
+
+test("full and include never widen a nested worker's actual parent set, even in another cwd", async () => {
+  const f = await setup();
+  const home = process.env.HOME, agent = process.env.PI_CODING_AGENT_DIR;
+  process.env.HOME = f.home; process.env.PI_CODING_AGENT_DIR = join(f.home, "agent");
+  const extensions = join(process.env.PI_CODING_AGENT_DIR, "extensions"); mkdirSync(extensions, { recursive: true });
+  const a = join(extensions, "a.ts"), b = join(extensions, "b.ts");
+  writeFileSync(a, "export default ()=>{};"); writeFileSync(b, "export default ()=>{};");
+  f.options.extensions = () => extensionInventory(f.home, process.env.PI_CODING_AGENT_DIR, [a, b]);
+  try {
+    const inventory = await f.options.extensions();
+    const aid = inventory.entries.find(entry => entry.path === a)!.id, bid = inventory.entries.find(entry => entry.path === b)!.id;
+    saveWorkerConfiguration(f.home, "user", { defaultPreset: "full", required: [aid], presets: { full: { extensions: "all" } } });
+    const parent = await f.team.handle("root", "agent", { ...launch, extensions: { exclude: [bid] } }) as { id: string };
+    const cwd = join(f.home, "other"); mkdirSync(join(cwd, ".pi", "extensions"), { recursive: true }); writeFileSync(join(cwd, ".pi", "extensions", "extra.ts"), "throw new Error('do not import');");
+    const child = await f.team.handle(parent.id, "agent", { ...launch, name: "nested", cwd, extensions: { preset: "full" } }) as { id: string; extensions: { ids: string[] } };
+    assert.deepEqual(child.extensions.ids, [aid]);
+    await f.team.stopTree(child.id);
+    await assert.rejects(f.team.handle(parent.id, "agent", { ...launch, name: "wider", extensions: { preset: "full", include: [bid] } }), /unavailable or disabled/);
+    await f.team.stopTree(parent.id);
+  } finally {
+    await f.close();
+    if (home === undefined) delete process.env.HOME; else process.env.HOME = home;
+    if (agent === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = agent;
+  }
+});
+
+test("unknown actual parent loading fails closed rather than discovering installed extensions", async () => {
+  const f = await setup(); delete f.options.extensions;
+  try { await assert.rejects(f.team.handle("root", "agent", launch), /Actual parent extensions are unavailable/); }
+  finally { await f.close(); }
+});
 
 for (const interactive of [false, true]) test(`members cannot report directly to Main's Herdr pane (${interactive ? "native" : "RPC"})`, async () => {
   const previous = process.env.HERDR_ENV;
@@ -369,7 +439,7 @@ test("a provider failure during ancestor death cannot crash shutdown", async () 
     assert.equal(f.team.store.state.members[parent.id].status, "interrupted");
     assert.equal(f.team.store.state.members[child.id].status, "stopped");
     assert.equal(f.team.store.state.members[child.id].error, "Provider failed during abort");
-    assert.deepEqual(f.warnings, []);
+    assert.deepEqual(f.warnings, ["Worker extension presets are not configured. Workers retain the actual parent extension set; run /teams config to configure lean workers."]);
   } finally { await f.close(); }
 });
 
@@ -501,7 +571,7 @@ test("native members keep PID while idle, stop cleanly, and quietly resume for c
     assert.equal(JSON.stringify(f.team.store.state.tasks[task.id]), before);
     assert.deepEqual(f.team.store.state.messages.at(-1)!.recipients, [member.id]);
     assert.match(f.team.store.state.messages.at(-1)!.summary, /User feedback on task/);
-    assert.deepEqual(f.warnings, []);
+    assert.deepEqual(f.warnings, ["Worker extension presets are not configured. Workers retain the actual parent extension set; run /teams config to configure lean workers."]);
     await f.team.close();
     assert.equal(existsSync(join(f.team.store.dir, "t.sock")), false);
   } finally { await f.close(); }
@@ -636,7 +706,7 @@ async function mainClient(team: Coordinator, id: string) {
     void link.request("control_result", { id: command.id, data: {} }).then(() => { if (command.command === "shutdown") link.close(); }, () => {});
   });
   await link.open();
-  await link.request("join", { sessionId: member.sessionId, sessionFile: member.sessionFile, tools: ["team_agent", "team_task", "team_message"], trusted: true });
+  await link.request("join", { sessionId: member.sessionId, sessionFile: member.sessionFile, tools: ["team_agent", "team_task", "team_message"], trusted: true, extensionPaths: [] });
   return link;
 }
 async function addMain(team: Coordinator, home: string) {
@@ -647,6 +717,24 @@ async function addMain(team: Coordinator, home: string) {
   try { return { ...await probe.request("add_main", { sessionId, sessionFile, cwd: home }) as { id: string; token: string }, sessionId, sessionFile }; }
   finally { probe.close(); }
 }
+test("joined mains cannot reuse a stale loaded ceiling after missing or malformed reconnect metadata", async () => {
+  const f = await setup();
+  let link: Connection | undefined;
+  try {
+    const main = await addMain(f.team, f.home);
+    link = await mainClient(f.team, main.id);
+    let attempt = 0;
+    for (const extensionPaths of [undefined, "not-an-array"]) {
+      attempt++;
+      await link.request("join", { sessionId: main.sessionId, sessionFile: main.sessionFile, tools: ["team_agent", "team_task", "team_message"], trusted: true, extensionPaths: [] });
+      const first = await f.team.handle(main.id, "agent", { ...launch, name: `before-${attempt}` }) as { id: string };
+      await f.team.stopTree(first.id);
+      await link.request("join", { sessionId: main.sessionId, sessionFile: main.sessionFile, tools: ["team_agent", "team_task", "team_message"], trusted: true, extensionPaths });
+      await assert.rejects(f.team.handle(main.id, "agent", { ...launch, name: `after-${attempt}` }), /Actual parent extensions are unavailable/);
+    }
+  } finally { link?.close(); await f.close(); }
+});
+
 const lines = (file: string) => readFileSync(file, "utf8").trim().split("\n").map(line => JSON.parse(line) as Record<string, unknown>);
 
 test("a main session's environment drops member identity and Herdr opt-out", () => {

@@ -12,6 +12,8 @@ export function resolveTeammate(members: NamedMember[], value: string): string |
 
 export function teamsCompletions(prefix: string, members: NamedMember[]): AutocompleteItem[] | null {
   if (!prefix.includes(" ")) return actions.filter(action => action.startsWith(prefix)).map(action => ({ value: action, label: action }));
+  const config = /^config\s+(\S*)$/.exec(prefix);
+  if (config && "display".startsWith(config[1])) return [{ value: "config display", label: "display", description: "Toggle task summary and agent selector" }];
   const match = /^(teammate|open)\s+(\S*)$/.exec(prefix);
   if (!match) return null;
   return members.filter(member => (member.id === "root" ? "main" : memberName(member)).startsWith(match[2]) || member.id.startsWith(match[2])).map(member => {

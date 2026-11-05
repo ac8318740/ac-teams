@@ -7,23 +7,25 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
-import { initTheme, type ExtensionAPI, type ExtensionContext, type ExtensionToolContext, type ToolDefinition, type ToolRenderers } from "@earendil-works/pi-coding-agent";
+import { DefaultResourceLoader, initTheme, type ExtensionAPI, type ExtensionContext, type ExtensionToolContext, type ToolDefinition, type ToolRenderers } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { cleanText } from "../src/render.ts";
 import { theme } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import teams from "../src/index.ts";
 import { taskRequestGuidance } from "../src/coordinator.ts";
-import { Store, teamsHome } from "../src/store.ts";
+import { Store, readState, teamsHome } from "../src/store.ts";
 import { teamEntryType } from "../src/mains.ts";
 
 // SAFETY: this bounded test double implements only the Pi host calls used by the extension.
 function fixture() {
   const home = mkdtempSync(join(tmpdir(), "at-ext-"));
-  const oldHome = process.env.HOME, oldPi = process.env.AC_TEAMS_PI;
+  const oldHome = process.env.HOME, oldPi = process.env.AC_TEAMS_PI, oldHerdr = process.env.HERDR_ENV;
+  process.env.HERDR_ENV = "0";
   process.env.HOME = home;
   process.env.AC_TEAMS_PI = fileURLToPath(new URL("./fixtures/pi-peer.mjs", import.meta.url));
   const tools = new Map<string, ToolDefinition>();
   const commands = new Map<string, { handler(args: string, ctx: ExtensionToolContext): Promise<void> }>();
+  const shortcuts = new Map<string, { handler(ctx: ExtensionContext): Promise<void> }>();
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
   const flags = new Map<string, unknown>();
   const warnings: string[] = [], messages: unknown[] = [];
@@ -33,13 +35,14 @@ function fixture() {
   let active = ["team_agent", "team_task", "team_message"];
   const api = {
     events,
-    registerFlag() {}, registerCommand(name: string, command: { handler(args: string, ctx: ExtensionToolContext): Promise<void> }) { commands.set(name, command); }, registerMessageRenderer() {},
+    registerShortcut(key: string, shortcut: { handler(ctx: ExtensionContext): Promise<void> }) { shortcuts.set(key, shortcut); }, registerFlag() {}, registerCommand(name: string, command: { handler(args: string, ctx: ExtensionToolContext): Promise<void> }) { commands.set(name, command); }, registerMessageRenderer() {},
     registerTool(tool: ToolDefinition) { tools.set(tool.name, tool); },
     on(name: string, handler: (...args: unknown[]) => unknown) { handlers.set(name, handler); },
     getFlag(name: string) { return flags.get(name); },
     getThinkingLevel() { return "low"; },
     getAllTools() { return [...tools.values(), { name: "Agent" }]; },
     sendMessage(message: unknown) { messages.push(message); },
+    sendUserMessage(message: unknown) { messages.push(message); },
     appendEntry(customType: string, data: unknown) { entries.push({ type: "custom", id: randomUUID(), customType, data }); },
     getActiveTools() { return active; }, setActiveTools(names: string[]) { active = names; },
   };
@@ -52,17 +55,45 @@ function fixture() {
   const id = randomUUID();
   // SAFETY: all called host methods are provided above; registration captures the real callbacks.
   teams(api as unknown as ExtensionAPI);
+  // Model the host's real loaded-set query, not discovery or tool-name inference.
+  const path = fileURLToPath(new URL("../src/index.ts", import.meta.url));
+  const sourceInfo = { path, source: "local", scope: "user" as const, origin: "top-level" as const };
+  new DefaultResourceLoader({ cwd: home, agentDir: join(home, ".pi", "agent") }).getExtensions().extensions.push({
+    path, resolvedPath: path, sourceInfo,
+    tools: new Map([...tools].map(([name, definition]) => [name, { definition, sourceInfo }])),
+    handlers: new Map(), messageRenderers: new Map(), commands: new Map(), flags: new Map(), shortcuts: new Map(),
+  });
   async function execute(name: string, args: unknown) {
     return (await tools.get(name)!.execute(randomUUID(), args, new AbortController().signal, undefined, ctx)).details;
   }
-  return { ctx, id, home, entries, get active() { return active; }, flags, warnings, messages, tools, commands, execute, events, approve(value: boolean) { approval = value; }, get confirmations() { return confirmations; },
+  return { ctx, id, home, entries, get active() { return active; }, flags, warnings, messages, tools, commands, shortcuts, execute, events, approve(value: boolean) { approval = value; }, get confirmations() { return confirmations; },
     async event(name: string, data: Record<string, unknown> = {}) { return handlers.get(name)?.({ type: name, ...data }, ctx); },
     async close() {
       try { await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, ctx); }
-      finally { if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome; if (oldPi === undefined) delete process.env.AC_TEAMS_PI; else process.env.AC_TEAMS_PI = oldPi; rmSync(home, { recursive: true, force: true }); }
+      finally { if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome; if (oldPi === undefined) delete process.env.AC_TEAMS_PI; else process.env.AC_TEAMS_PI = oldPi; if (oldHerdr === undefined) delete process.env.HERDR_ENV; else process.env.HERDR_ENV = oldHerdr; rmSync(home, { recursive: true, force: true }); }
     },
   };
 }
+
+test("/teams config starts a Pi conversation without an editor or menu", async () => {
+  const f = fixture();
+  try {
+    await f.event("session_start");
+    const ctx = { ...f.ctx, mode: "tui" as const, ui: { ...f.ctx.ui,
+      select: async () => { assert.fail("No configuration menu"); },
+      editor: async () => { assert.fail("No file editor"); },
+    } };
+    await f.commands.get("teams")!.handler("config", ctx);
+    assert.equal(f.messages.length, 1);
+    assert.match(String(f.messages[0]), /through a conversation/);
+    assert.match(String(f.messages[0]), /team_config with action read/);
+    assert.ok(f.active.includes("team_config"));
+    const snapshot = await f.execute("team_config", { action: "read" }) as { projectAllowed: boolean; inventory: unknown[] };
+    assert.equal(snapshot.projectAllowed, false);
+    assert.ok(Array.isArray(snapshot.inventory));
+    assert.equal(existsSync(join(f.home, ".pi", "ac-teams", "config.json")), false);
+  } finally { await f.close(); }
+});
 
 test("team navigation wraps editors installed by later session_start handlers", async () => {
   const f = fixture();
@@ -267,11 +298,15 @@ test("team tools guide solo planning and task-backed delegation without tracking
     assert.match(taskGuidance, /outputs each task needs/);
     assert.match(taskGuidance, /verified output/);
     assert.match(taskGuidance, /Keep independent work parallel/);
-    assert.match(taskGuidance, /dependent tasks in later calls using the returned prerequisite UUIDs/);
+    assert.match(taskGuidance, /Dependencies accept existing UUIDs and @key references/);
+    assert.match(taskGuidance, /Before starting or delegating, check that the recorded dependencies match/);
+    assert.match(taskGuidance, /creating tasks together does not make them independent/);
+    assert.doesNotMatch(taskGuidance, /Dependencies cannot refer to siblings/);
     assert.match(taskGuidance, /all prerequisites must be done/);
     assert.match(taskGuidance, /Reassess dependencies when scope changes/);
     assert.doesNotMatch(taskGuidance, /initial plan in one team_task call/);
-    assert.match(JSON.stringify(task.parameters), /Existing prerequisite task UUIDs/);
+    assert.match(JSON.stringify(task.parameters), /Prerequisite task UUIDs/);
+    assert.match(JSON.stringify(task.parameters), /Unique batch-only name/);
   } finally { await f.close(); }
 });
 
@@ -279,12 +314,25 @@ test("task batches and lists keep model output compact while read and details re
   const f = fixture();
   const call = (args: unknown) => f.tools.get("team_task")!.execute(randomUUID(), args, new AbortController().signal, undefined, f.ctx);
   try {
-    const result = await call({ action: "create", tasks: [{ title: "Inspect existing implementation", description: "Acceptance: " + "evidence ".repeat(1000) }, { title: "Run checks" }] });
+    const result = await call({ action: "create", tasks: [{ key: "inspect", title: "Inspect existing implementation", description: "Acceptance: " + "evidence ".repeat(1000) }, { title: "Run checks", dependencies: ["@inspect"] }] });
     const batch = result.details as { tasks: { id: string; description: string }[] };
     const text = (value: typeof result) => value.content.filter(block => block.type === "text").map(block => block.text).join("\n");
     assert.equal(batch.tasks.length, 2);
     assert.ok(text(result).length < 1500);
     assert.ok(!text(result).includes("evidence"));
+    const checks = JSON.parse(text(result)).tasks[1];
+    assert.deepEqual(checks.dependencies, [batch.tasks[0].id]);
+    assert.deepEqual(checks.blockedBy, [batch.tasks[0].id]);
+    await assert.rejects(call({ action: "start", id: batch.tasks[1].id }), /blocked/);
+    await assert.rejects(call({ action: "create", tasks: [{ title: "Bad", key: "@invalid" }] }), /Invalid task request/);
+    await assert.rejects(call({ action: "create", key: "outside", title: "Bad" }), /Invalid task request/);
+    for (const key of ["worker\n", "a".repeat(65)]) {
+      await assert.rejects(call({ action: "create", tasks: [{ title: "Bad", key }] }), /Invalid task request/);
+    }
+    await call({ action: "create", tasks: [
+      { key: "a".repeat(64), title: "Maximum key" },
+      { title: "Consumer", dependencies: ["@" + "a".repeat(64)] },
+    ] });
     const list = await call({ action: "list" });
     assert.ok(text(list).includes(batch.tasks[0].id));
     assert.ok(!text(list).includes("evidence"));
@@ -293,6 +341,7 @@ test("task batches and lists keep model output compact while read and details re
     await call({ action: "start", id: batch.tasks[0].id });
     await assert.rejects(call({ action: "complete", id: batch.tasks[0].id }), /acceptance/);
     await call({ action: "complete", id: batch.tasks[0].id, acceptance: true, summary: "Inspected" });
+    await call({ action: "start", id: batch.tasks[1].id });
     await assert.rejects(call({ action: "list", tasks: [{ title: "Wrong action" }] }), /create/);
   } finally { await f.close(); }
 });
@@ -481,6 +530,50 @@ test("explicit join connects to the live sender before sharing its tasks", async
   } finally { await receiver?.close(); await sender.close(); }
 });
 
+for (const live of [false, true]) test(`joining a ${live ? "live" : "stopped"} team restores panels and telemetry`, async () => {
+  const sender = fixture();
+  let receiver: ReturnType<typeof fixture> | undefined;
+  type Factory = NonNullable<ReturnType<ExtensionContext["ui"]["getEditorComponent"]>>;
+  const previous: Factory = () => { throw new Error("Editor is not needed for rendering widgets"); };
+  let active: Factory | undefined = previous;
+  const widgets = new Map<string, Component>();
+  initTheme("dark");
+  try {
+    const team = live ? sender.id : seedTeam(sender, randomUUID());
+    if (live) await sender.execute("team_task", { action: "create", title: "Shared work" });
+    receiver = fixture();
+    process.env.HOME = sender.home;
+    Object.assign(receiver.ctx, { cwd: sender.home, mode: "tui" });
+    Object.assign(receiver.ctx.ui, {
+      getEditorComponent: () => active,
+      setEditorComponent(factory: Factory | undefined) { active = factory; },
+      setWidget(key: string, factory: ((...args: unknown[]) => Component) | undefined) {
+        if (key !== "ac-teams-tasks" && key !== "ac-teams-agents") return;
+        if (factory) widgets.set(key, factory({ requestRender() {} }, theme));
+        else widgets.delete(key);
+      },
+      setStatus() {},
+    });
+    await receiver.event("session_start");
+    await receiver.event("resources_discover");
+    assert.equal(widgets.size, 2, "startup installs both widgets");
+    await receiver.commands.get("teams")!.handler(`join ${team}`, receiver.ctx);
+    assert.equal(widgets.size, 2, "join reinstalls both widgets without another resources_discover event");
+    assert.notEqual(active, previous, "join reinstalls editor navigation");
+    const member = (receiver.entries.at(-1)!.data as { member: string }).member;
+    await until(() => readState(join(teamsHome(), team)).members[member]?.model === "test/model");
+    await until(() => widgets.get("ac-teams-agents")!.render(200).some(row => row.includes("● main-")));
+    if (live) {
+      await until(() => widgets.get("ac-teams-tasks")!.render(200).some(row => row.includes("Shared work")));
+      await receiver.shortcuts.get("ctrl+shift+left")!.handler(receiver.ctx);
+      assert.equal(receiver.warnings.at(-1), "Open this main in its own terminal. Tab switching requires Herdr.", "joined mains register the return shortcut and show a plain error without Herdr");
+    }
+    await receiver.event("session_shutdown");
+    assert.equal(widgets.size, 0, "shutdown removes the replacement widgets");
+    assert.equal(active, previous, "shutdown restores the original editor");
+  } finally { await receiver?.close(); await sender.close(); }
+});
+
 test("explicit join rejects unknown, foreign, and path-like IDs without changing teams", async () => {
   const f = fixture();
   try {
@@ -554,6 +647,7 @@ async function until(check: () => boolean) {
 test("notices steer in summaries once, are acknowledged only after persistence, and a wait with nothing new ends the turn", async () => {
   const f = fixture();
   try {
+    await f.event("session_start");
     const task = await f.execute("team_task", { action: "create", title: "Review", description: "Review" }) as { id: string };
     const member = await f.execute("team_agent", { action: "launch", name: "worker", model: "test/model", brief: "REPORT:Found the bug", task: task.id }) as { id: string };
     const notices = () => f.messages.filter(message => (message as { customType?: string }).customType === "ac-teams") as { content: string; details: { through: number } }[];
