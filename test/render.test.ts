@@ -15,7 +15,7 @@ initTheme("dark", false);
 setKeybindings(new KeybindingsManager());
 const tools = new Map<string, ToolDefinition>();
 // SAFETY: registration only uses these host methods; no lifecycle callbacks run here.
-teams({ events: { on() {} }, registerMessageRenderer() {}, registerFlag() {}, registerCommand() {}, on() {}, registerTool(tool: ToolDefinition) { tools.set(tool.name, tool); } } as unknown as ExtensionAPI);
+teams({ events: { on() {} }, registerMessageRenderer() {}, registerFlag() {}, registerShortcut() {}, registerCommand() {}, on() {}, registerTool(tool: ToolDefinition) { tools.set(tool.name, tool); } } as unknown as ExtensionAPI);
 
 function row(name: string, args: Record<string, unknown>) {
   // SAFETY: tool rows only use requestRender; no terminal is started in these tests.

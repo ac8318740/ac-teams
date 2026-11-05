@@ -508,9 +508,13 @@ export default function teams(pi: ExtensionAPI) {
     if (!count) return;
     if (!ctx.hasUI || !await ctx.ui.confirm("Stop active team and exit?", `${count} live member(s), including idle members, will be stopped. Worktrees and native sessions are retained.`)) return { cancel: true };
   });
-  if (child) pi.registerShortcut("ctrl+shift+left", {
+  pi.registerShortcut("ctrl+shift+left", {
     description: "Return to Main",
-    handler: async ctx => { if (ctx.mode === "tui") await host(ctx).visit("root"); },
+    handler: async ctx => {
+      if (ctx.mode !== "tui") return;
+      try { await host(ctx).visit("root"); }
+      catch (error) { ctx.ui.notify(cleanText(error instanceof Error ? error.message : String(error)), "error"); }
+    },
   });
   pi.registerCommand("teams", {
     description: "Team panel; /teams teammate <name-or-id>, config, back, stop, status, join [team-id], or leave",
