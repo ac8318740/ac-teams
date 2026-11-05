@@ -295,6 +295,23 @@ export default function teams(pi: ExtensionAPI) {
   pi.on("turn_end", (_event, ctx) => reconcile(ctx));
   pi.on("agent_settled", (_event, ctx) => { inputCount = 0; reconcile(ctx); report(ctx, { type: "agent_settled" }); });
   pi.on("tool_execution_start", (event, ctx) => report(ctx, { type: "activity", text: `Running ${event.toolName}`.slice(0, 500) }));
+  pi.on("tool_result", async (event, ctx) => {
+    if (child || disabled || exiting || event.toolName !== "read" || event.isError || typeof event.input.path !== "string" || !/(?:^|[\\/\\\\])handoff[\\/\\\\]SKILL\.md$/.test(event.input.path)) return;
+    let guidance: string;
+    try {
+      await link(ctx);
+      guidance = [
+        "AC Teams handoff (Pi senders only): Decide whether the receiving agent should be in the same team, based on the user's intent and whether shared tasks, messages, and team control are appropriate. Joining is not automatic. If the receiver should be standalone, follow the skill's normal launch instructions and agent-kind choice without using team join. Only if you choose a same-team handoff through Herdr, use the following steps instead of the skill's standalone launch:",
+        "1. Record team_agent list before launch. Start a fresh Pi with Herdr (--kind pi), in the same project, without the handoff prompt. Do not launch a different agent kind or inherit member credentials.",
+        `2. Once the new Pi is ready, submit /teams join ${teamId(ctx)} in THAT session using herdr agent prompt <receiver> ${JSON.stringify(`/teams join ${teamId(ctx)}`)} (or the equivalent Herdr API). Do not run it in the sender.`,
+        "3. Verify the receiver's joined-team details (expand with Ctrl+O if folded) and a new main with its sessionId in the sender's team_agent list. Slash commands may not produce a model turn: do not use prompt --wait as proof of joining. On a stalled response or timeout, inspect receiver output and team membership before retrying. If joining fails or cannot be confirmed, stop and report; do not send the handoff prompt.",
+        "4. Only after both checks confirm membership, seed the handoff prompt through Herdr and follow the skill's acknowledgement steps. Task ownership does not transfer automatically.",
+      ].join("\n");
+    } catch (error) {
+      guidance = `AC Teams same-team handoff unavailable: ${cleanText(String(error))}. If the receiver should share this team, stop and report; do not send its handoff prompt until membership can be established. If the receiver should be standalone, follow the skill's normal launch instructions and agent-kind choice without using team join.`;
+    }
+    return { content: [...event.content, { type: "text", text: guidance }], structuredContent: event.structuredContent };
+  });
   pi.on("message_end", (event, ctx) => {
     const change = assistantEvent(event.message);
     if (change) report(ctx, change);
@@ -373,10 +390,10 @@ export default function teams(pi: ExtensionAPI) {
     try { return (await promisify(execFile)("git", ["-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"], { timeout: 5000 })).stdout.trim(); }
     catch { return cwd; }
   }
-  /** /teams join: adds this session to another team in the same project as a main session. */
-  async function joinTeam(ctx: ExtensionContext) {
+  /** /teams join [team-id]: adds this session to another team in the same project as a main session. */
+  async function joinTeam(ctx: ExtensionContext, id?: string) {
     if (child) throw new Error("A member cannot join another team");
-    if (!ctx.hasUI) throw new Error("/teams join requires an interactive session");
+    if (!id && !ctx.hasUI) throw new Error("/teams join requires an interactive session or an explicit team ID");
     const sessionId = ctx.sessionManager.getSessionId(), home = teamsHome();
     const current = existsSync(join(home, teamId(ctx), "state.json")) ? readState(join(home, teamId(ctx))) : undefined;
     if (current && Object.values(current.members).some(member => member.id !== memberId() && member.role)) throw new Error("This session is already in a team with other members; use /teams leave first");
@@ -387,13 +404,14 @@ export default function teams(pi: ExtensionAPI) {
         if (state.id !== current?.id && main && await repository(main.cwd) === repo) teams.push(state);
       } catch { /* Unreadable or foreign team folders are not offered. */ }
     }
+    if (id && !teams.some(state => state.id === id)) throw new Error("No team with that ID in this project");
     if (!teams.length) { ctx.ui.notify("No other teams in this project", "info"); return; }
     const describe = (state: TeamState) => {
       const members = Object.values(state.members);
       return `${members.filter(isMain).map(memberName).join(", ")} · ${members.filter(member => member.role === "member").length} member(s) · ${Object.values(state.tasks).filter(task => task.status !== "done").length} open task(s) · ${state.id.slice(0, 8)}`;
     };
-    const labels = teams.map(describe), choice = await ctx.ui.select("Join which team?", labels);
-    const chosen = teams[labels.indexOf(choice ?? "")];
+    const labels = teams.map(describe);
+    const chosen = id ? teams.find(state => state.id === id) : teams[labels.indexOf(await ctx.ui.select("Join which team?", labels) ?? "")];
     if (!chosen) return;
     if (Object.values(chosen.members).some(member => member.sessionId === sessionId)) throw new Error("This session is already in that team");
     await close(); exiting = false; enable();
@@ -414,7 +432,7 @@ export default function teams(pi: ExtensionAPI) {
     const state = readState(dir), name = (id?: string) => id ? memberName(state.members[id] ?? { id }) : "unowned";
     const open = Object.values(state.tasks).filter(task => task.status !== "done");
     const recent = state.messages.slice(-5);
-    pi.sendMessage({ customType: "ac-teams", display: true, details: { through: state.messages.at(-1)?.seq ?? 0, messages: recent }, content: [
+    pi.sendMessage({ customType: "ac-teams", display: true, details: { joined: { team: state.id, member: team!.member, sessionId }, through: state.messages.at(-1)?.seq ?? 0, messages: recent }, content: [
       `Joined team ${state.id} as ${name(team!.member)}, a main session.`,
       open.length ? `Open tasks:\n${open.map(task => `- ${taskName(task)} (${task.status}, ${name(task.owner)})`).join("\n")}` : "No open tasks.",
       recent.length ? `Recent messages:\n${recent.map(message => `- ${name(message.from)}: ${message.summary.split("\n")[0].slice(0, 200)}`).join("\n")}` : "No messages yet.",
@@ -492,7 +510,7 @@ export default function teams(pi: ExtensionAPI) {
     handler: async ctx => { if (ctx.mode === "tui") await host(ctx).visit("root"); },
   });
   pi.registerCommand("teams", {
-    description: "Team panel; /teams teammate <name-or-id>, config, back, stop, status, join, or leave",
+    description: "Team panel; /teams teammate <name-or-id>, config, back, stop, status, join [team-id], or leave",
     async getArgumentCompletions(prefix) {
       if (!prefix.includes(" ")) return teamsCompletions(prefix, []);
       if (!context) return null;
@@ -509,8 +527,9 @@ export default function teams(pi: ExtensionAPI) {
         catch (error) { ctx.ui.notify(cleanText(String(error)), "error"); }
         return;
       }
-      if (args.trim() === "join" || args.trim() === "leave") {
-        try { await (args.trim() === "join" ? joinTeam(ctx) : leaveTeam(ctx)); }
+      const joinArgs = /^join(?:\s+(.+))?$/.exec(args.trim());
+      if (joinArgs || args.trim() === "leave") {
+        try { await (joinArgs ? joinTeam(ctx, joinArgs[1]) : leaveTeam(ctx)); }
         catch (error) { ctx.ui.notify(cleanText(String(error instanceof Error ? error.message : error)), "error"); }
         return;
       }
@@ -533,7 +552,7 @@ export default function teams(pi: ExtensionAPI) {
           else ctx.ui.notify(`Unknown teammate: ${cleanText(value)}. Use autocomplete or /teams panel.`, "error");
         }
         else if (!args.trim() || args.trim() === "panel") await showTeamsPanel(ctx, api, panelView);
-        else ctx.ui.notify("Usage: /teams [panel|teammate <name-or-id>|config|back|stop|status|join|leave]", "info");
+        else ctx.ui.notify("Usage: /teams [panel|teammate <name-or-id>|config|back|stop|status|join [team-id]|leave]", "info");
       } else {
         const status = await handle("agent", { action: "list" }, ctx);
         ctx.ui.notify(JSON.stringify(status, null, 2), "info");
