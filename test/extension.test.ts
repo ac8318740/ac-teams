@@ -336,7 +336,7 @@ test("message tool accepts aliases and renders resolved recipients by name", asy
     assert.deepEqual((sent.details as { recipients: string[] }).recipients, [member.id]);
     const context = { args, outputPad: 0, isError: false } as Parameters<NonNullable<ToolRenderers["renderResult"]>>[3];
     const compact = tool.renderResult!(sent, { expanded: false, isPartial: false }, theme, context).render(1000).map(cleanText).join("\n");
-    assert.match(compact, /to oom-review/);
+    assert.match(compact, /Message sent · Main agent \(this session\) → oom-review/);
     assert.ok(!compact.includes(member.id));
     assert.ok(!compact.includes((sent.details as { id: string }).id));
     await assert.rejects(f.execute("team_message", { ...args, recipients: ["oom-review", member.id] }), /Recipients/);
