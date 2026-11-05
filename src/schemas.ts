@@ -11,6 +11,11 @@ export const AgentSchema = Type.Object({
   model: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
   thinking: Type.Optional(Type.Union(["off", "minimal", "low", "medium", "high", "xhigh"].map(v => Type.Literal(v)))),
   analysis: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("separate")], { description: "Launch/resume only: auto (default) requests existing pi-lens same-workspace reuse, possibly outside this team; explicit environment opt-outs win. Choose separate for different environments or rules, uncertain compatibility, or independent analyzer state. Does not disable checks or guarantee attachment. Resume keeps the saved preference unless overridden; restricted members always use separate analysis." })),
+  extensions: Type.Optional(Type.Object({
+    preset: Type.Optional(Type.String({ minLength: 1, maxLength: 40 })),
+    include: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 4096 }), { maxItems: 512, uniqueItems: true })),
+    exclude: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 4096 }), { maxItems: 512, uniqueItems: true })),
+  }, { additionalProperties: false, description: "Launch only: choose a user-configured extension preset and optional ID additions/removals before imports. Required safety/auth and coordination cannot be excluded. Omit to use the configured default, or the actual parent-loaded set if unconfigured. Full and include cannot exceed that parent set. Resume keeps saved IDs and loads current installed versions. See /teams config for IDs and configuration; do not invent a preset or silently fall back to full." })),
   worktree: Type.Optional(Type.Boolean()), base: Type.Optional(id), target: Type.Optional(id),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
   depth: Type.Optional(Type.Integer({ minimum: 0, maximum: 10 })),
@@ -80,6 +85,7 @@ export function validate(operation: string, value: unknown): void {
     if (args.action === "launch" && !args.name) throw new Error("A descriptive teammate name is required on launch");
     if (args.action !== "launch" && args.name !== undefined) throw new Error("A teammate name can only be set on launch");
     if (args.action !== "launch" && args.action !== "resume" && (value as { analysis?: unknown }).analysis !== undefined) throw new Error("Analysis can only be set on launch or resume");
+    if (args.action !== "launch" && (value as { extensions?: unknown }).extensions !== undefined) throw new Error("Extensions can only be selected on launch; resume keeps saved IDs");
     if (args.action !== "launch" && (value as { task?: unknown }).task !== undefined) throw new Error("A task can only be assigned on launch");
     if (args.action !== "launch" && (value as { access?: unknown }).access !== undefined) throw new Error("Access can only be set on launch; resume keeps the member's access");
   }

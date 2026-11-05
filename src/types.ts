@@ -1,4 +1,5 @@
 import type { Access, AccessRequest } from "./access.ts";
+import type { ExtensionChoice, ExtensionSelection } from "./worker-extensions.ts";
 export interface Worktree {
   repo: string;
   path: string;
@@ -38,6 +39,8 @@ export interface Member {
   thinking?: string;
   /** Launch-time pi-lens preference; absent older records default to auto. */
   analysis?: "auto" | "separate";
+  /** Exact launch selection; resumes resolve these IDs against current installed code. */
+  extensions?: ExtensionSelection;
   activity?: string;
   summary?: string;
   terminal?: boolean;
@@ -159,6 +162,7 @@ export interface AgentArgs {
   model?: string;
   thinking?: string;
   analysis?: "auto" | "separate";
+  extensions?: ExtensionChoice;
   worktree?: boolean;
   base?: string;
   target?: string;

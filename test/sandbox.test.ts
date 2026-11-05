@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { Coordinator, type CoordinatorOptions } from "../src/coordinator.ts";
+import { extensionInventory } from "../src/worker-extensions.ts";
 import { maxSandboxed, memberImage, packageRoot, sandboxStatus } from "../src/access.ts";
 
 const fixture = fileURLToPath(new URL("./fixtures/pi-peer.mjs", import.meta.url));
@@ -22,7 +23,7 @@ const until = async (check: () => boolean, ms = 30000) => { const end = Date.now
 const credentials = async () => ({ token: "REAL-SECRET", expires: Date.now() + 3600000 });
 const hostAddresses = Object.values(networkInterfaces()).flat().filter(entry => entry && !entry.internal && !entry.address.startsWith("fe80")).map(entry => entry!.address);
 const team = (root: string, cwd: string, extra: Partial<CoordinatorOptions> = {}) => Coordinator.open({
-  id: randomUUID(), cwd, limit: 5, depth: 3, extension: fixture, command: fixture, home: join(root, "teams"), notice: () => {}, warning: () => {}, credentials, ...extra });
+  id: randomUUID(), cwd, limit: 5, depth: 3, extension: fixture, command: fixture, extensions: () => extensionInventory(cwd, undefined, []), home: join(root, "teams"), notice: () => {}, warning: () => {}, credentials, ...extra });
 
 for (const interactive of [false, true]) {
   test(`enforced member cannot escape its grants (${interactive ? "native" : "RPC"})`, { skip, timeout: 180000 }, async () => {
