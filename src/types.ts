@@ -63,6 +63,8 @@ export function canControl(state: TeamState, actor: string, id: string): boolean
   const target = state.members[id];
   return !!target && id !== actor && (isMain(state.members[actor]) ? target.role !== undefined : !isMain(target) && isDescendant(state, id, actor));
 }
+export const batchTaskKeyMaxLength = 64;
+export const batchTaskKeyPattern = /^[a-zA-Z][a-zA-Z0-9_-]*(?![\s\S])/;
 export const taskLabelMaxLength = 60;
 export const taskLabelPattern = /^[^\s\x00-\x1f\x7f-\x9f]+(?: [^\s\x00-\x1f\x7f-\x9f]+){0,2}(?![\s\S])/;
 export function taskName(task: Pick<Task, "number" | "label">): string { return `#${task.number} ${task.label}`; }
@@ -113,6 +115,7 @@ export interface TeamState {
   messages: Message[];
 }
 export interface TaskInput {
+  key?: string;
   title: string;
   label?: string;
   description?: string;
