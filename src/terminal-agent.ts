@@ -43,9 +43,10 @@ export class TerminalAgent extends EventEmitter {
       // Credentials travel in a private file, never in tmux's command-line arguments.
       writeFileSync(config, "set -g status off\nset -g prefix None\nset -s extended-keys always\nbind-key -n C-S-Left detach-client\n", { flag: "wx", mode: 0o600 });
       this.files.push(config);
-      const exports = Object.entries(this.options.env)
-        .filter(([key, value]) => (key.startsWith("AC_TEAMS_") || key === "HERDR_ENV" || key === "ACSTACK_AGENT_ROLE" || key === "PI_LENS_WARM_ATTACH") && value !== undefined)
-        .map(([key, value]) => `export ${key}=${quote(value!)}`);
+      // A tmux server retains its first environment; explicitly refresh controlled launch settings on every member.
+      const controlled = ["HERDR_ENV", "ACSTACK_AGENT_ROLE", "PI_LENS_WARM_ATTACH", "NODE_OPTIONS", "PI_CODING_AGENT_DIR", "PI_LENS_HOME", "PILENS_DATA_DIR", "PI_LENS_CONFIG_PATH", "BILLION_CONTEXT_ATTACH", "BILLION_CONTEXT_PROXY", "BILI_CONFIG_FILE"];
+      const keys = new Set([...controlled, ...Object.keys(this.options.env).filter(key => key.startsWith("AC_TEAMS_"))]);
+      const exports = [...keys].map(key => this.options.env[key] === undefined ? `unset ${key}` : `export ${key}=${quote(this.options.env[key]!)}`);
       const command = this.options.command ?? process.env.AC_TEAMS_PI ?? "pi";
       writeFileSync(script, [...exports,
         "exec " + [command, ...this.options.args].map(quote).join(" "), ""].join("\n"), { flag: "wx", mode: 0o600 });

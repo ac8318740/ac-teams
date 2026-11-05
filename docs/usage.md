@@ -92,7 +92,7 @@ The summary shows at most five tasks; `/teams` retains the full list. Completion
 
 ac-teams leaves your existing footer intact and publishes a compact summary under the `ac-teams` extension-status key. Custom footers must support extension statuses to show it. In Zentui, use `/zentui extensions` to choose a placement for `ac-teams` if statuses are hidden by default. Agent navigation remains available in its own row even when the footer hides statuses.
 
-Use `/teams config` to toggle **Task summary** and **Agent selector** independently. Up/Down select a setting; Space or Enter toggles it; Esc closes. Changes save immediately for the current and future sessions. Other running sessions are not updated automatically. Both displays default to On.
+Use `/teams config` → **Display** to toggle **Task summary** and **Agent selector** independently. Up/Down select a setting; Space or Enter toggles it; Esc closes. Changes save immediately for the current and future sessions. Other running sessions are not updated automatically. Both displays default to On.
 
 Hiding a display does not stop agents, change tasks, or disable `/teams`. With the agent selector hidden, ordinary editor Down behavior returns. These global display preferences do not change the team's resource ceilings.
 
@@ -160,7 +160,7 @@ Every launch needs a unique descriptive `name`: one or two lowercase words, hyph
 
 Launch returns the name, a stable member ID, PID, cwd, and native session ID/path. Interactive roots launch native Pi terminals in a team-private tmux server; headless roots keep the RPC transport. Finishing a turn makes the member idle only after Pi reports `agent_settled`. It does not stop the process.
 
-Children load ac-teams explicitly and otherwise keep normal Pi extensions, skills, authentication, and cwd instructions. They receive their brief, not the parent's conversation. Load ac-teams only once in the root, either through Pi package settings or an explicit extension path.
+Children load ac-teams explicitly and seed only the parent's actually loaded extension set. Configure presets through `/teams config` → **Worker extensions**, then optionally pass `extensions: {preset: "worker", include: ["<parent-extension-id>"], exclude: ["<optional-id>"]}` on launch. `full` can retain only that parent's set; nested delegation cannot widen it. Required safety/provider extensions cannot be excluded. Resume retains saved IDs and current installed versions, not a new preset. Skills, authentication storage, and cwd instructions still use native Pi behavior; any provider extension itself must be retained. Children receive their brief, not the parent's conversation. Load ac-teams only once in the root, either through Pi package settings or an explicit extension path.
 
 Children can delegate through the same coordinator, subject to depth and capacity. Delegation still needs user authorization. Keep briefs bounded, agree on file ownership, and use separate worktrees for concurrent writers.
 

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
-import { initTheme, type ExtensionAPI, type ExtensionContext, type ExtensionToolContext, type ToolDefinition, type ToolRenderers } from "@earendil-works/pi-coding-agent";
+import { DefaultResourceLoader, initTheme, type ExtensionAPI, type ExtensionContext, type ExtensionToolContext, type ToolDefinition, type ToolRenderers } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { cleanText } from "../src/render.ts";
 import { theme } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
@@ -54,6 +54,14 @@ function fixture() {
   const id = randomUUID();
   // SAFETY: all called host methods are provided above; registration captures the real callbacks.
   teams(api as unknown as ExtensionAPI);
+  // Model the host's real loaded-set query, not discovery or tool-name inference.
+  const path = fileURLToPath(new URL("../src/index.ts", import.meta.url));
+  const sourceInfo = { path, source: "local", scope: "user" as const, origin: "top-level" as const };
+  new DefaultResourceLoader({ cwd: home, agentDir: join(home, ".pi", "agent") }).getExtensions().extensions.push({
+    path, resolvedPath: path, sourceInfo,
+    tools: new Map([...tools].map(([name, definition]) => [name, { definition, sourceInfo }])),
+    handlers: new Map(), messageRenderers: new Map(), commands: new Map(), flags: new Map(), shortcuts: new Map(),
+  });
   async function execute(name: string, args: unknown) {
     return (await tools.get(name)!.execute(randomUUID(), args, new AbortController().signal, undefined, ctx)).details;
   }
@@ -618,6 +626,7 @@ async function until(check: () => boolean) {
 test("notices steer in summaries once, are acknowledged only after persistence, and a wait with nothing new ends the turn", async () => {
   const f = fixture();
   try {
+    await f.event("session_start");
     const task = await f.execute("team_task", { action: "create", title: "Review", description: "Review" }) as { id: string };
     const member = await f.execute("team_agent", { action: "launch", name: "worker", model: "test/model", brief: "REPORT:Found the bug", task: task.id }) as { id: string };
     const notices = () => f.messages.filter(message => (message as { customType?: string }).customType === "ac-teams") as { content: string; details: { through: number } }[];
