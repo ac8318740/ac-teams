@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { taskLabelMaxLength, taskLabelPattern, memberNameMaxLength, memberNamePattern } from "./types.ts";
+import { taskLabelMaxLength, taskLabelPattern, memberNameMaxLength, memberNamePattern, batchTaskKeyMaxLength, batchTaskKeyPattern } from "./types.ts";
 
 const id = Type.String({ minLength: 1, maxLength: 128 });
 const text = Type.String({ minLength: 1, maxLength: 16000 });
@@ -27,7 +27,7 @@ const taskFields = {
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
   label: Type.Optional(Type.String({ minLength: 1, maxLength: taskLabelMaxLength, pattern: taskLabelPattern.source, description: "Optional 1–3-word label. Derived from title when omitted." })),
   description: Type.Optional(Type.String({ maxLength: 16000, description: "Details and acceptance criteria. Defaults to title; include explicit criteria for substantial or delegated work." })),
-  dependencies: Type.Optional(Type.Array(id, { maxItems: 100, uniqueItems: true, description: "Existing prerequisite task UUIDs whose verified outputs this task needs before it can start; all must be done. Include multiple prerequisites when needed; leave empty for independent work. blockedBy is derived automatically." })),
+  dependencies: Type.Optional(Type.Array(id, { maxItems: 100, uniqueItems: true, description: "Prerequisite task UUIDs whose verified outputs this task needs before it can start; all must be done. In a create batch, use @key to reference another entry's key, including later entries. Include every real prerequisite; leave independent work unlinked. blockedBy is derived automatically." })),
 };
 export const TaskSchema = Type.Object({
   revision: Type.Optional(Type.Integer({ minimum: 1 })), acceptance: Type.Optional(Type.Boolean()),
@@ -36,7 +36,10 @@ export const TaskSchema = Type.Object({
   id: Type.Optional(id), ...taskFields,
   summary: Type.Optional(Type.String({ minLength: 1, maxLength: 16000, description: "Complete: brief outcome, required action, and critical caveats, published atomically with done and delivered in notices. Put supporting evidence, file references, and check-by-check results in detail." })),
   detail: Type.Optional(Type.String({ minLength: 1, maxLength: 16000, description: "Complete: optional supporting evidence, checks run, file references, and fuller limitations, read on demand." })),
-  tasks: Type.Optional(Type.Array(Type.Object({ ...taskFields, title: Type.String({ minLength: 1, maxLength: 500 }) }, { additionalProperties: false }), { minItems: 1, maxItems: 100, description: "Create several tasks atomically. Use instead of top-level task fields. Dependencies must refer to existing task IDs, not items in this batch." })),
+  tasks: Type.Optional(Type.Array(Type.Object({ ...taskFields,
+    key: Type.Optional(Type.String({ minLength: 1, maxLength: batchTaskKeyMaxLength, pattern: batchTaskKeyPattern.source, description: "Unique batch-only name, e.g. worker. Other entries reference it with dependencies: ['@worker']. Not stored; use returned UUIDs after creation." })),
+    title: Type.String({ minLength: 1, maxLength: 500 }),
+  }, { additionalProperties: false }), { minItems: 1, maxItems: 100, description: "Create several tasks atomically. Use instead of top-level task fields. Dependencies accept existing UUIDs and @key references to entries in this batch. Missing keys, duplicates, self-dependencies, and cycles reject the whole batch." })),
 }, { additionalProperties: false });
 export const MessageSchema = Type.Object({
   action: Type.Union(["send", "history", "search", "wait"].map(v => Type.Literal(v))),

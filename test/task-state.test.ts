@@ -82,6 +82,66 @@ test("batch create is atomic, supplies concise defaults, and preserves explicit 
   assert.equal(Object.keys(reopened.state.tasks).length, 3);
 });
 
+test("batch dependencies resolve forward keys and existing IDs, block starts, and persist only UUIDs", t => {
+  const { store, home, initial, create } = fixture(t);
+  const existing = create();
+  const result = store.task("root", { action: "create", tasks: [
+    { key: "bridge", title: "Host bridge", dependencies: ["@worker", existing.id] },
+    { key: "broker", title: "Token broker" },
+    { key: "worker", title: "Pi worker" },
+    { title: "Integration", dependencies: ["@bridge", "@broker"] },
+  ] });
+  assert.ok("tasks" in result);
+  const [bridge, broker, worker, integration] = result.tasks;
+  assert.deepEqual(bridge.dependencies, [worker.id, existing.id]);
+  assert.deepEqual(bridge.blockedBy, [worker.id, existing.id]);
+  assert.deepEqual(broker.dependencies, []);
+  assert.deepEqual(worker.dependencies, []);
+  assert.deepEqual(integration.blockedBy, [bridge.id, broker.id]);
+  assert.throws(() => store.task("a", { action: "start", id: bridge.id }), /blocked/i);
+  for (const task of [worker, existing]) {
+    store.task("a", { action: "start", id: task.id });
+    store.task("a", { action: "complete", id: task.id, acceptance: true, summary: "Checked" });
+  }
+  store.task("b", { action: "start", id: bridge.id });
+  assert.equal(store.state.tasks[bridge.id].status, "in_progress");
+  assert.ok(result.tasks.every(task => !Object.hasOwn(task, "key")));
+  const snapshot = readFileSync(join(store.dir, "state.json"), "utf8");
+  assert.ok(!snapshot.includes('"key":"worker"'));
+  assert.ok(!snapshot.includes("@worker"));
+  store.close();
+  const reopened = new Store(initial, home);
+  t.after(() => reopened.close());
+  assert.deepEqual(reopened.state.tasks[bridge.id].dependencies, [worker.id, existing.id]);
+});
+
+test("invalid batch keys and dependency graphs leave memory and disk unchanged", t => {
+  const { store, create } = fixture(t);
+  const existing = create();
+  const before = structuredClone(store.state);
+  const snapshot = readFileSync(join(store.dir, "state.json"), "utf8");
+  for (const tasks of [
+    [{ key: "same", title: "One" }, { key: "same", title: "Two" }],
+    [{ key: "", title: "Empty key" }],
+    [{ key: "@worker", title: "Invalid key" }],
+    [{ key: "a".repeat(65), title: "Long key" }],
+    [{ key: "worker\n", title: "Newline key" }],
+    [{ key: null as unknown as string, title: "Null key" }],
+    [{ title: "Unknown key", dependencies: ["@missing"] }],
+    [{ key: "self", title: "Self", dependencies: ["@self"] }],
+    [{ key: "a", title: "A", dependencies: ["@b"] }, { key: "b", title: "B", dependencies: ["@a"] }],
+    [{ key: "a", title: "A" }, { title: "Duplicates", dependencies: ["@a", "@a"] }],
+    [{ title: "Duplicates", dependencies: [existing.id, existing.id] }],
+    [{ key: "worker", title: "Valid" }, { title: "Invalid", dependencies: ["missing"] }],
+  ]) {
+    assert.throws(() => store.task("root", { action: "create", tasks }));
+    assert.deepEqual(store.state, before);
+    assert.equal(readFileSync(join(store.dir, "state.json"), "utf8"), snapshot);
+  }
+  assert.throws(() => store.task("root", { action: "create", title: "Outside batch", dependencies: ["@worker"] }));
+  assert.throws(() => store.task("root", { action: "create", tasks: [{ title: "Later batch", dependencies: ["@worker"] }] }));
+});
+
 test("start atomically claims ready work without stealing or reserving blocked work", t => {
   const { store, create } = fixture(t);
   const prerequisite = create();

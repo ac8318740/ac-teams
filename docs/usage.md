@@ -107,16 +107,24 @@ Create independent tasks in one call:
 {"action":"create","tasks":[{"title":"Review parser behavior","description":"Acceptance: identify malformed-input failures with reproduction steps."},{"title":"Review display ordering","description":"Acceptance: compare implementation and display tests, and report mismatches."}]}
 ```
 
-A batch creates 1–100 tasks atomically: invalid input leaves no tasks created. Use either `tasks` or top-level task fields, not both. Existing single-task creation remains supported. A title is enough for a simple task; description defaults to title and label defaults to its first three words, capped at 60 characters. Supply explicit acceptance criteria for substantial or delegated work. Dependencies must reference existing task UUIDs, so create prerequisites before dependent tasks. Tasks in the same batch cannot refer to each other.
+A batch creates 1–100 tasks atomically: invalid input leaves no tasks created. Use either `tasks` or top-level task fields, not both. Existing single-task creation remains supported. A title is enough for a simple task; description defaults to title and label defaults to its first three words, capped at 60 characters. Supply explicit acceptance criteria for substantial or delegated work.
 
-Create dependent tasks in later calls using the UUIDs returned by earlier calls. For example, API and UI implementations may both need a shared contract; integration verification may need both implementations:
+For dependent tasks, give prerequisites unique batch-only `key` names and reference them with `@key` in `dependencies`. References can point forward or backward within the batch, alongside existing task UUIDs. Keys start with a letter, contain only letters, digits, underscores, or hyphens, and have at most 64 characters. Missing keys, duplicate keys or dependencies, self-dependencies, and cycles reject the whole batch without changing stored tasks. Keys are not stored; responses and later calls use UUIDs.
+
+For example, API and UI implementations may both need a shared contract; integration verification may need both implementations:
 
 ```text
 Shared contract ──┬──> API ──┐
                   └──> UI ───┴──> Integration verification
 ```
 
-Give API and UI the contract task's UUID in `dependencies`. Give integration verification both implementation UUIDs. It can start only when both are done; `blockedBy` automatically lists unfinished prerequisites. Write tests before implementation when useful; that alone is not a reason to block test-writing behind implementation. Reassess dependencies when scope changes, subject to task ownership and edit rules.
+Create this graph in one call:
+
+```json
+{"action":"create","tasks":[{"key":"contract","title":"Define shared contract"},{"key":"api","title":"Implement API","dependencies":["@contract"]},{"key":"ui","title":"Implement UI","dependencies":["@contract"]},{"title":"Verify integration","dependencies":["@api","@ui"]}]}
+```
+
+Before starting or delegating, check that recorded dependencies match the outputs each task needs. Creating tasks together does not make them independent. Integration verification can start only when both implementations are done; `blockedBy` automatically lists unfinished prerequisites. Write tests before implementation when useful; that alone is not a reason to block test-writing behind implementation. Reassess dependencies when scope changes, subject to task ownership and edit rules.
 
 Start a task before working and complete it immediately after checking the result. One agent normally works on one task at a time; teammates can work in parallel. Never complete partial work or work with unresolved failures.
 

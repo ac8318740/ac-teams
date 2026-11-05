@@ -267,11 +267,15 @@ test("team tools guide solo planning and task-backed delegation without tracking
     assert.match(taskGuidance, /outputs each task needs/);
     assert.match(taskGuidance, /verified output/);
     assert.match(taskGuidance, /Keep independent work parallel/);
-    assert.match(taskGuidance, /dependent tasks in later calls using the returned prerequisite UUIDs/);
+    assert.match(taskGuidance, /Dependencies accept existing UUIDs and @key references/);
+    assert.match(taskGuidance, /Before starting or delegating, check that the recorded dependencies match/);
+    assert.match(taskGuidance, /creating tasks together does not make them independent/);
+    assert.doesNotMatch(taskGuidance, /Dependencies cannot refer to siblings/);
     assert.match(taskGuidance, /all prerequisites must be done/);
     assert.match(taskGuidance, /Reassess dependencies when scope changes/);
     assert.doesNotMatch(taskGuidance, /initial plan in one team_task call/);
-    assert.match(JSON.stringify(task.parameters), /Existing prerequisite task UUIDs/);
+    assert.match(JSON.stringify(task.parameters), /Prerequisite task UUIDs/);
+    assert.match(JSON.stringify(task.parameters), /Unique batch-only name/);
   } finally { await f.close(); }
 });
 
@@ -279,12 +283,25 @@ test("task batches and lists keep model output compact while read and details re
   const f = fixture();
   const call = (args: unknown) => f.tools.get("team_task")!.execute(randomUUID(), args, new AbortController().signal, undefined, f.ctx);
   try {
-    const result = await call({ action: "create", tasks: [{ title: "Inspect existing implementation", description: "Acceptance: " + "evidence ".repeat(1000) }, { title: "Run checks" }] });
+    const result = await call({ action: "create", tasks: [{ key: "inspect", title: "Inspect existing implementation", description: "Acceptance: " + "evidence ".repeat(1000) }, { title: "Run checks", dependencies: ["@inspect"] }] });
     const batch = result.details as { tasks: { id: string; description: string }[] };
     const text = (value: typeof result) => value.content.filter(block => block.type === "text").map(block => block.text).join("\n");
     assert.equal(batch.tasks.length, 2);
     assert.ok(text(result).length < 1500);
     assert.ok(!text(result).includes("evidence"));
+    const checks = JSON.parse(text(result)).tasks[1];
+    assert.deepEqual(checks.dependencies, [batch.tasks[0].id]);
+    assert.deepEqual(checks.blockedBy, [batch.tasks[0].id]);
+    await assert.rejects(call({ action: "start", id: batch.tasks[1].id }), /blocked/);
+    await assert.rejects(call({ action: "create", tasks: [{ title: "Bad", key: "@invalid" }] }), /Invalid task request/);
+    await assert.rejects(call({ action: "create", key: "outside", title: "Bad" }), /Invalid task request/);
+    for (const key of ["worker\n", "a".repeat(65)]) {
+      await assert.rejects(call({ action: "create", tasks: [{ title: "Bad", key }] }), /Invalid task request/);
+    }
+    await call({ action: "create", tasks: [
+      { key: "a".repeat(64), title: "Maximum key" },
+      { title: "Consumer", dependencies: ["@" + "a".repeat(64)] },
+    ] });
     const list = await call({ action: "list" });
     assert.ok(text(list).includes(batch.tasks[0].id));
     assert.ok(!text(list).includes("evidence"));
@@ -293,6 +310,7 @@ test("task batches and lists keep model output compact while read and details re
     await call({ action: "start", id: batch.tasks[0].id });
     await assert.rejects(call({ action: "complete", id: batch.tasks[0].id }), /acceptance/);
     await call({ action: "complete", id: batch.tasks[0].id, acceptance: true, summary: "Inspected" });
+    await call({ action: "start", id: batch.tasks[1].id });
     await assert.rejects(call({ action: "list", tasks: [{ title: "Wrong action" }] }), /create/);
   } finally { await f.close(); }
 });
