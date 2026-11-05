@@ -61,17 +61,17 @@ Every worker starts a separate native Pi process. Its extensions are a subset of
 
 Nested delegation can only narrow the set.
 
-Run `/teams config`, choose **Worker extensions**, and review the editor:
+Run `/teams config` to start a conversation with Pi. No editor or configuration wizard opens. Pi reads the current policy and extension inventory through `team_config`, asks what workers need, and proposes settings in plain language. It can use an available question tool or ask in chat.
 
-- `worker` initially lists the current parent's seedable extension IDs. Remove optional entries to make it lean.
-- `full` uses `"extensions": "all"`, meaning all current parent-loaded extensions, not all installed extensions.
-- `minimal` initially has no optional extensions.
-- `required` identifies safety and provider/auth extensions that every worker must retain. Confirm this list yourself; ac-teams does not infer dependencies or classify plugins by name.
-- Optional `heapMb` sets V8's old-space allowance for that preset. It is not an RSS limit. There is no automatic cap; trial a value on representative work before adopting it.
+Pi asks where to save (user defaults, or trusted project overrides when enabled), helps choose a default and presets, and asks which safety/provider/auth extensions every worker must retain. It does not infer dependencies or classify plugins by name. Initially, `worker` selects the parent's loaded extensions, `full` keeps all of them, and `minimal` selects none. Required extensions are always added.
+
+An optional `heapMb` sets V8's old-space allowance (128..6144 MB). This is not an RSS limit. Trial a value on representative work before adopting it.
+
+Pi summarizes the proposal and asks for approval, then uses `team_config` to validate and save it. A final confirmation shows the exact policy. Cancelling that confirmation leaves files unchanged. You never need to edit a file.
 
 Coordination is always injected from the running ac-teams copy. Required extensions are added to every preset, inherited by descendants, and cannot be excluded. A smaller preset removes the tools and checks supplied by its omitted extensions; keep a suitably equipped coordinator or verifier.
 
-The editor shows effective policy, source files, and available IDs without importing candidate extension factories. User defaults live in `~/.pi/ac-teams/config.json` under `workers`. Trusted project overrides live in `.pi/ac-teams.json` and also require `--teams-project-config`.
+The configuration tool returns user and effective policy, source files, and extension IDs with provenance without importing candidate extension factories. Pi is instructed to preserve existing settings unless you ask to change them; reviewing inventory alone saves nothing. User defaults live in `~/.pi/ac-teams/config.json` under `workers`. Trusted project overrides live in `.pi/ac-teams.json` and also require `--teams-project-config`.
 
 Project presets override user presets by name; required lists are combined, never weakened.
 
@@ -141,7 +141,7 @@ The footer refreshes at the same interval without fetching message history. The 
 
 ## Display preferences are global
 
-`/teams config` → **Display** saves task-summary and agent-selector visibility to `~/.pi/ac-teams/display.json`:
+`/teams config display` saves task-summary and agent-selector visibility to `~/.pi/ac-teams/display.json`:
 
 ```json
 {"tasks":true,"agents":true}

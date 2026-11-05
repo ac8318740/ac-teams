@@ -1,0 +1,67 @@
+{
+  "dataset": "Terminal-Bench 2.0 (custom subset, not an official score)",
+  "repository": "https://github.com/laude-institute/terminal-bench-2.git",
+  "revision": "2fd12b88aafdd04a52c298e3940bcb189f9766d6",
+  "baseline": "463b2001a8dc26af14faded8414465a7d8288126",
+  "baseline_version": "0.0.27",
+  "candidate": "0.0.27 plus frozen uncommitted message-audit changes",
+  "candidate_source_tree_sha256": "5e5cf537caaa76be3e161759719415c338451fcdb50d22d754a060a953422b97",
+  "tasks": [
+    "build-cython-ext",
+    "portfolio-optimization"
+  ],
+  "verifier_cpus": 1,
+  "model_execution": "native Pi tools in fresh host directories; instruction-only task boundary, no resource caps",
+  "task_path_mapping": "/app replaced by the trial directory in prompts; verifier unchanged",
+  "worker_policy": "benchmark-local parent/all preset with explicit --teams-project-config",
+  "authentication": "existing local subscription OAuth only; no API-key billing",
+  "cost_reporting": "subscription allowance and tokens; dollar cost unknown",
+  "max_sessions_per_trial": 2,
+  "max_depth": 1,
+  "model_execution_enabled_in_this_runner": false,
+  "local_session_harness": "temporary external files; not shipped as a repository feature",
+  "delegation_policy": "natural choice; no prompt instruction or hint to delegate, create tasks, or request review",
+  "trial_session_policy": "one root required; zero or one optional child; a solo attempt is valid",
+  "prompt_template": "prompt-template.txt",
+  "status": "baseline and frozen candidate complete: both tasks pass in each arm; all roots chose solo work; candidate tasks ran concurrently",
+  "previous_results": {
+    "plan": "smoke-plan.json",
+    "report": "RESULTS.md",
+    "metrics": "results.json"
+  },
+  "task_settings": {
+    "build-cython-ext": {
+      "verifier_cpus": 1,
+      "verifier_memory_mb": 2048,
+      "verifier_timeout_seconds": 900,
+      "oracle_timeout_seconds": 900,
+      "python": "3.13",
+      "numpy": "2.3.0",
+      "environment_note": "Original global installation mapped to task-local Python. Actual installed site-packages and source snapshot transferred to original verifier; compiled imports and all11originaltests passed in first baseline.",
+      "agent_timeout_seconds": 900
+    },
+    "portfolio-optimization": {
+      "verifier_cpus": 1,
+      "verifier_memory_mb": 4096,
+      "verifier_timeout_seconds": 3600,
+      "oracle_timeout_seconds": 3600,
+      "python": "3.13",
+      "numpy": "2.3.2",
+      "setuptools": "78.1.1",
+      "environment_note": "Task-local Python environment and C compiler; match Python/NumPy ABI when grading compiled outputs.",
+      "agent_timeout_seconds": 3600
+    }
+  },
+  "attempt_budget_policy": "upstream task limits; no custom five-minute cutoff",
+  "model_trials_ready": true,
+  "python_environment": "task-local CPython 3.13.6; initial NumPy pinned per task; actual installed site-packages transferred to fresh cp313 grader, without post-hoc repair",
+  "baseline_results": {
+    "report": "BASELINE.md",
+    "metrics": "baseline-results.json"
+  },
+  "candidate_execution_policy": "two independent concurrent roots; natural delegation; timing is not controlled against sequential baseline",
+  "candidate_results": {
+    "report": "CANDIDATE.md",
+    "metrics": "candidate-results.json"
+  }
+}
