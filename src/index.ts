@@ -21,7 +21,7 @@ import { Coordinator, assistantEvent, taskRequestGuidance } from "./coordinator.
 import { Connection, isRecord } from "./connection.ts";
 import { policy, readDisplaySettings, defaultDisplaySettings } from "./config.ts";
 import { providerRoutes } from "./egress.ts";
-import { showWorkerConfig } from "./worker-config-ui.ts";
+import { configureWorker, WorkerConfigSchema, workerConfigPrompt } from "./worker-config-ui.ts";
 import { observeLoadedExtensions } from "./loaded-extensions.ts";
 import { extensionInventory } from "./worker-extensions.ts";
 import { DefaultResourceLoader, VERSION, readStoredCredential } from "@earendil-works/pi-coding-agent";
@@ -339,6 +339,13 @@ export default function teams(pi: ExtensionAPI) {
   } satisfies ToolDefinition<typeof AgentSchema>;
   pi.registerTool(teamAgentTool);
   pi.registerTool({
+    name: "team_config", label: "Team configuration", description: "Read worker extension inventory and policy, or save a user-approved policy. Ask preferences in conversation first; never ask the user to edit configuration files. Save validates the policy and requests final confirmation without starting a team.",
+    parameters: WorkerConfigSchema,
+    async execute(_id, args, _signal, _update, ctx) {
+      return output(await configureWorker(ctx, pi.getFlag("teams-project-config") === true, parentInventory, args));
+    },
+  });
+  pi.registerTool({
     name: "team_task", label: "Team task", description: "Plan and track multi-step solo and team work in one shared list. Create one task or a batch with tasks:[{title,...}], list compact summaries, read full details, edit, claim a reservation, start, complete, release, or reopen. Start atomically claims unowned ready work. Progress is todo/in_progress/done; blockedBy is derived from unfinished dependencies. Mutations support revision checks.",
     promptSnippet: "Plan and track multi-step work, alone or with teammates",
     promptGuidelines: [
@@ -537,7 +544,7 @@ export default function teams(pi: ExtensionAPI) {
   pi.registerCommand("teams", {
     description: "Team panel; /teams teammate <name-or-id>, config, back, stop, status, join [team-id], or leave",
     async getArgumentCompletions(prefix) {
-      if (!prefix.includes(" ")) return teamsCompletions(prefix, []);
+      if (!prefix.includes(" ") || prefix.startsWith("config ")) return teamsCompletions(prefix, []);
       if (!context) return null;
       try {
         const members = child || opening || connection ? (await handle("agent", { action: "list" }, context) as Pick<TeamSnapshot, "members">).members : [{ id: "root", status: "idle" as const }];
@@ -546,12 +553,14 @@ export default function teams(pi: ExtensionAPI) {
     },
     async handler(args, ctx) {
       context = ctx;
-      if (args.trim() === "config") {
+      if (args.trim() === "config" || args.trim() === "config display") {
         if (ctx.mode !== "tui") { ctx.ui.notify("/teams config requires an interactive terminal", "error"); return; }
         try {
-          const area = await ctx.ui.select("Team configuration", ["Worker extensions", "Display"]);
-          if (area === "Worker extensions") await showWorkerConfig(ctx, pi.getFlag("teams-project-config") === true, parentInventory);
-          else if (area === "Display") { Object.assign(display, readDisplaySettings()); await showDisplayConfig(ctx, display); }
+          if (args.trim() === "config display") { Object.assign(display, readDisplaySettings()); await showDisplayConfig(ctx, display); }
+          else {
+            pi.setActiveTools([...new Set([...pi.getActiveTools(), "team_config"])]);
+            pi.sendUserMessage(workerConfigPrompt, { deliverAs: "followUp" });
+          }
         }
         catch (error) { ctx.ui.notify(cleanText(String(error)), "error"); }
         return;

@@ -10,6 +10,8 @@ test("teams actions and teammate names complete without memorizing IDs", () => {
   assert.deepEqual(teamsCompletions("teammate 1234", members)?.map(item => item.value), ["teammate code-review"]);
   assert.deepEqual(teamsCompletions("teammate ", members)?.map(item => item.label), ["main", "code-review"]);
   assert.deepEqual(teamsCompletions("open co", members)?.map(item => item.value), ["open code-review"]);
+  assert.deepEqual(teamsCompletions("config ", members)?.map(item => item.value), ["config display"]);
+  assert.deepEqual(teamsCompletions("config d", members)?.map(item => item.value), ["config display"]);
   assert.equal(teamsCompletions("config extra", members), null);
   assert.deepEqual(teamsCompletions("teammate missing", members), []);
 });
