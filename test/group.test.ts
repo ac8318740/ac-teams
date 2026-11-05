@@ -33,7 +33,7 @@ test("three levels: descriptive summary, every action, independently expanded re
   ];
   const ui = view(rows);
   const folded = ui.draw();
-  assert.deepEqual(folded.filter(Boolean), ["● ac-teams activity · Received 1 message; checked team status; waited for teammate updates; stopped teammate"]);
+  assert.deepEqual(folded.filter(Boolean), ["● ac-teams activity · Received 1 message; checked team status; paused for updates; stopped teammate"]);
   assert.equal(ui.click("ac-teams activity", "wheel"), undefined);
   assert.equal(ui.click("ac-teams activity", "click", "right"), undefined);
   assert.deepEqual(ui.draw(), folded);
@@ -42,7 +42,7 @@ test("three levels: descriptive summary, every action, independently expanded re
   assert.equal(open.filter(line => /[├└]─ ●/.test(line)).length, 4, "all actions, including read-only and wait, are visible");
   assert.match(open.join("\n"), /Message received.*Reviewer.*Main agent.*Review finished/);
   assert.match(open.join("\n"), /Checked team status.*Main agent.*Working.*Reviewer.*Ready/);
-  assert.match(open.join("\n"), /Finished waiting for teammate updates/);
+  assert.match(open.join("\n"), /Agent paused · Notifications active/);
   assert.match(open.join("\n"), /└─ ● Stopped teammate · Reviewer/);
   assert.doesNotMatch(open.join("\n"), /finding|Technical details|message wait|seq|team_message|[▸▾]/);
   assert.equal(ui.click("Message received")?.handled, true);

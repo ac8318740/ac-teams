@@ -109,10 +109,10 @@ test("wait results do not turn the current agent's outgoing task posts into rece
   const sent = { from: "root", recipients: ["reviewer"], summary: "Please review the parser" };
   const received = { from: "reviewer", recipients: ["root"], summary: "Review complete" };
   const ownWait = teamToolPresentation("team_message", { action: "wait" }, { details: [sent] }, { root: "Main" });
-  assert.equal(ownWait.title, "Finished waiting for teammate updates · No new messages from teammates");
-  assert.deepEqual(ownWait.body, []);
+  assert.equal(ownWait.title, "Agent paused · Notifications active");
+  assert.deepEqual(ownWait.body, ["Existing task notifications remain active. A new addressed post will resume the agent."]);
   const mixedWait = teamToolPresentation("team_message", { action: "wait" }, { details: [sent, received] }, { root: "Main" });
-  assert.equal(mixedWait.title, "Finished waiting for teammate updates · 1 message received");
+  assert.equal(mixedWait.title, "1 update available · Continuing");
   assert.deepEqual(mixedWait.body, ["Message received · reviewer → Main agent (this session)", "Review complete"]);
   const history = teamToolPresentation("team_message", { action: "history" }, { details: [sent, received] }, { root: "Main" });
   assert.match(history.body[0]!, /^Message sent · Main agent \(this session\) → reviewer$/);

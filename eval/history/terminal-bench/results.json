@@ -1,0 +1,364 @@
+{
+  "baseline": "463b2001a8dc26af14faded8414465a7d8288126",
+  "candidate_source_tree_sha256": "5e5cf537caaa76be3e161759719415c338451fcdb50d22d754a060a953422b97",
+  "dataset_revision": "2fd12b88aafdd04a52c298e3940bcb189f9766d6",
+  "official_score": false,
+  "dollar_cost": null,
+  "results": [
+    {
+      "name": "dir-c27-regex",
+      "task": "regex-log",
+      "variant": "candidate27",
+      "status": "finished",
+      "valid_trial": true,
+      "sessions": 2,
+      "attempt_seconds": 173.626788493013,
+      "verifier_seconds": 11.538271120982245,
+      "reward": 1,
+      "model": "openai/gpt-6.1-sol",
+      "thinking": "medium",
+      "billing": "subscription OAuth; dollar cost unknown",
+      "official_score": false,
+      "model_execution": "native tools in disposable host directory; not sandboxed or resource-limited",
+      "path_mapping": "/app replaced with trial work directory in prompt; original verifier unchanged",
+      "team_id": "01a1ac5b-2693-761e-bb6d-22fe18a74c66",
+      "assistant_messages": 25,
+      "assistant_errors": 0,
+      "assistant_aborts": 0,
+      "usage": {
+        "input": 32159,
+        "output": 8085,
+        "cacheRead": 160128,
+        "cacheWrite": 0,
+        "reasoning": 973,
+        "totalTokens": 200372
+      },
+      "tool_calls": {
+        "team_task": 6,
+        "team_agent": 2,
+        "write": 1,
+        "team_message": 6,
+        "bash": 6,
+        "read": 1
+      },
+      "board_posts": 4,
+      "board_summary_bytes": 846,
+      "board_detail_bytes": 2601,
+      "delivered_notice_bytes": 1391,
+      "history_search_response_text_bytes": 1853,
+      "explicit_includeDetail_fetches": 1,
+      "byte_counts_are_token_proxies": true,
+      "session_ids": [
+        "01a1ac5b-2693-761e-bb6d-22fe18a74c66",
+        "01a1ac5b-6ca6-722a-a833-27ff483f7299"
+      ]
+    },
+    {
+      "name": "dir-b27-regex",
+      "task": "regex-log",
+      "variant": "baseline27",
+      "status": "finished",
+      "valid_trial": true,
+      "sessions": 2,
+      "attempt_seconds": 180.62125932693016,
+      "verifier_seconds": 12.77931685897056,
+      "reward": 1,
+      "model": "openai/gpt-6.1-sol",
+      "thinking": "medium",
+      "billing": "subscription OAuth; dollar cost unknown",
+      "official_score": false,
+      "model_execution": "native tools in disposable host directory; not sandboxed or resource-limited",
+      "path_mapping": "/app replaced with trial work directory in prompt; original verifier unchanged",
+      "team_id": "01a1ac5e-13f2-717f-8bb6-836917185d5d",
+      "assistant_messages": 28,
+      "assistant_errors": 0,
+      "assistant_aborts": 0,
+      "usage": {
+        "input": 36475,
+        "output": 8522,
+        "cacheRead": 178176,
+        "cacheWrite": 0,
+        "reasoning": 932,
+        "totalTokens": 223173
+      },
+      "tool_calls": {
+        "team_task": 7,
+        "team_agent": 2,
+        "write": 1,
+        "team_message": 9,
+        "bash": 5,
+        "read": 1
+      },
+      "board_posts": 5,
+      "board_summary_bytes": 506,
+      "board_detail_bytes": 3040,
+      "delivered_notice_bytes": 1252,
+      "history_search_response_text_bytes": 0,
+      "explicit_includeDetail_fetches": 0,
+      "byte_counts_are_token_proxies": true,
+      "session_ids": [
+        "01a1ac5e-13f2-717f-8bb6-836917185d5d",
+        "01a1ac5e-64af-7344-a8cc-f3de2a8dd169"
+      ]
+    },
+    {
+      "name": "dir-b27-dates",
+      "task": "log-summary-date-ranges",
+      "variant": "baseline27",
+      "status": "finished",
+      "valid_trial": true,
+      "sessions": 2,
+      "attempt_seconds": 91.41777861607261,
+      "verifier_seconds": 6.630006364081055,
+      "reward": 1,
+      "model": "openai/gpt-6.1-sol",
+      "thinking": "medium",
+      "billing": "subscription OAuth; dollar cost unknown",
+      "official_score": false,
+      "model_execution": "native tools in disposable host directory; not sandboxed or resource-limited",
+      "path_mapping": "/app replaced with trial work directory in prompt; original verifier unchanged",
+      "team_id": "01a1ac61-21bd-7211-b1b3-c3df5e0a03c0",
+      "assistant_messages": 24,
+      "assistant_errors": 0,
+      "assistant_aborts": 1,
+      "usage": {
+        "input": 21440,
+        "output": 3230,
+        "cacheRead": 164224,
+        "cacheWrite": 0,
+        "reasoning": 14,
+        "totalTokens": 188894
+      },
+      "tool_calls": {
+        "team_task": 7,
+        "team_agent": 2,
+        "bash": 6,
+        "read": 3,
+        "team_message": 4
+      },
+      "board_posts": 3,
+      "board_summary_bytes": 343,
+      "board_detail_bytes": 1227,
+      "delivered_notice_bytes": 694,
+      "history_search_response_text_bytes": 0,
+      "explicit_includeDetail_fetches": 0,
+      "byte_counts_are_token_proxies": true,
+      "session_ids": [
+        "01a1ac61-21bd-7211-b1b3-c3df5e0a03c0",
+        "01a1ac61-65f0-707a-93ac-85218355d1b5"
+      ]
+    },
+    {
+      "name": "dir-c27-dates",
+      "task": "log-summary-date-ranges",
+      "variant": "candidate27",
+      "status": "finished",
+      "valid_trial": true,
+      "sessions": 2,
+      "attempt_seconds": 142.59622834599577,
+      "verifier_seconds": 6.350045909988694,
+      "reward": 1,
+      "model": "openai/gpt-6.1-sol",
+      "thinking": "medium",
+      "billing": "subscription OAuth; dollar cost unknown",
+      "official_score": false,
+      "model_execution": "native tools in disposable host directory; not sandboxed or resource-limited",
+      "path_mapping": "/app replaced with trial work directory in prompt; original verifier unchanged",
+      "team_id": "01a1ac62-b9cb-7152-9bed-ead14bda73b6",
+      "assistant_messages": 25,
+      "assistant_errors": 0,
+      "assistant_aborts": 1,
+      "usage": {
+        "input": 38710,
+        "output": 4421,
+        "cacheRead": 143488,
+        "cacheWrite": 0,
+        "reasoning": 24,
+        "totalTokens": 186619
+      },
+      "tool_calls": {
+        "team_task": 7,
+        "team_agent": 2,
+        "bash": 7,
+        "read": 3,
+        "team_message": 3
+      },
+      "board_posts": 3,
+      "board_summary_bytes": 407,
+      "board_detail_bytes": 1605,
+      "delivered_notice_bytes": 790,
+      "history_search_response_text_bytes": 0,
+      "explicit_includeDetail_fetches": 0,
+      "byte_counts_are_token_proxies": true,
+      "session_ids": [
+        "01a1ac62-b9cb-7152-9bed-ead14bda73b6",
+        "01a1ac63-2296-7302-80e8-c2d5367527f3"
+      ]
+    }
+  ],
+  "status": "completed exploratory comparison; no demonstrated efficiency improvement",
+  "runtime": {
+    "pi": "1.5.0",
+    "node": "22.23.4",
+    "docker": "29.9.2",
+    "provider": "openai",
+    "model": "gpt-6.1-sol",
+    "thinking": "medium"
+  },
+  "measurement_window": {
+    "start_utc": "2026-11-05T15:37:00.450727+00:00",
+    "end_utc": "2026-11-05T15:47:48.554957+00:00",
+    "wall_seconds": 648.1042304039001,
+    "derived_from": "first prompt artifact and last result artifact timestamps",
+    "excludes": "earlier setup, failed pilots, dependency warmup, and debugging; original overall elapsed target not met"
+  },
+  "execution_boundary": "Native Pi tools with instruction-only host-directory restriction; not sandboxed or resource-limited. Docker only for original task inputs and original grading. Prompt paths /app mapped to host task directory.",
+  "ordering": [
+    "candidate regex",
+    "baseline regex",
+    "baseline dates",
+    "candidate dates"
+  ],
+  "excluded_attempts": [
+    {
+      "name": "b27-dates",
+      "sessions_with_transcripts": 1,
+      "usage": {
+        "input": 19938,
+        "output": 3168,
+        "cacheRead": 120832,
+        "cacheWrite": 0,
+        "reasoning": 204,
+        "totalTokens": 143938
+      }
+    },
+    {
+      "name": "b27-regex",
+      "sessions_with_transcripts": 2,
+      "usage": {
+        "input": 34759,
+        "output": 5088,
+        "cacheRead": 131456,
+        "cacheWrite": 0,
+        "reasoning": 629,
+        "totalTokens": 171303
+      }
+    },
+    {
+      "name": "base-regex",
+      "sessions_with_transcripts": 0,
+      "usage": {}
+    },
+    {
+      "name": "base-regex-v2",
+      "sessions_with_transcripts": 1,
+      "usage": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 0
+      }
+    },
+    {
+      "name": "c27-dates",
+      "sessions_with_transcripts": 1,
+      "usage": {
+        "input": 7172,
+        "output": 1341,
+        "cacheRead": 33664,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 42177
+      }
+    },
+    {
+      "name": "c27-dates-r2",
+      "sessions_with_transcripts": 1,
+      "usage": {
+        "input": 18630,
+        "output": 3191,
+        "cacheRead": 92160,
+        "cacheWrite": 0,
+        "reasoning": 104,
+        "totalTokens": 113981
+      }
+    },
+    {
+      "name": "c27-regex",
+      "sessions_with_transcripts": 1,
+      "usage": {
+        "input": 14095,
+        "output": 3850,
+        "cacheRead": 110592,
+        "cacheWrite": 0,
+        "reasoning": 475,
+        "totalTokens": 128537
+      }
+    },
+    {
+      "name": "c27-regex-r2",
+      "sessions_with_transcripts": 1,
+      "usage": {
+        "input": 21580,
+        "output": 4192,
+        "cacheRead": 112896,
+        "cacheWrite": 0,
+        "reasoning": 695,
+        "totalTokens": 138668
+      }
+    },
+    {
+      "name": "cand-regex",
+      "sessions_with_transcripts": 0,
+      "usage": {}
+    }
+  ],
+  "excluded_usage": {
+    "input": 116174,
+    "output": 20830,
+    "cacheRead": 601600,
+    "cacheWrite": 0,
+    "reasoning": 2107,
+    "totalTokens": 738604
+  },
+  "all_observed_total_tokens": 1537662,
+  "usage_caveat": "totalTokens includes repeated cached context reads; input and output reported separately; reasoning is already included in output. Subscription allowance weighting and dollar cost unknown.",
+  "limitations": [
+    "Two tasks, one trial per variant/task, both solved: no quality separation or statistical efficiency conclusion.",
+    "Host access not blocked: source, solutions, and verifiers withheld from task directories/prompts but only instructions prevent external access.",
+    "Two child aborts followed explicit parent stops by 10ms after review reports; no assistant errors.",
+    "Artifact payload byte counts are proxies, not token counts.",
+    "Earlier global worker policy changed mid-suite; --teams-project-config omission invalidated reviewer launch in candidate pilots. All prior container-model attempts excluded for setup failure or unequal execution."
+  ],
+  "aggregates": {
+    "baseline27": {
+      "passes": 2,
+      "trials": 2,
+      "agent_seconds": 272.03903794300277,
+      "verifier_seconds": 19.409323223051615,
+      "total_tokens": 412067,
+      "uncached_input_output_tokens": 69667,
+      "cache_read_tokens": 342400,
+      "coordination_tool_calls": 31,
+      "board_posts": 8,
+      "delivered_notice_bytes": 1946,
+      "history_search_response_text_bytes": 0,
+      "explicit_detail_fetches": 0
+    },
+    "candidate27": {
+      "passes": 2,
+      "trials": 2,
+      "agent_seconds": 316.2230168390088,
+      "verifier_seconds": 17.88831703097094,
+      "total_tokens": 386991,
+      "uncached_input_output_tokens": 83375,
+      "cache_read_tokens": 303616,
+      "coordination_tool_calls": 26,
+      "board_posts": 7,
+      "delivered_notice_bytes": 2181,
+      "history_search_response_text_bytes": 1853,
+      "explicit_detail_fetches": 1
+    }
+  }
+}

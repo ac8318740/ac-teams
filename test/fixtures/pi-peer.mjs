@@ -61,18 +61,19 @@ async function run(command) {
   if (native && command.type === "shutdown") process.exit(0);
   if (command.type === "prompt") {
     if (native) entry(command.message);
-    errorOnAbort = command.message === "ERROR_ON_ABORT";
+    const prompt = command.message.split("\n\nYour delegator is ")[0];
+    errorOnAbort = prompt === "ERROR_ON_ABORT";
     emit({ type: "agent_start" });
     if (command.message.startsWith("DELEGATE")) {
       await request("agent", { action: "launch", name: "nested-review", brief: "REPORT:nested ready", model: "test/model" });
     }
     if (command.message.startsWith("PROBE:")) {
       const { probe } = await import("./sandbox-probe.mjs");
-      await request("message", { action: "send", recipients: ["root"], summary: JSON.stringify(await probe(JSON.parse(command.message.slice(6)), request)).slice(0, 16000) });
+      await request("message", { action: "send", recipients: ["root"], summary: JSON.stringify(await probe(JSON.parse(prompt.slice(6)), request)).slice(0, 16000) });
     }
-    if (command.message.startsWith("REPORT:")) await request("message", { action: "send", recipients: ["root"], summary: command.message.slice(7) });
-    if (command.message === "ERROR") emit({ type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "Provider rejected this model" } });
-    if (command.message !== "WAIT") emit({ type: "agent_settled" });
+    if (command.message.startsWith("REPORT:")) await request("message", { action: "send", recipients: ["root"], summary: (command.message.includes("\nYou own team task") ? command.message : prompt).slice(7) });
+    if (prompt === "ERROR") emit({ type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "Provider rejected this model" } });
+    if (prompt !== "WAIT") emit({ type: "agent_settled" });
   }
   if (command.type === "abort") {
     if (errorOnAbort) emit({ type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "Provider failed during abort" } });
