@@ -2,6 +2,7 @@ import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdi
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { stateRoot } from "./config.ts";
+import { validExtensionSelection } from "./worker-extensions.ts";
 import { validatePolicy } from "./egress.ts";
 import { stripVTControlCharacters } from "node:util";
 import { isDescendant, isMain, memberName, memberNamePattern, memberNameMaxLength, taskLabelMaxLength, taskLabelPattern, batchTaskKeyMaxLength, batchTaskKeyPattern } from "./types.ts";
@@ -117,6 +118,7 @@ function validate(state: unknown): asserts state is TeamState {
     requireValue(member.promotion === undefined || (object(member.promotion) && ["stopped", "moved", "role", "entry"].includes(String(member.promotion.step)) && text(member.promotion.sessionFile)), "Invalid member promotion");
     requireValue(member.waiting === undefined || (object(member.waiting) && Array.isArray(member.waiting.tasks) && member.waiting.tasks.every(task => typeof task === "string" && Object.hasOwn(state.tasks as object, task))), "Invalid member wait");
     requireValue(member.analysis === undefined || member.analysis === "auto" || member.analysis === "separate", "Invalid member analysis preference");
+    requireValue(member.extensions === undefined || validExtensionSelection(member.extensions), "Invalid member extension selection");
     requireValue(member.terminal === undefined || typeof member.terminal === "boolean", "Invalid member terminal flag");
     requireValue(member.needsInput === undefined || typeof member.needsInput === "boolean", "Invalid member input flag");
     requireValue(member.pid === undefined || integer(member.pid, 1), "Invalid member PID");

@@ -10,7 +10,8 @@ import { fileURLToPath } from "node:url";
 import { assertNarrower, assertStableGrants, mountSet, within, containerProblems, dockerCreateArgs, sandboxMounts, maxSandboxed, memberImage, packageRoot, readable, resolveAccess, sandboxStatus, type Access, type SandboxPlan, type SandboxStatus } from "./access.ts";
 import { Egress, egressPort, providerRoutes, type Credentials } from "./egress.ts";
 import { Store, processAlive, processIdentity } from "./store.ts";
-import { stateRoot } from "./config.ts";
+import { stateRoot, workerConfiguration } from "./config.ts";
+import { extensionInventory, projectTrusted, selectedExtensionArgs, selectExtensions, workerNodeOptions, type ExtensionInventory } from "./worker-extensions.ts";
 import { RpcAgent } from "./rpc-agent.ts";
 import { hostResources, type HostResources } from "./resources.ts";
 import { analysisPolicy } from "./analysis.ts";
@@ -55,6 +56,10 @@ export interface CoordinatorOptions {
   promotionStep?: (step: string) => Promise<void> | void;
   extension: string; home?: string; command?: string;
   interactive?: boolean; model?: string; thinking?: string;
+  /** Opt-in to project worker policy, additionally gated by native Pi trust for each cwd. */
+  projectConfig?: boolean;
+  /** The hosting main's actual successful native load, not a discovery-based approximation. */
+  extensions?: () => Promise<ExtensionInventory>;
   /** Version of the running Pi; members use the image built for it. Defaults to the `pi` on PATH. */
   piVersion?: string;
   /** Test hook: samples host headroom without depending on the test machine's load. */
@@ -92,6 +97,8 @@ export class Coordinator {
   private sessionDirs = new Map<string, string>();
   private analysisPolicies = new Map<string, ReturnType<typeof analysisPolicy>>();
   private sandbox?: { status: SandboxStatus; at: number };
+  private extensionNudges = new Set<string>();
+  private extensionInventories = new Map<string, ExtensionInventory>();
 
   private options: CoordinatorOptions;
   /** The main session hosting this coordinator. */
@@ -165,6 +172,7 @@ export class Coordinator {
       this.connections.delete(socket);
       if (bound && this.sockets.get(bound) === socket) {
         this.sockets.delete(bound);
+        if (isMain(this.store.state.members[bound])) this.extensionInventories.delete(bound);
         if (!this.closed) {
           this.store.update(state => {
             const member = state.members[bound!];
@@ -203,6 +211,11 @@ export class Coordinator {
           if (previous && previous !== socket && !previous.destroyed) throw new Error("Member already connected");
           const args = value.args;
           if (!isRecord(args) || typeof args.sessionId !== "string" || typeof args.sessionFile !== "string" || !Array.isArray(args.tools) || !["team_agent", "team_task", "team_message"].every(name => Array.isArray(args.tools) && args.tools.includes(name))) throw new Error("Incomplete ac-teams readiness handshake");
+          const loadedPaths = Array.isArray(args.extensionPaths) && args.extensionPaths.length <= 1024 && args.extensionPaths.every(path => typeof path === "string" && path.length <= 8192) ? args.extensionPaths as string[] : undefined;
+          if (main) {
+            this.extensionInventories.delete(member.id);
+            if (loadedPaths) this.extensionInventories.set(member.id, await extensionInventory(member.cwd, undefined, loadedPaths.filter(path => path !== this.options.extension)));
+          }
           if (main) {
             // A main session's identity never changes; its transcript may live anywhere the user keeps sessions.
             if (member.sessionId && args.sessionId !== member.sessionId) throw new Error("This main session's record belongs to another Pi session");
@@ -220,6 +233,17 @@ export class Coordinator {
           const assigned = this.sessionDirs.get(member.id) ?? this.memberSessionDir(member.id);
           if (!assigned || !within(resolve(args.sessionFile as string), assigned)) throw new Error("Member session file is outside its assigned directory");
           if (args.trusted !== true) throw new Error("Pi skipped protected project resources. Approve the member cwd with Pi's /trust command before retrying; ac-teams never auto-approves a project.");
+          const seeded = this.extensionInventories.get(member.id);
+          if (member.extensions) {
+            if (!loadedPaths || !seeded) throw new Error("Missing actual loaded-extension handshake");
+            const allowed = new Set([...seeded.entries.filter(entry => entry.enabled).map(entry => entry.path), this.options.extension]);
+            if (loadedPaths.some(path => !allowed.has(path))) throw new Error("Member loaded an extension outside its parent seed");
+            for (const required of member.extensions.required) {
+              const entry = seeded.entries.find(entry => entry.id === required);
+              if (!entry || !loadedPaths.includes(entry.path)) throw new Error(`Required extension did not load: ${required}`);
+            }
+            this.extensionInventories.set(member.id, { ...seeded, entries: seeded.entries.map(entry => ({ ...entry, enabled: entry.enabled && loadedPaths.includes(entry.path) })) });
+          }
           this.store.update(state => {
             state.members[member.id].sessionId = args.sessionId as string;
             state.members[member.id].sessionFile = args.sessionFile as string;
@@ -505,6 +529,36 @@ export class Coordinator {
         this.store.update(next => { next.members[id].worktree = member.worktree; next.members[id].cwd = member.cwd; });
       }
       if (this.closed || this.store.state.members[id].status !== "starting") throw new Error("Launch was stopped before startup");
+      const slash = args.model.indexOf("/");
+      const modelId = args.model.slice(slash + 1);
+      // Each member gets its own transcript directory, so a sandboxed member cannot read or alter others.
+      const sessions = resumed?.sessionFile ? dirname(resumed.sessionFile) : this.memberSessionDir(id);
+      mkdirSync(sessions, { recursive: true, mode: 0o700 });
+      this.sessionDirs.set(id, sessions);
+      const { config } = workerConfiguration(member.cwd, this.options.projectConfig === true && projectTrusted(member.cwd));
+      const inventory = actor === this.self ? await this.options.extensions?.() : this.extensionInventories.get(actor);
+      if (!inventory) throw new Error("Actual parent extensions are unavailable. Reload Pi on a supported version; ac-teams will not substitute discovered extensions.");
+      // Without a configured policy, preserve the parent's capabilities, never discover extra code in the child cwd.
+      const implicit = { defaultPreset: "parent", required: [], presets: { parent: { extensions: "all" as const } } };
+      const selection = selectExtensions(inventory, config ?? (args.extensions ? undefined : implicit), args.extensions, resumed?.extensions, parent.extensions?.required)!;
+      this.extensionInventories.set(id, { ...inventory, entries: inventory.entries.map(entry => ({ ...entry, enabled: entry.enabled && selection.ids.includes(entry.id) })) });
+      const nudge = !config || (inventory && config.reviewed?.[member.cwd] !== inventory.fingerprint);
+      const nudgeKey = `${member.cwd}:${inventory?.fingerprint ?? "legacy"}`;
+      if (nudge && !this.extensionNudges.has(nudgeKey)) {
+        this.extensionNudges.add(nudgeKey);
+        this.options.warning(config ? "Worker extension inventory changed or is unreviewed. Run /teams config; preset definitions are unchanged. 'all' includes newly enabled IDs. Launch results report selected/excluded IDs." : "Worker extension presets are not configured. Workers retain the actual parent extension set; run /teams config to configure lean workers.");
+      }
+      for (const warning of selection?.warnings ?? []) this.options.warning(warning);
+      member.extensions = selection;
+      this.store.update(next => { next.members[id].extensions = selection; });
+      if (this.closed || this.store.state.members[id].status !== "starting") throw new Error("Launch was stopped before extension selection completed");
+      const rpcArgs = [...(this.options.interactive ? [] : ["--mode", "rpc"]), "--session-dir", sessions, ...(selection && inventory ? selectedExtensionArgs(selection, inventory, this.options.extension) : []), "-e", this.options.extension, "--provider", provider, "--model", modelId, "--thinking", args.thinking ?? "off"];
+      if (resumed?.sessionFile) rpcArgs.push("--session", resumed.sessionFile);
+      // ACSTACK_AGENT_ROLE tells ACStack hooks this is not a main session; children inherit it.
+      const identity = { ...(selection?.heapMb ? { NODE_OPTIONS: workerNodeOptions(process.env.NODE_OPTIONS, selection.heapMb) } : {}), PI_LENS_WARM_ATTACH: policy.warmAttach, HERDR_ENV: "0", ACSTACK_AGENT_ROLE: "member", AC_TEAMS_SOCKET: this.socketPath, AC_TEAMS_MEMBER: id, AC_TEAMS_TOKEN: member.token, AC_TEAMS_ACCESS: JSON.stringify(access ? { enforced: true, ...access } : { enforced: false }) };
+      const spawnOptions = access
+        ? await this.sandboxed(id, access, member.cwd, provider, modelId, rpcArgs, identity, sessions)
+        : { cwd: member.cwd, args: rpcArgs, command: this.options.command, env: { ...process.env, ...identity, AC_TEAMS_TERMINAL_SOCKET: join(this.store.dir, "t.sock") } };
       const readiness = new Promise<void>((done, fail) => {
         this.ready.set(id, { resolve: done, reject: fail });
         // Enforced members start with an empty compile cache, so Pi recompiles TypeScript extensions (about 20 s here).
@@ -512,19 +566,6 @@ export class Coordinator {
       });
       // Attach immediately: a spawn error must not leave a rejected readiness promise unobserved.
       void readiness.catch(() => {});
-      const slash = args.model.indexOf("/");
-      const modelId = args.model.slice(slash + 1);
-      // Each member gets its own transcript directory, so a sandboxed member cannot read or alter others.
-      const sessions = resumed?.sessionFile ? dirname(resumed.sessionFile) : this.memberSessionDir(id);
-      mkdirSync(sessions, { recursive: true, mode: 0o700 });
-      this.sessionDirs.set(id, sessions);
-      const rpcArgs = [...(this.options.interactive ? [] : ["--mode", "rpc"]), "--session-dir", sessions, "-e", this.options.extension, "--provider", provider, "--model", modelId, "--thinking", args.thinking ?? "off"];
-      if (resumed?.sessionFile) rpcArgs.push("--session", resumed.sessionFile);
-      // ACSTACK_AGENT_ROLE tells ACStack hooks this is not a main session; children inherit it.
-      const identity = { PI_LENS_WARM_ATTACH: policy.warmAttach, HERDR_ENV: "0", ACSTACK_AGENT_ROLE: "member", AC_TEAMS_SOCKET: this.socketPath, AC_TEAMS_MEMBER: id, AC_TEAMS_TOKEN: member.token, AC_TEAMS_ACCESS: JSON.stringify(access ? { enforced: true, ...access } : { enforced: false }) };
-      const spawnOptions = access
-        ? await this.sandboxed(id, access, member.cwd, provider, modelId, rpcArgs, identity, sessions)
-        : { cwd: member.cwd, args: rpcArgs, command: this.options.command, env: { ...process.env, ...identity, AC_TEAMS_TERMINAL_SOCKET: join(this.store.dir, "t.sock") } };
       agent = this.options.interactive
         ? new TerminalAgent({ ...spawnOptions, id, dir: this.store.dir, request: (type, fields, timeout) => this.control(id, type, fields, timeout) })
         : new RpcAgent(spawnOptions);

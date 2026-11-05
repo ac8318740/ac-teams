@@ -19,7 +19,7 @@ Root policy precedence, from lowest to highest:
 3. `.pi/ac-teams.json`, only with `--teams-project-config`
 4. Explicit `--teams-limit` and `--teams-depth` flags
 
-Config files accept only `limit` and `depth`, for example `{"limit":4,"depth":2}`. Limits must be 1–100; depth must be 0–10.
+Config files accept `limit`, `depth`, and `workers`, for example `{"limit":4,"depth":2}`. Limits must be 1–100; depth must be 0–10. Worker extension policy is described below.
 
 A limit above 10 requires an explicit root startup flag or interactive confirmation of a root `limits` tool request. Configuration alone cannot raise it. Lowering limits does not kill existing members; it blocks further launches until capacity fits.
 
@@ -53,7 +53,67 @@ Choose concurrency using resource readings and observed progress. These advisori
 
 Idle members keep Pi and its extensions alive. Stop unneeded members to release their owned processes, then resume their saved sessions when needed.
 
-This preserves transcripts, tasks, messages, and worktrees. Extension-owned language servers and scanners can dominate memory; ac-teams does not disable checks or manage their processes.
+This preserves transcripts, tasks, messages, and worktrees. Extension-owned language servers and scanners can dominate memory. Choose smaller worker extension presets before startup; ac-teams does not manage an extension's own processes or share its indexes.
+
+### Configure lean workers without adding extensions
+
+Every worker starts a separate native Pi process. Its extensions are a subset of the running parent's **actually loaded** extensions, plus the required ac-teams coordination extension. An extension merely installed on disk, enabled in settings, or present in the child's cwd does not grant permission to load it.
+
+Nested delegation can only narrow the set.
+
+Run `/teams config`, choose **Worker extensions**, and review the editor:
+
+- `worker` initially lists the current parent's seedable extension IDs. Remove optional entries to make it lean.
+- `full` uses `"extensions": "all"`, meaning all current parent-loaded extensions, not all installed extensions.
+- `minimal` initially has no optional extensions.
+- `required` identifies safety and provider/auth extensions that every worker must retain. Confirm this list yourself; ac-teams does not infer dependencies or classify plugins by name.
+- Optional `heapMb` sets V8's old-space allowance for that preset. It is not an RSS limit. There is no automatic cap; trial a value on representative work before adopting it.
+
+Coordination is always injected from the running ac-teams copy. Required extensions are added to every preset, inherited by descendants, and cannot be excluded. A smaller preset removes the tools and checks supplied by its omitted extensions; keep a suitably equipped coordinator or verifier.
+
+The editor shows effective policy, source files, and available IDs without importing candidate extension factories. User defaults live in `~/.pi/ac-teams/config.json` under `workers`. Trusted project overrides live in `.pi/ac-teams.json` and also require `--teams-project-config`.
+
+Project presets override user presets by name; required lists are combined, never weakened.
+
+Example policy (replace the extension IDs with those shown by your inventory):
+
+```json
+{
+  "workers": {
+    "defaultPreset": "worker",
+    "required": ["user:extensions/safety.ts"],
+    "presets": {
+      "worker": {"extensions": [], "heapMb": 1536},
+      "full": {"extensions": "all"},
+      "minimal": {"extensions": []}
+    }
+  }
+}
+```
+
+Launch overrides use exact IDs, for example `extensions: {preset: "worker", include: ["user:extensions/helper.ts"]}`. `exclude` removes optional IDs. `include` can restore only an extension available in that parent, never a child-cwd or installed-but-unloaded extension.
+
+A missing preset or required extension fails rather than silently loading everything.
+
+Without configuration, workers retain the seedable parent set and receive a configuration nudge. This deliberately replaces unrestricted native child discovery: changing cwd must not expand the parent's extension set. Saved older members without a selection use this parent ceiling on their next launch.
+
+`/teams config` is rerunnable. Added entries, version changes, and ordinary edits within a package change its inventory fingerprint and trigger one nudge per distinct inventory per coordinator. Preset definitions are never rewritten automatically.
+
+New launches using `all` can include newly **parent-loaded** extensions; explicit ID lists cannot. Launch/status records report selected, required, excluded, and unavailable IDs.
+
+Fingerprints track package-tree file metadata, not a cryptographic integrity boundary. Standalone-file helpers, nested dependencies, and changes preserving metadata require manual review. Built-ins are inventoried when observed in the parent or explicitly named in settings.
+
+Inline, non-file extension factories cannot be replayed in another process. In a restricted member, selected files must also be readable through its approved runtime or access mounts; selection never broadens filesystem grants.
+
+Resume retains saved IDs and the heap choice, uses current installed code, and reports changed fingerprints. Missing optional IDs are skipped with a warning but remain recorded; missing required IDs fail. Adding a new required ID outside the pinned selection requires a new launch.
+
+Resume cannot accept a new preset or include/exclude list. A parent that no longer has an extension loaded cannot restore it to a worker.
+
+Loaded-set observation temporarily watches stock Pi's `DefaultResourceLoader.getExtensions` during initialization and matches this ac-teams registration. It needs no custom Pi build. Real terminal and RPC tests cover Pi 1.4.0.
+
+This is not a dedicated extension enumeration hook: if a host version no longer exposes the actual set, worker launches fail closed instead of guessing from tools, settings, or files.
+
+Terminal launches forward controlled heap, Pi configuration directory, analysis, and proxy-attachment settings explicitly, instead of reusing stale tmux-server values. They do not forward arbitrary per-launch environment variables. This feature does not share heaps, indexes, or language servers, estimate an optimal agent count, or promise a fixed memory saving.
 
 ### Choose pi-lens reuse or separate analysis
 
@@ -81,7 +141,7 @@ The footer refreshes at the same interval without fetching message history. The 
 
 ## Display preferences are global
 
-`/teams config` saves task-summary and agent-selector visibility to `~/.pi/ac-teams/display.json`:
+`/teams config` → **Display** saves task-summary and agent-selector visibility to `~/.pi/ac-teams/display.json`:
 
 ```json
 {"tasks":true,"agents":true}
