@@ -42,6 +42,7 @@ function fixture() {
     getThinkingLevel() { return "low"; },
     getAllTools() { return [...tools.values(), { name: "Agent" }]; },
     sendMessage(message: unknown) { messages.push(message); },
+    sendUserMessage(message: unknown) { messages.push(message); },
     appendEntry(customType: string, data: unknown) { entries.push({ type: "custom", id: randomUUID(), customType, data }); },
     getActiveTools() { return active; }, setActiveTools(names: string[]) { active = names; },
   };
@@ -73,6 +74,26 @@ function fixture() {
     },
   };
 }
+
+test("/teams config starts a Pi conversation without an editor or menu", async () => {
+  const f = fixture();
+  try {
+    await f.event("session_start");
+    const ctx = { ...f.ctx, mode: "tui" as const, ui: { ...f.ctx.ui,
+      select: async () => { assert.fail("No configuration menu"); },
+      editor: async () => { assert.fail("No file editor"); },
+    } };
+    await f.commands.get("teams")!.handler("config", ctx);
+    assert.equal(f.messages.length, 1);
+    assert.match(String(f.messages[0]), /through a conversation/);
+    assert.match(String(f.messages[0]), /team_config with action read/);
+    assert.ok(f.active.includes("team_config"));
+    const snapshot = await f.execute("team_config", { action: "read" }) as { projectAllowed: boolean; inventory: unknown[] };
+    assert.equal(snapshot.projectAllowed, false);
+    assert.ok(Array.isArray(snapshot.inventory));
+    assert.equal(existsSync(join(f.home, ".pi", "ac-teams", "config.json")), false);
+  } finally { await f.close(); }
+});
 
 test("team navigation wraps editors installed by later session_start handlers", async () => {
   const f = fixture();
