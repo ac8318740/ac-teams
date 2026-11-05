@@ -9,7 +9,7 @@ import { readTelemetry } from "./telemetry.ts";
 import { resolveTeammate, teamsCompletions } from "./commands.ts";
 import { showTeamsPanel } from "./panel.ts";
 import { teamToolRenderers, teamMessageRenderer, cleanText } from "./render.ts";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
@@ -73,23 +73,49 @@ export default function teams(pi: ExtensionAPI) {
   const warn = (message: string) => { ownWarnings.add(`Warning: ${message}`); context?.ui.notify(message, "warning"); };
   /** Highest notice handed to Pi, and highest found persisted in this session and acknowledged. */
   let sent = 0, acked = 0;
+  let ackPending: object | undefined;
+  const attention = { busy: false, blocked: false };
+  const setAttention = (kind: "busy" | "blocked", active: boolean) => {
+    if (attention[kind] === active) return;
+    attention[kind] = active;
+    pi.events.emit(`herdr:${kind}`, { active, source: "ac-teams" });
+  };
+  const receiveAttention = (value: typeof attention) => {
+    setAttention("busy", value.busy);
+    setAttention("blocked", value.blocked);
+  };
+  const receiptIdentity = () => ({ team: coordinator?.store.state.id ?? (child ? basename(dirname(environment[0]!)) : teamId(context!)), member: memberId() });
+  const resetReceipts = () => { sent = acked = 0; ackPending = undefined; };
   const notify = (through: number, messages: Message[] = []) => {
     if (through <= sent) return;
     // Unacknowledged posts are offered again; show each one once.
     messages = messages.filter(message => message.seq > sent);
-    sent = through;
     const labels = memberLabels(), name = (id: string) => labels[id] ?? id;
-    const lines = messages.map(message => `[${message.seq}] ${name(message.from)}${message.kind === "outcome" ? " completed" : ""}${message.task ? ` ${name(message.task)} [${message.task}]` : ""}: ${message.summary}${message.detail ? " (detail via team_message history)" : ""}`);
-    pi.sendMessage({ customType: "ac-teams", content: `Team posts:\n${lines.join("\n")}\nAct only if one needs you. Fetch detail only to settle a question about your own work.`, display: true, details: { through, messages } }, { deliverAs: "steer", triggerTurn: true });
+    const lines = messages.map(message => `[${message.seq}] ${name(message.from)}${message.kind === "outcome" ? " completed" : ""}${message.task ? ` ${name(message.task)} [${message.task}]` : ""}: ${message.summary}${message.detail ? ` (detail: team_message history seq=${message.seq} includeDetail=true)` : ""}`);
+    pi.sendMessage({ customType: "ac-teams", content: `Team posts:\n${lines.join("\n")}\nAct only if one needs you. Fetch detail only to settle a question about your own work.`, display: true, details: { ...receiptIdentity(), through, messages } }, { deliverAs: "steer", triggerTurn: true });
+    sent = through;
   };
   /** Acknowledges notices only once they are durable session entries, so a crash before persistence redelivers them. */
   const reconcile = (ctx: ExtensionContext) => {
-    const through = ctx.sessionManager.getEntries().reduce((max, entry) => entry.type === "custom_message" && entry.customType === "ac-teams" ? Math.max(max, Number((entry.details as { through?: number } | undefined)?.through) || 0) : max, 0);
+    const identity = receiptIdentity();
+    const through = ctx.sessionManager.getEntries().reduce((max, entry) => {
+      if (entry.type !== "custom_message" || entry.customType !== "ac-teams") return max;
+      const receipt = entry.details as { team?: string; member?: string; through?: number } | undefined;
+      return receipt?.team === identity.team && receipt.member === identity.member && Number.isSafeInteger(receipt.through) ? Math.max(max, receipt.through!) : max;
+    }, 0);
     sent = Math.max(sent, through);
-    if (through <= acked || (!connection && !coordinator)) return;
-    acked = through;
-    if (connection) void connection.request("ack", { through }).catch(error => warn(String(error)));
-    else coordinator?.ack(coordinator.self, through);
+    if (through <= acked || ackPending || (!connection && !coordinator)) return;
+    if (connection) {
+      const pending = ackPending = {};
+      void connection.request("ack", { through }).then(() => {
+        if (ackPending !== pending) return;
+        acked = through; ackPending = undefined;
+        reconcile(ctx);
+      }).catch(error => { if (ackPending === pending) { ackPending = undefined; warn(String(error)); } });
+    } else {
+      try { coordinator!.ack(coordinator!.self, through); acked = through; }
+      catch (error) { warn(String(error)); }
+    }
   };
   function disable(reason: string) {
     disabled = reason;
@@ -131,10 +157,12 @@ export default function teams(pi: ExtensionAPI) {
     const link = new Connection(socket, record.id, record.token);
     try { await link.open(); } catch { return false; }
     link.on("notice", (through, messages) => notify(through, messages));
+    link.on("attention", receiveAttention);
     link.on("command", onCommand(ctx, link));
     link.on("disconnect", () => {
       if (connection !== link) return;
       connection = undefined;
+      receiveAttention({ busy: false, blocked: false });
       if (!exiting) void takeover(ctx);
     });
     try { await link.request("join", { sessionId: ctx.sessionManager.getSessionId(), sessionFile: ctx.sessionManager.getSessionFile(), tools: pi.getAllTools().map(tool => tool.name), trusted: ctx.isProjectTrusted(), extensionPaths: loadedPaths }); }
@@ -183,7 +211,7 @@ export default function teams(pi: ExtensionAPI) {
       ...policy(ctx.cwd, pi.getFlag("teams-project-config") === true, { limit: pi.getFlag("teams-limit") as string | undefined, depth: pi.getFlag("teams-depth") as string | undefined }),
       extension: fileURLToPath(import.meta.url), notice: notify, warning: warn, piVersion: VERSION,
       projectConfig: pi.getFlag("teams-project-config") === true, extensions: parentInventory,
-      status: (kind, active) => pi.events.emit(`herdr:${kind}`, { active, source: "ac-teams" }),
+      status: setAttention,
       credentials: async (provider, modelId) => {
         // Only providers whose request shape was verified are brokered; anything else fails closed.
         const registry = (context ?? ctx).modelRegistry, model = registry.find(provider, modelId), route = providerRoutes[provider];
@@ -332,7 +360,7 @@ export default function teams(pi: ExtensionAPI) {
   const taskTrackingGuidance = "Before delegating a deliverable through team_agent, create or reuse a team_task and pass it as the launch task; its owner's completion outcome reports back to you. Use one shared task list for your own work and delegated work; do not create one task per teammate by default. Quick lookups and brief second opinions need no separate task unless their results need coordination or follow-up.";
   const teamAgentTool = {
     name: "team_agent", label: "Team agent", description: "Launch/resume Pi members, list/status, stop owned subtrees, change root limits, and explicitly clean stopped worktrees. Create or reuse team_task entries for delegated deliverables; quick lookups need no task unless results need coordination or follow-up.",
-    promptGuidelines: [guidance, taskTrackingGuidance, "Analysis defaults to auto: request existing pi-lens same-workspace reuse, possibly from sessions outside this team. If pi-lens is absent or disabled, launch proceeds without enabling it. Explicit environment opt-outs win; restricted members stay separate. Choose analysis: separate for different environments or rules, uncertain compatibility, suspicious diagnostics, or independent analyzer state. Different assignments alone do not require separation. This is a launch/resume preference, not proof of attachment or compatibility; an existing leader participates only if warm attach was already enabled there.", "Delegation needs the user's authorization. Give each new member a unique descriptive name (one or two lowercase words, hyphenated if two), plus a bounded brief. Names remain stable on resume. Avoid concurrent writers in the same cwd. Worktrees are opt-in."],
+    promptGuidelines: ["Prefer parallel execution for independent, meaningful work when it is likely to shorten completion time. Establish shared interfaces and launch independent work early rather than implementing it yourself first. The lead may orchestrate, implement, or combine both, whichever gets to a correct, maintainable, verified result fastest. Give each implementer a coherent outcome, including tests. Avoid duplicate work and unnecessary handoffs; do not split planning, implementation, and testing into mandatory separate roles. Keep small or tightly coupled tasks solo. Fresh scrutiny or context isolation can also justify delegation. Preserve project-required checks and independent review.", guidance, taskTrackingGuidance, "Analysis defaults to auto: request existing pi-lens same-workspace reuse, possibly from sessions outside this team. If pi-lens is absent or disabled, launch proceeds without enabling it. Explicit environment opt-outs win; restricted members stay separate. Choose analysis: separate for different environments or rules, uncertain compatibility, suspicious diagnostics, or independent analyzer state. Different assignments alone do not require separation. This is a launch/resume preference, not proof of attachment or compatibility; an existing leader participates only if warm attach was already enabled there.", "You may delegate within the user's approved task unless the user restricts delegation. This does not expand filesystem, network, spending, or publishing permissions. Give each new member a unique descriptive name (one or two lowercase words, hyphenated if two), plus a bounded brief. Names remain stable on resume. Avoid concurrent writers in the same cwd. Worktrees are opt-in."],
     parameters: AgentSchema,
     ...teamToolRenderers("team_agent", memberLabels, memberId),
     async execute(_id, args, _signal, _update, ctx) { return output(await handle("agent", args, ctx)); },
@@ -352,7 +380,7 @@ export default function teams(pi: ExtensionAPI) {
       "Use team_task before substantial work with 3+ steps, when the user gives an explicit task list, or when coordinating deliverables. This includes your own research, design, implementation, and verification; no teammate is required. Skip single trivial tasks, conversation, and tool-by-tool bookkeeping.",
       "Before creating team_task entries, identify the outputs each task needs from other tasks. If it cannot start correctly without another task's verified output, record that prerequisite in dependencies (UUID or @key within a create batch). Consider shared contracts/setup before consumers, implementation before integration verification, and multiple outputs before final assembly. Keep independent work parallel; never add edges just to make a graph. Reassess dependencies when scope changes.",
       "Create connected team_task plans atomically with batch keys: tasks:[{key:'worker',title:'Worker'},{title:'Bridge',dependencies:['@worker']}]. Dependencies accept existing UUIDs and @key references to any entry in this batch, including later entries. Include every required prerequisite; all prerequisites must be done before start. Before starting or delegating, check that the recorded dependencies match the outputs each task needs; creating tasks together does not make them independent. Keys are batch-only; use returned UUIDs in later calls. Titles are required; labels and descriptions default from titles. Include acceptance criteria for substantial or delegated work. Reuse relevant existing tasks rather than duplicating them.",
-      "Call team_task start BEFORE beginning a task; it claims unowned ready work atomically. Use claim only to reserve work in advance, including blocked work. Complete each task IMMEDIATELY after checking its result with acceptance=true; never complete partial work or work with unresolved failures. Report blockers. Each agent should normally work on one task at a time; teammates can work in parallel.",
+      "Call team_task start BEFORE beginning a task; it claims unowned ready work atomically. Use claim only to reserve work in advance, including blocked work. Complete each task IMMEDIATELY when its own acceptance checks pass with acceptance=true; separately assigned review gates parent integration, not child completion, unless its acceptance criteria require it. Never complete partial work or work with unresolved failures. Report blockers. Each agent should normally work on one task at a time; teammates can work in parallel.",
       taskTrackingGuidance, taskRequestGuidance,
       "team_task list returns compact summaries; read a task for its full description and acceptance criteria. Use returned UUIDs for API references and stable task numbers/names when reporting to people. Add dependencies only for real prerequisites, never merely to connect the diagram.",
       "team_task start refuses another owner's task or unfinished dependencies. Complete requires ownership, in-progress work, and acceptance=true. Release clears ownership, returns in-progress work to todo, and leaves done work done. Reopen is explicit and cannot invalidate active or done dependents.",
@@ -367,8 +395,8 @@ export default function teams(pi: ExtensionAPI) {
     },
   });
   pi.registerTool({
-    name: "team_message", label: "Team message", description: "Post to the team board, read history or search, or wait. A post has a required one-line summary that stands alone, optional detail, and links an existing task or replies to a post. It reaches named recipients (teammate names or IDs) plus the linked task's owner and delegator; it is never broadcast. Recipients receive summaries at their next safe point. Wait yields this turn until a post reaches you or lands on the given tasks.",
-    promptGuidelines: ["Post only what changes someone's work: an outcome, a blocker, a question, or new context. Do not acknowledge notices or narrate progress.", "Notices carry summaries; read history only for the detail a question about your own work needs.", "After delegating, do not repeat the delegated work. Do distinct work, or call team_message wait with the delegated task IDs as your last action; never poll history."],
+    name: "team_message", label: "Team message", description: "Post to the team board, read history or search, watch tasks, or pause. A post has a required one-line summary that stands alone, optional detail, and links an existing task or replies to a post. It reaches named recipients (teammate names or IDs) plus the linked task's owner and delegator; it is never broadcast. Recipients receive summaries at their next safe point. Watch registers persistent one-shot task notifications without pausing (completion by default); unwatch cancels them. Wait pauses this turn; unrelated messages do not cancel watches.",
+    promptGuidelines: ["Post only what changes someone's work: an outcome, a blocker, a question, or new context. Task state already records ownership and start; do not announce them or acknowledge notices. team_task complete publishes the outcome; do not send it again.", "Write readable summaries with normal spacing. Put the decision, required action, and critical caveats in the summary; supporting evidence belongs in detail or a referenced artifact.", "Notices carry summaries. History/search return summaries by default; use seq from a notice with includeDetail=true only for evidence your work needs, or task to narrow a relevant discussion. Do not fetch the whole board to catch up on notices.", "After delegating, do not repeat the delegated work. Do distinct work, or call team_message wait as your last action to pause; never poll history. Completion already notifies the task's delegator. Use watch only for additional task notifications (event completed or message); they survive unrelated turns until triggered and delivered or cancelled with unwatch. Register once, not after each message. Wait optionally registers next-message watches for tasks; omit tasks to pause without changing existing watches."],
     parameters: MessageSchema,
     ...teamToolRenderers("team_message", memberLabels, memberId),
     async execute(_id, args, _signal, _update, ctx) {
@@ -376,19 +404,23 @@ export default function teams(pi: ExtensionAPI) {
       const result = await handle("message", args.action === "wait" && args.after === undefined ? { ...args, after: sent } : args, ctx);
       // Nothing ready: end the turn without another model request; the next matching notice starts a new one.
       if (args.action === "wait") return { ...output(result), terminate: (result as Message[]).length === 0 };
+      if (args.action === "watch" || args.action === "unwatch") return output(result);
       if (args.action === "send") {
         const { seq, id, recipients } = result as Message;
         return output({ seq, id, recipients });
       }
-      return output(result);
+      const content = args.includeDetail ? result : (result as Message[]).map(({ detail, ...message }) => ({ ...message, hasDetail: !!detail }));
+      return { content: [{ type: "text" as const, text: JSON.stringify(content) }], details: result };
     },
   });
   async function close() {
     exiting = true;
+    resetReceipts();
     clearInterval(telemetryTimer); telemetryTimer = undefined;
     disposeUI?.(); disposeUI = undefined;
     connection?.close(); connection = undefined;
     if (opening) await (await opening).close();
+    receiveAttention({ busy: false, blocked: false });
     coordinator = undefined; opening = undefined; linkedSession = undefined;
   }
   /** A resumed main session reconnects to its team, or offers to run the coordinator and resume the team's members. */
@@ -453,7 +485,7 @@ export default function teams(pi: ExtensionAPI) {
     const state = readState(dir), name = (id?: string) => id ? memberName(state.members[id] ?? { id }) : "unowned";
     const open = Object.values(state.tasks).filter(task => task.status !== "done");
     const recent = state.messages.slice(-5);
-    pi.sendMessage({ customType: "ac-teams", display: true, details: { joined: { team: state.id, member: team!.member, sessionId }, through: state.messages.at(-1)?.seq ?? 0, messages: recent }, content: [
+    pi.sendMessage({ customType: "ac-teams", display: true, details: { team: state.id, member: team!.member, joined: { team: state.id, member: team!.member, sessionId }, through: state.messages.at(-1)?.seq ?? 0, messages: recent }, content: [
       `Joined team ${state.id} as ${name(team!.member)}, a main session.`,
       open.length ? `Open tasks:\n${open.map(task => `- ${taskName(task)} (${task.status}, ${name(task.owner)})`).join("\n")}` : "No open tasks.",
       recent.length ? `Recent messages:\n${recent.map(message => `- ${name(message.from)}: ${message.summary.split("\n")[0].slice(0, 200)}`).join("\n")}` : "No messages yet.",
@@ -474,13 +506,14 @@ export default function teams(pi: ExtensionAPI) {
   const startSession = async (_event: SessionStartEvent, ctx: ExtensionContext) => {
     loadedPaths ??= observedExtensions(extension => Object.is(extension.tools.get("team_agent")?.definition, teamAgentTool));
     if (!child && linkedSession && linkedSession !== ctx.sessionManager.getSessionId()) { await close(); drafts.clear(); }
-    context = ctx; exiting = false; inputCount = 0; sent = acked = 0;
+    context = ctx; exiting = false; inputCount = 0; resetReceipts();
     if (child) {
       if (environment.some(value => !value)) throw new Error("Incomplete AC_TEAMS membership environment; refusing independent-root fallback");
       const link = new Connection(environment[0]!, environment[1]!, environment[2]!);
       connection = link;
       link.on("notice", (through, messages) => notify(through, messages));
-      link.on("disconnect", () => { warn("Team coordinator disconnected; this member is shutting down"); ctx.abort(); ctx.shutdown(); });
+      link.on("attention", receiveAttention);
+      link.on("disconnect", () => { receiveAttention({ busy: false, blocked: false }); warn("Team coordinator disconnected; this member is shutting down"); ctx.abort(); ctx.shutdown(); });
       link.on("command", onCommand(ctx, link));
       await link.open();
       await link.request("join", { sessionId: ctx.sessionManager.getSessionId(), sessionFile: ctx.sessionManager.getSessionFile(), tools: pi.getAllTools().map(tool => tool.name), trusted: ctx.isProjectTrusted(), extensionPaths: loadedPaths });

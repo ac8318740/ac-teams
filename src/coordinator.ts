@@ -37,6 +37,7 @@ const noticeBatch = 20;
 export function assistantEvent(message: unknown): { type: string; text: string } | undefined {
   if (!isRecord(message) || message.role !== "assistant") return;
   if (message.stopReason === "error") return { type: "model_error", text: String(message.errorMessage || "Model request failed").slice(0, 2000) };
+  if (message.stopReason === "aborted") return { type: "cancelled", text: "" };
   if (message.stopReason !== "stop" || !Array.isArray(message.content)) return;
   const text = message.content.filter(part => isRecord(part) && part.type === "text" && typeof part.text === "string").map(part => part.text).join(" ").trim().split("\n")[0].slice(0, 500);
   return text ? { type: "summary", text } : undefined;
@@ -89,7 +90,7 @@ export class Coordinator {
   private notices = new Map<string, NodeJS.Timeout>();
   private operations = new Set<Promise<unknown>>();
   private closed = false;
-  private status = { busy: false, blocked: false };
+  private statuses = new Map<string, { busy: boolean; blocked: boolean }>();
   private closePromise?: Promise<void>;
   private sandboxes = new Map<string, { egress: Egress; grants: { path: string; fd: number; dev: number; ino: number }[]; release: (go: boolean) => void; refresh: NodeJS.Timeout; token: string }>();
   private plans = new Map<string, SandboxPlan>();
@@ -156,6 +157,7 @@ export class Coordinator {
         coordinator.server!.listen(coordinator.socketPath, () => { chmodSync(coordinator.socketPath, 0o600); done(); });
       });
       coordinator.server.on("error", error => options.warning(error.message));
+      coordinator.publishStatus();
       coordinator.notify(coordinator.self);
       const pass = coordinator.resumePass();
       coordinator.operations.add(pass);
@@ -172,6 +174,7 @@ export class Coordinator {
       this.connections.delete(socket);
       if (bound && this.sockets.get(bound) === socket) {
         this.sockets.delete(bound);
+        this.statuses.delete(bound);
         if (isMain(this.store.state.members[bound])) this.extensionInventories.delete(bound);
         if (!this.closed) {
           this.store.update(state => {
@@ -225,7 +228,7 @@ export class Coordinator {
               current.sessionId = args.sessionId as string; current.sessionFile = args.sessionFile as string;
             });
             this.sockets.set(member.id, socket);
-            this.publishStatus();
+            this.publishStatus(member.id);
             this.notify(member.id);
             return { id: this.store.state.id, member: this.publicMember(this.store.state.members[member.id]), limit: this.store.state.limit, depth: this.store.state.depth };
           }
@@ -249,6 +252,7 @@ export class Coordinator {
             state.members[member.id].sessionFile = args.sessionFile as string;
           });
           this.sockets.set(member.id, socket);
+          this.publishStatus(member.id);
           this.ready.get(member.id)?.resolve();
           this.notify(member.id);
           return { id: this.store.state.id, member: this.publicMember(this.store.state.members[member.id]), limit: this.store.state.limit, depth: this.store.state.depth };
@@ -285,15 +289,22 @@ export class Coordinator {
       send(socket, { type: "command", id, command, args });
     });
   }
-  private publishStatus(): void {
-    const members = this.live().filter(member => member.status !== "stopping");
-    const next = {
-      busy: members.some(member => member.status === "starting" || member.status === "busy"),
-      blocked: members.some(member => member.needsInput),
-    };
-    for (const kind of ["busy", "blocked"] as const) if (next[kind] !== this.status[kind]) {
-      this.status[kind] = next[kind];
-      this.options.status?.(kind, next[kind]);
+  private publishStatus(force?: string): void {
+    const state = this.store.state;
+    for (const id of new Set([this.self, ...this.sockets.keys()])) {
+      const owner = state.members[id];
+      const members = this.live().filter(member => member.status !== "stopping" && isDescendant(state, member.id, id));
+      const next = {
+        busy: !!owner && isLive(owner) && owner.status !== "stopping" && owner.attention !== "handoff" && (owner.attention === "waiting" || members.some(member => member.status === "starting" || member.status === "busy" || member.attention === "waiting")),
+        blocked: members.some(member => member.needsInput),
+      };
+      const previous = this.statuses.get(id);
+      if (id === this.self) {
+        for (const kind of ["busy", "blocked"] as const) if (next[kind] !== (previous?.[kind] ?? false)) this.options.status?.(kind, next[kind]);
+      } else if (id === force || !isDeepStrictEqual(previous, next)) {
+        send(this.sockets.get(id)!, { type: "attention", ...next });
+      }
+      this.statuses.set(id, next);
     }
   }
   recordEvent(actor: string, value: unknown): void {
@@ -309,11 +320,12 @@ export class Coordinator {
       current.modelName = event.modelName;
       current.contextUsage = event.contextUsage ?? undefined;
     }
-    else if (event.type === "agent_start") { delete current.waiting; current.status = "busy"; current.activity = "Working"; delete current.error; delete current.summary; }
+    else if (event.type === "agent_start") { current.status = "busy"; current.activity = "Working"; delete current.error; delete current.summary; if (current.attention === "handoff") delete current.attention; }
     else if (event.type === "agent_settled") { delete current.needsInput; current.status = "idle"; current.activity = current.error ? "Model request failed" : current.summary || "Available for follow-up"; }
     else if (event.type === "activity") current.activity = event.text;
     else if (event.type === "summary") current.summary = event.text?.slice(0, 500);
     else if (event.type === "model_error") current.error = event.text || "Model request failed";
+    if (["summary", "model_error", "cancelled"].includes(event.type)) current.attention = "handoff";
     if (!isDeepStrictEqual(member, current)) {
       this.store.update(next => { next.members[actor] = structuredClone(current); });
       this.publishStatus();
@@ -393,7 +405,11 @@ export class Coordinator {
     if (!Number.isSafeInteger(through) || through < 0 || through > last) throw new Error("Invalid notification cursor");
     if (this.closed) throw new Error("Team is stopping");
     if (through <= this.store.state.members[id].notified) return;
-    this.store.update(state => { state.members[id].notified = through; });
+    this.store.update(state => {
+      const member = state.members[id];
+      member.notified = through;
+      if (member.watches) member.watches = member.watches.filter(watch => watch.seq === undefined || watch.seq > through);
+    });
     // Batches are bounded, so posts beyond the acknowledged batch go out next.
     this.notify(id);
   }
@@ -426,6 +442,10 @@ export class Coordinator {
     if (operation === "task" || operation === "message") {
       const last = this.store.state.messages.at(-1)?.seq ?? 0;
       const result = operation === "task" ? this.store.task(actor, args as TaskArgs) : this.store.message(actor, args as MessageArgs);
+      if (operation === "message" && (args as MessageArgs).action === "wait" && Array.isArray(result) && !result.length) {
+        this.store.update(next => { next.members[actor].attention = "waiting"; });
+        this.publishStatus();
+      }
       for (const message of this.store.state.messages.filter(message => message.seq > last)) for (const id of message.recipients) this.notify(id);
       return result;
     }
@@ -512,10 +532,12 @@ export class Coordinator {
     // Reserve synchronously before the first await so concurrent launches cannot oversubscribe or double-assign.
     this.store.update(next => {
       next.members[id] = member;
+      if (next.members[actor].attention === "handoff") delete next.members[actor].attention;
       if (assigned) Object.assign(next.tasks[assigned.id], { owner: id, delegator: actor, revision: next.tasks[assigned.id].revision + 1 });
     });
     this.analysisPolicies.set(id, policy);
-    const brief = assigned ? `${args.brief}\n\nYou own team task ${taskName(assigned)} [${assigned.id}], delegated by ${memberName(parent)}. Start it only when its prerequisites are done, and finish with team_task complete and an outcome summary; that one call reports back.` : args.brief;
+    const contact = `Your delegator is ${memberName(parent)} (recipient ID: ${actor}). Use that exact ID for direct coordination; task-linked posts already reach the task's delegator.`;
+    const brief = `${args.brief}\n\n${contact}${assigned ? `\nYou own team task ${taskName(assigned)} [${assigned.id}]. Start it only when its prerequisites are done, and finish with team_task complete and an outcome summary; that one call reports back. Complete when your assigned acceptance checks pass; separately assigned review gates parent integration, not your task, unless your criteria require it.` : ""}`;
     this.publishStatus();
     member.model = args.model; member.thinking = args.thinking ?? "off";
     member.terminal = this.options.interactive === true;

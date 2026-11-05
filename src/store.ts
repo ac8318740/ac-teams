@@ -6,7 +6,7 @@ import { validExtensionSelection } from "./worker-extensions.ts";
 import { validatePolicy } from "./egress.ts";
 import { stripVTControlCharacters } from "node:util";
 import { isDescendant, isMain, memberName, memberNamePattern, memberNameMaxLength, taskLabelMaxLength, taskLabelPattern, batchTaskKeyMaxLength, batchTaskKeyPattern } from "./types.ts";
-import type { TeamState, TaskArgs, MessageArgs, Task, TaskView, Message, Worktree } from "./types.ts";
+import type { TeamState, TaskArgs, MessageArgs, Task, TaskView, Message, WatchResult, Worktree } from "./types.ts";
 
 // UI envelopes add task context after the public 16,000-character input limit.
 const maxMessageText = 17000;
@@ -117,10 +117,12 @@ function validate(state: unknown): asserts state is TeamState {
     requireValue(member.handover === undefined || ["busy", "idle", "input"].includes(String(member.handover)), "Invalid member handover state");
     requireValue(member.promotion === undefined || (object(member.promotion) && ["stopped", "moved", "role", "entry"].includes(String(member.promotion.step)) && text(member.promotion.sessionFile)), "Invalid member promotion");
     requireValue(member.waiting === undefined || (object(member.waiting) && Array.isArray(member.waiting.tasks) && member.waiting.tasks.every(task => typeof task === "string" && Object.hasOwn(state.tasks as object, task))), "Invalid member wait");
+    requireValue(member.watches === undefined || (Array.isArray(member.watches) && member.watches.length <= 100 && member.watches.every(watch => object(watch) && typeof watch.task === "string" && Object.hasOwn(state.tasks as object, watch.task) && ["message", "completed"].includes(String(watch.event)) && (watch.seq === undefined || integer(watch.seq, 1)))), "Invalid task watches");
     requireValue(member.analysis === undefined || member.analysis === "auto" || member.analysis === "separate", "Invalid member analysis preference");
     requireValue(member.extensions === undefined || validExtensionSelection(member.extensions), "Invalid member extension selection");
     requireValue(member.terminal === undefined || typeof member.terminal === "boolean", "Invalid member terminal flag");
     requireValue(member.needsInput === undefined || typeof member.needsInput === "boolean", "Invalid member input flag");
+    requireValue(member.attention === undefined || member.attention === "waiting" || member.attention === "handoff", "Invalid member attention");
     requireValue(member.pid === undefined || integer(member.pid, 1), "Invalid member PID");
     requireValue(member.worktree === undefined || validateWorktree(member.worktree), "Invalid member worktree");
     const paths = (value: unknown) => Array.isArray(value) && value.every(path => typeof path === "string" && path.startsWith("/"));
@@ -172,7 +174,7 @@ function validate(state: unknown): asserts state is TeamState {
  * Appends a post. Attention goes to explicit recipients, the linked task's owner and delegator (else creator),
  * and the replied-to post's author; never the sender, and never an implicit broadcast.
  */
-function post(state: TeamState, actor: string, args: Pick<MessageArgs, "recipients" | "summary" | "detail" | "task" | "replyTo">, user = false): Message {
+function post(state: TeamState, actor: string, args: Pick<MessageArgs, "recipients" | "summary" | "detail" | "task" | "replyTo"> & { kind?: "outcome" }, user = false): Message {
   // A user's request is authored in a session but addressed to that session's own model.
   const limit = user ? maxMessageText : 16000;
   requireValue(text(args.summary, limit), `A post needs a nonempty summary of at most ${limit} characters`);
@@ -189,10 +191,19 @@ function post(state: TeamState, actor: string, args: Pick<MessageArgs, "recipien
   const explicit = (args.recipients ?? []).map(recipient => typeof recipient === "string" ? members.find(member => member.id === recipient || member.name === recipient)?.id : undefined);
   requireValue(new Set(explicit).size === explicit.length && explicit.every((recipient): recipient is string => recipient !== undefined), "Recipients must be unique known member names or IDs");
   requireValue(explicit.length > 0 || task || original, "Name recipients, a task, or a post to reply to; posts are never broadcast");
-  const waiters = taskId === undefined ? [] : Object.values(state.members).filter(member => member.waiting?.tasks.includes(taskId)).map(member => member.id);
+  const seq = (state.messages.at(-1)?.seq ?? 0) + 1;
+  const waiters = taskId === undefined ? [] : Object.values(state.members).filter(member => {
+    if (member.id === actor) return false;
+    const matching = member.watches?.filter(watch => watch.task === taskId && watch.seq === undefined && (watch.event === "message" || args.kind === "outcome")) ?? [];
+    for (const watch of matching) watch.seq = seq;
+    const legacy = member.waiting?.tasks.includes(taskId);
+    if (legacy) member.waiting!.tasks = member.waiting!.tasks.filter(task => task !== taskId);
+    return matching.length > 0 || legacy;
+  }).map(member => member.id);
   const routed = [...explicit, task?.owner, task?.delegator ?? task?.creator, original?.from, ...waiters];
   const recipients = [...new Set(routed.filter((id): id is string => !!id && (id !== actor || (user && explicit.includes(id)))))];
-  const message: Message = { seq: (state.messages.at(-1)?.seq ?? 0) + 1, id: randomUUID(), from: actor, recipients, summary: args.summary, time: new Date().toISOString() };
+  const message: Message = { seq, id: randomUUID(), from: actor, recipients, summary: args.summary, time: new Date().toISOString() };
+  if (args.kind) message.kind = args.kind;
   if (args.detail !== undefined) message.detail = args.detail;
   if (taskId !== undefined) message.task = taskId;
   if (original) message.replyTo = original.id;
@@ -423,8 +434,7 @@ export class Store {
         requireValue(task.status === "in_progress", "Only in-progress tasks can be completed; start it first");
         requireValue(args.acceptance === true, "Completion requires acceptance=true after checking acceptance criteria");
         requireValue(text(args.summary), "Completion requires an outcome summary: what was done, how it was checked, and any caveats");
-        const outcome = post(state, actor, { summary: args.summary, detail: args.detail, task: task.id });
-        outcome.kind = "outcome";
+        const outcome = post(state, actor, { summary: args.summary, detail: args.detail, task: task.id, kind: "outcome" });
         task.outcome = outcome.id;
         task.status = "done";
         task.completedAt = Date.now();
@@ -447,26 +457,44 @@ export class Store {
     });
   }
 
-  message(actor: string, args: MessageArgs, enveloped = false): Message | Message[] {
+  message(actor: string, args: MessageArgs, enveloped = false): Message | Message[] | WatchResult {
     requireValue(!this.closed && Object.hasOwn(this.state.members, actor), "Unknown actor or closed store");
     if (args.action === "send") return this.update(state => structuredClone(post(state, actor, args, enveloped)));
-    if (args.action === "wait") return this.update(state => {
+    if (["watch", "unwatch", "wait"].includes(args.action)) return this.update(state => {
       const tasks = args.tasks ?? [];
-      requireValue(Array.isArray(tasks) && tasks.length <= 100 && tasks.every(task => Object.hasOwn(state.tasks, task)), "Wait tasks must be existing task IDs");
-      // Register and recheck in one mutation, so a post committed after the caller last looked still wakes it.
-      const after = args.after ?? state.members[actor].notified;
-      const ready = state.messages.filter(message => message.seq > after && (message.recipients.includes(actor) || (message.task !== undefined && tasks.includes(message.task))));
-      if (ready.length) delete state.members[actor].waiting;
-      else state.members[actor].waiting = { tasks: [...new Set(tasks)] };
-      return structuredClone(ready);
+      requireValue(Array.isArray(tasks) && tasks.length <= 100 && tasks.every(task => typeof task === "string" && Object.hasOwn(state.tasks, task)), "Watch tasks must be existing task IDs");
+      requireValue(args.action !== "watch" || tasks.length > 0, "Watch requires 1-100 tasks");
+      requireValue(args.event === undefined || args.event === "message" || args.event === "completed", "Invalid watch event");
+      const member = state.members[actor];
+      const watches = member.watches ??= [];
+      if (args.action === "unwatch") {
+        member.watches = watches.filter(watch => !((tasks.length === 0 || tasks.includes(watch.task)) && (args.event === undefined || watch.event === args.event)));
+        if (args.event === undefined || args.event === "message") {
+          if (tasks.length === 0) delete member.waiting;
+          else if (member.waiting) member.waiting.tasks = member.waiting.tasks.filter(task => !tasks.includes(task));
+        }
+        return { watching: structuredClone(member.watches), updates: [] };
+      }
+      const event = args.event ?? (args.action === "wait" ? "message" : "completed");
+      const after = args.after ?? member.notified;
+      requireValue(integer(after), "Invalid notification cursor");
+      // Check and register atomically; completion watches also catch tasks already done.
+      const ready = state.messages.filter(message => (args.action === "wait" && message.seq > after && message.recipients.includes(actor)) || (message.task !== undefined && tasks.includes(message.task) && (event === "message" ? message.from !== actor && message.seq > after : message.id === state.tasks[message.task].outcome)));
+      for (const task of new Set(tasks)) {
+        if (!ready.some(message => message.task === task && (event === "message" || message.id === state.tasks[task].outcome)) && !watches.some(watch => watch.task === task && watch.event === event)) watches.push({ task, event });
+      }
+      requireValue(watches.length <= 100, "At most 100 task watches per member");
+      return args.action === "wait" ? structuredClone(ready) : { watching: structuredClone(watches), updates: structuredClone(ready) };
     });
     requireValue(args.action === "history" || args.action === "search", "Unknown message action");
     const after = args.after ?? 0, limit = args.limit ?? 20;
     requireValue(integer(after) && integer(limit, 1) && limit <= 100, "Invalid cursor or limit (1-100)");
     if (args.action === "search") requireValue(text(args.query, 500), "Search requires a nonempty query (max 500)");
+    if (args.task !== undefined) requireValue(Object.hasOwn(this.state.tasks, args.task), "History/search task must be an existing task ID");
+    if (args.seq !== undefined) requireValue(integer(args.seq, 1), "Invalid message sequence");
     const results = [];
     for (const message of this.state.messages) {
-      if (message.seq > after && (args.action !== "search" || (message.summary.includes(args.query!) || !!message.detail?.includes(args.query!)))) results.push(message);
+      if (message.seq > after && (args.task === undefined || message.task === args.task) && (args.seq === undefined || message.seq === args.seq) && (args.action !== "search" || (message.summary.includes(args.query!) || !!message.detail?.includes(args.query!)))) results.push(message);
       if (results.length === limit) break;
     }
     return structuredClone(results);
