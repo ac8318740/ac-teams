@@ -429,6 +429,8 @@ export default function teams(pi: ExtensionAPI) {
       await root(ctx, { id: chosen.id, member });
       remember({ team: chosen.id, member });
     }
+    startTelemetry(ctx);
+    installUI(ctx);
     const state = readState(dir), name = (id?: string) => id ? memberName(state.members[id] ?? { id }) : "unowned";
     const open = Object.values(state.tasks).filter(task => task.status !== "done");
     const recent = state.messages.slice(-5);
@@ -480,13 +482,14 @@ export default function teams(pi: ExtensionAPI) {
       if (competitors.length) warn(`Other delegation tools are active (${competitors.map(tool => tool.name).join(", ")}). ac-teams limits do not cover them; disable competing launchers for a single team authority.`);
     }
   });
-  // CLI-loaded teammates run session_start before other extensions install their editors.
-  pi.on("resources_discover", (_event, ctx) => {
+  function installUI(ctx: ExtensionContext) {
     if (ctx.mode !== "tui") return;
     try { Object.assign(display, readDisplaySettings()); }
     catch (error) { Object.assign(display, defaultDisplaySettings); warn(String(error)); }
     disposeUI?.(); disposeUI = installTeamFooter(pi, ctx, host(ctx), display);
-  });
+  }
+  // CLI-loaded teammates run session_start before other extensions install their editors.
+  pi.on("resources_discover", (_event, ctx) => installUI(ctx));
   pi.on("session_shutdown", close);
   const switchGuard = () => {
     if (child || coordinator?.live().length || connection) {

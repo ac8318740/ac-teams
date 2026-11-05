@@ -13,7 +13,7 @@ import { cleanText } from "../src/render.ts";
 import { theme } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import teams from "../src/index.ts";
 import { taskRequestGuidance } from "../src/coordinator.ts";
-import { Store, teamsHome } from "../src/store.ts";
+import { Store, readState, teamsHome } from "../src/store.ts";
 import { teamEntryType } from "../src/mains.ts";
 
 // SAFETY: this bounded test double implements only the Pi host calls used by the extension.
@@ -496,6 +496,46 @@ test("explicit join connects to the live sender before sharing its tasks", async
     assert.equal(joined.details.joined.team, sender.id);
     assert.equal(joined.details.joined.sessionId, receiver.id);
     assert.ok(joined.details.joined.member);
+  } finally { await receiver?.close(); await sender.close(); }
+});
+
+for (const live of [false, true]) test(`joining a ${live ? "live" : "stopped"} team restores panels and telemetry`, async () => {
+  const sender = fixture();
+  let receiver: ReturnType<typeof fixture> | undefined;
+  type Factory = NonNullable<ReturnType<ExtensionContext["ui"]["getEditorComponent"]>>;
+  const previous: Factory = () => { throw new Error("Editor is not needed for rendering widgets"); };
+  let active: Factory | undefined = previous;
+  const widgets = new Map<string, Component>();
+  initTheme("dark");
+  try {
+    const team = live ? sender.id : seedTeam(sender, randomUUID());
+    if (live) await sender.execute("team_task", { action: "create", title: "Shared work" });
+    receiver = fixture();
+    process.env.HOME = sender.home;
+    Object.assign(receiver.ctx, { cwd: sender.home, mode: "tui" });
+    Object.assign(receiver.ctx.ui, {
+      getEditorComponent: () => active,
+      setEditorComponent(factory: Factory | undefined) { active = factory; },
+      setWidget(key: string, factory: ((...args: unknown[]) => Component) | undefined) {
+        if (key !== "ac-teams-tasks" && key !== "ac-teams-agents") return;
+        if (factory) widgets.set(key, factory({ requestRender() {} }, theme));
+        else widgets.delete(key);
+      },
+      setStatus() {},
+    });
+    await receiver.event("session_start");
+    await receiver.event("resources_discover");
+    assert.equal(widgets.size, 2, "startup installs both widgets");
+    await receiver.commands.get("teams")!.handler(`join ${team}`, receiver.ctx);
+    assert.equal(widgets.size, 2, "join reinstalls both widgets without another resources_discover event");
+    assert.notEqual(active, previous, "join reinstalls editor navigation");
+    const member = (receiver.entries.at(-1)!.data as { member: string }).member;
+    await until(() => readState(join(teamsHome(), team)).members[member]?.model === "test/model");
+    await until(() => widgets.get("ac-teams-agents")!.render(200).some(row => row.includes("● main-")));
+    if (live) await until(() => widgets.get("ac-teams-tasks")!.render(200).some(row => row.includes("Shared work")));
+    await receiver.event("session_shutdown");
+    assert.equal(widgets.size, 0, "shutdown removes the replacement widgets");
+    assert.equal(active, previous, "shutdown restores the original editor");
   } finally { await receiver?.close(); await sender.close(); }
 });
 
