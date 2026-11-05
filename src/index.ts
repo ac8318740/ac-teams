@@ -57,7 +57,7 @@ export default function teams(pi: ExtensionAPI) {
       return cachedLabels(child ? dirname(environment[0]!) : join(teamsHome(), teamId(context!)));
     } catch { return { root: "Main" }; } // A transcript can render before its team is available.
   }
-  pi.registerMessageRenderer("ac-teams", teamMessageRenderer(memberLabels));
+  pi.registerMessageRenderer("ac-teams", teamMessageRenderer(memberLabels, memberId));
   /** Warnings this extension showed, so a folded team block can absorb its own (Pi prints them as "Warning: ..."). */
   const ownWarnings = new Set<string>();
   const warn = (message: string) => { ownWarnings.add(`Warning: ${message}`); context?.ui.notify(message, "warning"); };
@@ -323,7 +323,7 @@ export default function teams(pi: ExtensionAPI) {
     name: "team_agent", label: "Team agent", description: "Launch/resume Pi members, list/status, stop owned subtrees, change root limits, and explicitly clean stopped worktrees. Create or reuse team_task entries for delegated deliverables; quick lookups need no task unless results need coordination or follow-up.",
     promptGuidelines: [guidance, taskTrackingGuidance, "Analysis defaults to auto: request existing pi-lens same-workspace reuse, possibly from sessions outside this team. If pi-lens is absent or disabled, launch proceeds without enabling it. Explicit environment opt-outs win; restricted members stay separate. Choose analysis: separate for different environments or rules, uncertain compatibility, suspicious diagnostics, or independent analyzer state. Different assignments alone do not require separation. This is a launch/resume preference, not proof of attachment or compatibility; an existing leader participates only if warm attach was already enabled there.", "Delegation needs the user's authorization. Give each new member a unique descriptive name (one or two lowercase words, hyphenated if two), plus a bounded brief. Names remain stable on resume. Avoid concurrent writers in the same cwd. Worktrees are opt-in."],
     parameters: AgentSchema,
-    ...teamToolRenderers("team_agent", memberLabels),
+    ...teamToolRenderers("team_agent", memberLabels, memberId),
     async execute(_id, args, _signal, _update, ctx) { return output(await handle("agent", args, ctx)); },
   });
   pi.registerTool({
@@ -339,7 +339,7 @@ export default function teams(pi: ExtensionAPI) {
       "team_task start refuses another owner's task or unfinished dependencies. Complete requires ownership, in-progress work, and acceptance=true. Release clears ownership, returns in-progress work to todo, and leaves done work done. Reopen is explicit and cannot invalidate active or done dependents.",
     ],
     parameters: TaskSchema,
-    ...teamToolRenderers("team_task", memberLabels),
+    ...teamToolRenderers("team_task", memberLabels, memberId),
     async execute(_id, args, _signal, _update, ctx) {
       const data = await handle("task", args, ctx) as TaskView | { tasks: TaskView[]; total: number };
       const compact = (task: TaskView) => ({ id: task.id, number: task.number, label: task.label, title: task.title, status: task.status, owner: task.owner, revision: task.revision, dependencies: task.dependencies, blockedBy: task.blockedBy });
@@ -351,7 +351,7 @@ export default function teams(pi: ExtensionAPI) {
     name: "team_message", label: "Team message", description: "Post to the team board, read history or search, or wait. A post has a required one-line summary that stands alone, optional detail, and links an existing task or replies to a post. It reaches named recipients (teammate names or IDs) plus the linked task's owner and delegator; it is never broadcast. Recipients receive summaries at their next safe point. Wait yields this turn until a post reaches you or lands on the given tasks.",
     promptGuidelines: ["Post only what changes someone's work: an outcome, a blocker, a question, or new context. Do not acknowledge notices or narrate progress.", "Notices carry summaries; read history only for the detail a question about your own work needs.", "After delegating, do not repeat the delegated work. Do distinct work, or call team_message wait with the delegated task IDs as your last action; never poll history."],
     parameters: MessageSchema,
-    ...teamToolRenderers("team_message", memberLabels),
+    ...teamToolRenderers("team_message", memberLabels, memberId),
     async execute(_id, args, _signal, _update, ctx) {
       // Posts already shown in a notice are not news to this wait.
       const result = await handle("message", args.action === "wait" && args.after === undefined ? { ...args, after: sent } : args, ctx);
@@ -472,7 +472,7 @@ export default function teams(pi: ExtensionAPI) {
     }
     // Notices persisted before a crash or reconnect count as delivered; acknowledge them so they are not shown twice.
     reconcile(ctx);
-    bindNoticeGroups(ctx, memberLabels, () => memberLabels()[memberId()] ?? "this session", line => ownWarnings.has(line));
+    bindNoticeGroups(ctx, memberLabels, memberId, line => ownWarnings.has(line));
     startTelemetry(ctx);
     if (!warned) {
       warned = true;
