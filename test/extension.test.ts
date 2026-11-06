@@ -714,17 +714,25 @@ test("team pauses drive balanced Herdr attention across notification turns, fina
     await f.event("session_start");
     await f.execute("team_message", { action: "wait" });
     await f.event("agent_settled");
+    assert.deepEqual(busy, [], "a workerless pause does not report active work");
+    const worker = await f.execute("team_agent", { action: "launch", name: "worker", model: "test/model", brief: "WAIT" }) as { id: string };
+    await f.execute("team_message", { action: "wait" });
+    await f.event("agent_settled");
     await f.event("agent_start");
     await f.event("agent_settled");
-    assert.deepEqual(busy, [true], "notification-only turns retain the original busy interval");
+    assert.deepEqual(busy, [true], "notification-only turns retain the active worker's busy interval");
     await f.event("message_end", { message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Please approve the next step." }] } });
     assert.deepEqual(busy, [true, false]);
     await f.execute("team_message", { action: "wait" });
     await f.event("session_shutdown");
     assert.deepEqual(busy, [true, false, true, false], "closing balances the interval");
+    f.approve(true);
     await f.event("session_start");
     await f.execute("team_agent", { action: "list" });
-    assert.equal(busy.at(-1), true, "the explicit pause is restored from the team snapshot");
+    await until(() => readState(join(teamsHome(), f.id))?.members[worker.id].status === "idle");
+    assert.equal(busy.at(-1), false, "restoring a pause cannot keep settled workers busy");
+    await f.execute("team_agent", { action: "launch", name: "other", model: "test/model", brief: "WAIT" });
+    assert.equal(busy.at(-1), true);
     await f.event("message_end", { message: { role: "assistant", stopReason: "aborted", content: [] } });
     assert.equal(busy.at(-1), false);
   } finally { await f.close(); }
