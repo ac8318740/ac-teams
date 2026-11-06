@@ -33,6 +33,6 @@ Both agents worked solo. Increased problem breadth did not produce natural deleg
 - All 38 fixture/contract/reference/grader files remained unchanged. The [v2 validation manifest](expanded-v2-validation.json) identifies the problem revision.
 - The runtime was Pi 1.5.0, v22.23.4, `openai/gpt-6.1-sol`, medium thinking, subscription OAuth.
 - Native projects were not OS-sandboxed or resource-isolated. One attempt per problem cannot establish general performance, causal plugin effects, or baseline-versus-candidate differences.
-- The [simple v1 baseline](history/simple-v1/BASELINE.md) used different, smaller problems and is not a direct score comparison.
+- The [simple v1 baseline](../history/simple-v1/BASELINE.md) used different, smaller problems and is not a direct score comparison.
 
-[Detailed safe results](results/expanded-v2-baseline-acstack-2026-11-05.json). Raw transcripts, submitted source, and original TAP results remain under local `/tmp/ac-teams-small-local-20261105/runs/expanded-stack-b27-*/`.
+[Detailed safe results](../results/expanded-v2-baseline-acstack-2026-11-05.json). Raw transcripts, submitted source, and original TAP results remain under local `/tmp/ac-teams-small-local-20261105/runs/expanded-stack-b27-*/`.
