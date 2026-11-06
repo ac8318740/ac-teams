@@ -302,6 +302,97 @@ test("malformed status types cannot be coerced into valid tasks or migrated to d
   }
 });
 
+test("completion gates allow grounded work but block outcomes and completion watches", t => {
+  const { store, create, home, initial } = fixture(t);
+  const upstream = create();
+  const task = store.task("root", { action: "create", title: "Integrate", completionDependencies: [upstream.id] }) as TaskView;
+  assert.deepEqual(task.blockedBy, []);
+  assert.deepEqual(task.completionBlockedBy, [upstream.id]);
+  store.task("a", { action: "start", id: task.id });
+  store.message("b", { action: "watch", tasks: [task.id] });
+  const before = structuredClone(store.state);
+  assert.throws(() => store.task("a", { action: "complete", id: task.id, acceptance: true, summary: "Premature" }), /completion.*blocked|blocked.*completion/i);
+  assert.deepEqual(store.state, before);
+  store.task("b", { action: "start", id: upstream.id });
+  store.task("b", { action: "complete", id: upstream.id, acceptance: true, summary: "Verified upstream" });
+  assert.deepEqual((store.task("a", { action: "read", id: task.id }) as TaskView).completionBlockedBy, []);
+  store.close();
+  const restored = new Store(initial, home);
+  t.after(() => restored.close());
+  assert.deepEqual((restored.task("a", { action: "read", id: task.id }) as TaskView).completionDependencies, [upstream.id]);
+  const done = restored.task("a", { action: "complete", id: task.id, acceptance: true, summary: "Integrated" }) as TaskView;
+  assert.ok(restored.state.members.b.watches?.some(watch => watch.task === task.id && watch.seq));
+  assert.equal(restored.state.messages.filter(message => message.task === task.id).length, 1);
+  assert.equal((restored.task("a", { action: "complete", id: task.id, acceptance: true, summary: "Integrated", revision: done.revision - 1 }) as TaskView).outcome, done.outcome);
+});
+
+test("both dependency kinds resolve forward keys and reject mixed invalid graphs atomically", t => {
+  const { store, create } = fixture(t);
+  const existing = create();
+  for (const tasks of [
+    [{ key: "a", title: "A", completionDependencies: ["@missing"] }],
+    [{ key: "a", title: "A", completionDependencies: ["@a"] }],
+    [{ key: "a", title: "A", completionDependencies: [existing.id, existing.id] }],
+    [{ key: "a", title: "A", dependencies: [existing.id], completionDependencies: [existing.id] }],
+    [{ key: "a", title: "A", dependencies: ["@b"] }, { key: "b", title: "B", completionDependencies: ["@a"] }],
+  ]) {
+    const before = structuredClone(store.state);
+    assert.throws(() => store.task("root", { action: "create", tasks }), /reference|dependencies|cyclic/i);
+    assert.deepEqual(store.state, before);
+  }
+  const result = store.task("root", { action: "create", tasks: [
+    { key: "consumer", title: "Consumer", dependencies: [existing.id], completionDependencies: ["@producer"] },
+    { key: "producer", title: "Producer" },
+  ] });
+  assert.ok("tasks" in result);
+  assert.deepEqual(result.tasks[0].completionDependencies, [result.tasks[1].id]);
+  assert.deepEqual(result.tasks[0].blockedBy, [existing.id]);
+  assert.deepEqual(result.tasks[0].completionBlockedBy, [existing.id, result.tasks[1].id]);
+});
+
+test("completion edges preserve reservations, revisions, release and reopen invariants", t => {
+  const { store, create } = fixture(t);
+  const upstream = create();
+  const task = create();
+  const reserved = store.task("a", { action: "claim", id: task.id }) as TaskView;
+  assert.throws(() => store.task("b", { action: "edit", id: task.id, completionDependencies: [upstream.id] }), /owner/i);
+  store.task("a", { action: "edit", id: task.id, revision: reserved.revision, completionDependencies: [upstream.id] });
+  assert.throws(() => store.task("a", { action: "edit", id: task.id, revision: reserved.revision, completionDependencies: [] }), /revision/i);
+  assert.throws(() => store.task("root", { action: "edit", id: upstream.id, dependencies: [task.id] }), /cyclic/i);
+  store.task("a", { action: "start", id: task.id });
+  assert.throws(() => store.task("a", { action: "edit", id: task.id, completionDependencies: [] }), /to.do/i);
+  store.task("a", { action: "release", id: task.id });
+  store.task("a", { action: "start", id: task.id });
+  store.task("b", { action: "start", id: upstream.id });
+  store.task("b", { action: "complete", id: upstream.id, acceptance: true, summary: "Ready" });
+  store.task("b", { action: "reopen", id: upstream.id });
+  assert.deepEqual((store.task("a", { action: "read", id: task.id }) as TaskView).completionBlockedBy, [upstream.id]);
+  store.task("b", { action: "start", id: upstream.id });
+  store.task("b", { action: "complete", id: upstream.id, acceptance: true, summary: "Ready again" });
+  store.task("a", { action: "complete", id: task.id, acceptance: true, summary: "Integrated" });
+  assert.throws(() => store.task("root", { action: "reopen", id: upstream.id }), /dependent/i);
+});
+
+test("old snapshots omit completion edges and malformed new persisted edges are rejected", t => {
+  const { store, create, home, initial } = fixture(t);
+  const task = create();
+  const path = join(store.dir, "state.json");
+  store.close();
+  const state = JSON.parse(readFileSync(path, "utf8"));
+  delete state.tasks[task.id].completionDependencies;
+  writeFileSync(path, JSON.stringify(state));
+  const restored = new Store(initial, home);
+  const view = restored.task("a", { action: "read", id: task.id }) as TaskView;
+  assert.deepEqual(view.completionDependencies, []);
+  assert.deepEqual(view.completionBlockedBy, []);
+  restored.close();
+  for (const refs of [null, "bad", [task.id], ["unknown"]]) {
+    state.tasks[task.id].completionDependencies = refs;
+    writeFileSync(path, JSON.stringify(state));
+    assert.throws(() => new Store(initial, home), /dependencies/i);
+  }
+});
+
 test("stored member network policies are validated on load", t => {
   const { store, home, initial } = fixture(t);
   const path = join(store.dir, "state.json");
