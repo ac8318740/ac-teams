@@ -146,6 +146,37 @@ for (const interactive of [false, true]) {
   });
 }
 
+for (const interactive of [false, true]) test(`explicit reload restores enforced grants and releases old containers (${interactive ? "native" : "RPC"})`, { skip, timeout: 120000 }, async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "sbr-")));
+  const cwd = join(root, "work"), read = join(root, "read");
+  mkdirSync(cwd); mkdirSync(read);
+  const options = { id: randomUUID(), interactive };
+  const owner = await team(root, cwd, options);
+  try {
+    const member = await owner.handle("root", "agent", { action: "launch", name: "restricted", brief: "WAIT", model: "anthropic/claude-test",
+      access: { read: [read], write: [cwd], network: { allow: [] } } }) as { id: string; sessionFile: string };
+    await until(() => owner.store.state.members[member.id].status === "busy");
+    const saved = structuredClone(owner.store.state.members[member.id]);
+    await owner.prepareReload(new AbortController().signal, () => true);
+    await owner.finishReload();
+    assert.equal(containers(owner.store.dir), "", "graceful reload releases containers before returning");
+    await owner.close();
+    const next = await team(root, cwd, options);
+    try {
+      await until(() => next.store.state.members[member.id].status === "idle");
+      const restored = next.store.state.members[member.id];
+      assert.equal(restored.sessionFile, saved.sessionFile);
+      assert.deepEqual(restored.access, saved.access);
+      assert.deepEqual(restored.extensions, saved.extensions);
+      assert.equal(restored.error, undefined);
+      const container = JSON.parse(execFileSync("docker", ["inspect", `ac-teams-${options.id}-${member.id}`], { encoding: "utf8" }))[0];
+      assert.equal(container.HostConfig.NetworkMode, "none");
+      assert.deepEqual(container.NetworkSettings.Ports ?? {}, {});
+      assert.equal(container.HostConfig.ReadonlyRootfs, true);
+    } finally { await next.close(); }
+  } finally { await owner.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
 test("a second owner cannot remove live members, and the next owner removes orphans of a killed coordinator", { skip, timeout: 120000 }, async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "sbo-")));
   const home = join(root, "teams"), id = randomUUID();
