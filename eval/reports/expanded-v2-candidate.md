@@ -39,4 +39,4 @@ Both baseline and candidate agents worked solo. The updated delegation guidance 
 - Normal AC Teams settings applied; no eval-specific team-size/depth override, delegation hint, or attempt cutoff. No grader feedback, repair retry, or post-grading code changes.
 - Native projects are instruction-confined, not OS-sandboxed or resource-isolated. Shared-host contention and model variance remain. One attempt per problem does not establish causal improvement or regression.
 
-[Accepted baseline](EXPANDED-BASELINE.md) · [Safe detailed candidate results](results/expanded-v2-candidate-acstack-2026-11-05.json). Raw local attempts: `/tmp/ac-teams-small-local-20261105/runs/expanded-stack-c27-*/`.
+[Accepted baseline](expanded-v2-baseline.md) · [Safe detailed candidate results](../results/expanded-v2-candidate-acstack-2026-11-05.json). Raw local attempts: `/tmp/ac-teams-small-local-20261105/runs/expanded-stack-c27-*/`.

@@ -58,7 +58,7 @@ The indexer reviewer used one persistent completion watch and two waits; the roo
 
 This exercises watch/wait behavior, but does not isolate a causal speed or token benefit. Recorded tool errors include the blocked start and failing development commands; they are distinct from assistant/API errors. Useful independent review is not automatically avoidable overhead.
 
-[Previous parallel-preference candidate](EXPANDED-PARALLEL-PREFERENCE.md). Prior results preserved.
+[Previous parallel-preference candidate](expanded-v2-parallel-preference.md). Prior results preserved.
 
 
 ## Reproducibility and limits
@@ -69,4 +69,4 @@ This exercises watch/wait behavior, but does not isolate a causal speed or token
 - Normal AC Teams settings applied; no eval-specific team-size/depth override, delegation hint, or attempt cutoff. No grader feedback, repair retry, or post-grading code changes.
 - Native projects are instruction-confined, not OS-sandboxed or resource-isolated. Shared-host contention and model variance remain. One attempt per problem does not establish causal improvement or regression.
 
-[Accepted baseline](EXPANDED-BASELINE.md) · [Safe detailed candidate results](results/expanded-v2-persistent-notifications-acstack-2026-11-05.json). Raw local attempts: `/tmp/ac-teams-small-local-20261105/runs/expanded-stack-w27-*/`.
+[Accepted baseline](expanded-v2-baseline.md) · [Safe detailed candidate results](../results/expanded-v2-persistent-notifications-acstack-2026-11-05.json). Raw local attempts: `/tmp/ac-teams-small-local-20261105/runs/expanded-stack-w27-*/`.

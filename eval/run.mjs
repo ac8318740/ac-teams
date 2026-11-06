@@ -8,11 +8,13 @@ import { record } from './record.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const repository = dirname(root);
+
 export function discoverProblems(directory) {
   return readdirSync(directory, { withFileTypes: true })
     .filter(entry => entry.isDirectory() && /^[a-z][a-z0-9-]*$/.test(entry.name))
     .filter(entry => ['PROMPT.md', 'fixture/src', 'fixture/test', 'reference/src', 'grader'].every(path => existsSync(join(directory, entry.name, path))))
-    .map(entry => entry.name).sort();
+    .map(entry => entry.name)
+    .sort();
 }
 export const problems = discoverProblems(join(root, 'problems'));
 
@@ -28,7 +30,8 @@ function inside(parent, child) {
 
 function git(workspace, args) {
   const result = spawnSync('git', ['-C', workspace, ...args], {
-    encoding: 'utf8', timeout: 10_000,
+    encoding: 'utf8',
+    timeout: 10_000,
     // Never inherit GIT_DIR/GIT_WORK_TREE, hooks, signing, filters, or credentials.
     env: { PATH: process.env.PATH ?? '', LANG: 'C.UTF-8', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' },
   });
@@ -48,12 +51,21 @@ export function prepare(name, destination) {
   writeFileSync(join(workspace, 'TASK.md'), readFileSync(join(problem, 'PROMPT.md')));
   git(workspace, ['init', '--quiet', '--template=']);
   git(workspace, ['add', '.']);
-  git(workspace, ['-c', 'user.name=AC Teams Eval', '-c', 'user.email=eval@localhost', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'Initial problem fixture']);
+  git(workspace, [
+    '-c', 'user.name=AC Teams Eval',
+    '-c', 'user.email=eval@localhost',
+    '-c', 'core.hooksPath=/dev/null',
+    '-c', 'commit.gpgsign=false',
+    'commit', '--quiet', '-m', 'Initial problem fixture',
+  ]);
   return workspace;
 }
 
 function testFiles(directory) {
-  return readdirSync(directory).filter(name => name.endsWith('.test.ts')).sort().map(name => join(directory, name));
+  return readdirSync(directory)
+    .filter(name => name.endsWith('.test.ts'))
+    .sort()
+    .map(name => join(directory, name));
 }
 
 function tests(workspace, files) {
@@ -61,14 +73,25 @@ function tests(workspace, files) {
   const result = spawnSync(process.execPath, ['--experimental-strip-types', '--test', '--test-reporter=tap', ...files], {
     cwd: workspace,
     env: { PATH: process.env.PATH ?? '', LANG: 'C.UTF-8', NODE_NO_WARNINGS: '1', EVAL_WORKSPACE: workspace },
-    encoding: 'utf8', timeout: 30_000, maxBuffer: 2 * 1024 * 1024,
+    encoding: 'utf8',
+    timeout: 30_000,
+    maxBuffer: 2 * 1024 * 1024,
   });
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
   const count = key => Number(output.match(new RegExp(`^# ${key} (\\d+)$`, 'm'))?.[1] ?? 0);
   const passed = count('pass');
   const failed = count('fail');
   const ok = !result.error && result.status === 0 && count('tests') > 0 && passed > 0 && failed === 0;
-  return { ok, exitCode: result.status, signal: result.signal, tests: count('tests'), passed, failed, error: result.error?.message ?? null, output };
+  return {
+    ok,
+    exitCode: result.status,
+    signal: result.signal,
+    tests: count('tests'),
+    passed,
+    failed,
+    error: result.error?.message ?? null,
+    output,
+  };
 }
 
 export function grade(name, directory) {
@@ -105,13 +128,15 @@ export function check(name) {
 function main() {
   const [command, name, directory, ...extra] = process.argv.slice(2);
   if (extra.length) throw new Error('Too many arguments');
-  if (command === 'list' && !name) console.log(JSON.stringify(problems));
-  else if (command === 'record' && name && !directory) {
+  if (command === 'list' && !name) {
+    console.log(JSON.stringify(problems));
+  } else if (command === 'record' && name && !directory) {
     const result = record(name, grade);
     console.log(JSON.stringify(result, null, 2));
     process.exitCode = result.correctness.reward === 1 ? 0 : 1;
-  } else if (command === 'prepare' && name && directory) console.log(JSON.stringify({ workspace: prepare(name, directory) }, null, 2));
-  else if (command === 'grade' && name && directory) {
+  } else if (command === 'prepare' && name && directory) {
+    console.log(JSON.stringify({ workspace: prepare(name, directory) }, null, 2));
+  } else if (command === 'grade' && name && directory) {
     const result = grade(name, directory);
     console.log(JSON.stringify(result, null, 2));
     process.exitCode = result.reward === 1 ? 0 : 1;
@@ -119,11 +144,15 @@ function main() {
     const results = (name ? [name] : problems).map(check);
     console.log(JSON.stringify(results, null, 2));
     process.exitCode = results.every(result => result.ok) ? 0 : 1;
-  } else throw new Error('Usage: node eval/run.mjs list | prepare|grade <problem> <directory> | check [problem] | record <attempt-directory>');
+  } else {
+    throw new Error('Usage: node eval/run.mjs list | prepare|grade <problem> <directory> | check [problem] | record <attempt-directory>');
+  }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try { main(); } catch (error) {
+  try {
+    main();
+  } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   }
