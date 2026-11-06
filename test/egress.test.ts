@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
-import { Egress, allowed, maxEgressConnections, assertNetworkNarrower, isHostAddress, isPublicAddress, parseAuthority, validatePolicy } from "../src/egress.ts";
+import { Egress, allowed, maxEgressConnections, assertNetworkNarrower, isHostAddress, isPublicAddress, parseAuthority, validatePolicy } from "../src/sandbox/egress.ts";
 import { networkInterfaces } from "node:os";
 
 const until = async (check: () => boolean) => { for (const end = Date.now() + 5000; !check(); await new Promise(resolve => setTimeout(resolve, 20))) if (Date.now() > end) throw new Error("Condition timed out"); };
@@ -45,6 +45,29 @@ test("allowlists name hosts and ports explicitly, and children can only narrow t
   assert.throws(() => assertNetworkNarrower({ allow: ["raw.github.com"] }, { allow: ["*.github.com"] }), /exceeds/);
   assert.throws(() => assertNetworkNarrower({ allow: ["*.github.com"] }, { allow: ["github.com"] }), /exceeds/);
   assert.throws(() => assertNetworkNarrower({ allow: ["x.example.com"] }, { allow: ["x.example.com:22"] }), /exceeds/);
+});
+
+test("wildcard inheritance permits equal or narrower subdomains and ports, never an apex or wider policy", () => {
+  for (const [parent, child] of [
+    ["*.github.com", "*.github.com"],
+    ["*.github.com", "*.github.com:443"],
+    ["*.github.com:8443", "*.github.com:8443"],
+    ["*.github.com", "*.api.github.com"],
+    ["*.github.com:8443", "*.api.github.com:8443"],
+  ]) {
+    assert.doesNotThrow(() => assertNetworkNarrower({ allow: [parent] }, { allow: [child] }), `${parent} permits ${child}`);
+  }
+  for (const [parent, child] of [
+    ["*.github.com", "github.com"],
+    ["*.github.com", "*.evilgithub.com"],
+    ["*.api.github.com", "*.github.com"],
+    ["raw.github.com", "*.github.com"],
+    ["*.github.com", "*.github.com:8443"],
+    ["*.github.com:443", "*.github.com"],
+    ["*.github.com:8443", "*.api.github.com"],
+  ]) {
+    assert.throws(() => assertNetworkNarrower({ allow: [parent] }, { allow: [child] }), /exceeds/, `${parent} refuses ${child}`);
+  }
 });
 
 test("authorities are parsed strictly", () => {

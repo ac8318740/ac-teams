@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Container, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { groupTeamRows } from "../src/group.ts";
-import { teamMessageRenderer, teamToolRenderers } from "../src/render.ts";
+import { groupTeamRows } from "../src/ui/notice-groups.ts";
+import { teamMessageRenderer, teamToolRenderers } from "../src/ui/render.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
 const labels = { root: "Main", m1: "Reviewer" };

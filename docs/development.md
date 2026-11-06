@@ -1,6 +1,6 @@
 # Develop and publish ac-teams
 
-Source setup is for contributors. For normal use, [install the npm package through Pi](../README.md#install).
+Source setup is for contributors. For normal use, [install the npm package through Pi](../README.md#install). See [source responsibilities and ownership](architecture.md) before changing module boundaries.
 
 ## Run from source
 
@@ -17,11 +17,25 @@ To work in another project, launch Pi there with the absolute path to `ac-teams/
 
 ```sh
 npm run check
-npm test
+node --test eval/run.test.mjs eval/record.test.mjs
 npm pack --dry-run
 ```
 
-The deterministic suite makes no model calls. It covers:
+Run the full application suite with an empty temporary home and no fixed Pi agent directory:
+
+```sh
+(
+    test_home=$(mktemp -d)
+    trap 'rm -rf -- "$test_home"' EXIT
+    env -u PI_CODING_AGENT_DIR HOME="$test_home" npm test
+)
+```
+
+Isolation prevents installed user policy and extension settings from changing fixture behavior. Leave `PI_CODING_AGENT_DIR` unset: Docker credential fixtures select their own agent directories, and a fixed override breaks those checks. Enforced-access tests need a usable Docker daemon and the matching [member image](access.md#set-up-docker); unavailable Docker coverage must be reported as skipped. These containers use no host networking or published ports.
+
+For a focused check, replace `npm test` in that block with, for example, `node --experimental-strip-types --test test/store.test.ts test/task-state.test.ts`. Tests are organized by behavior under `test/`, without a line cap; source files use the [soft 300-line target](architecture.md#use-file-size-as-a-review-prompt).
+
+The deterministic suite makes no model calls. The evaluation-tool tests check the runner and recorder without rerunning benchmarks. Application coverage includes:
 
 - Task reservations, progress, dependencies, release/reopen rules, and durable migration
 - Subprocesses, sockets, notification batching, shutdown escalation, worktree safety, and lifecycle races

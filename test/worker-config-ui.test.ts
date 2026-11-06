@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
-import { configureWorker, workerConfigPrompt } from "../src/worker-config-ui.ts";
-import { extensionInventory } from "../src/worker-extensions.ts";
-import { saveWorkerConfiguration, workerConfiguration } from "../src/config.ts";
+import { configureWorker, workerConfigPrompt } from "../src/ui/worker-config.ts";
+import { extensionInventory } from "../src/settings/worker-extensions.ts";
+import { saveWorkerConfiguration, workerConfiguration } from "../src/settings/config.ts";
 
 test("Pi-led configuration discovers inventory and saves only validated, confirmed policies", async () => {
   const root = mkdtempSync(join(tmpdir(), "at-worker-ui-")), cwd = join(root, "project"), agent = join(root, "agent");

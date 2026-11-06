@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { teamsCompletions, resolveTeammate } from "../src/commands.ts";
+import { teamsCompletions, resolveTeammate } from "../src/extension/commands.ts";
 
 const members = [{ id: "root", status: "idle" as const }, { id: "1234-abcd-5678", name: "code-review", status: "busy" as const }];
 test("teams actions and teammate names complete without memorizing IDs", () => {

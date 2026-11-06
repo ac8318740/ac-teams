@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
 import { render } from "grok-mermaid";
-import { buildTaskGraph, type TaskGraph } from "../src/graph.ts";
-import { addGraphJumps } from "../src/graph-jumps.ts";
+import { buildTaskGraph, type TaskGraph } from "../src/ui/graph.ts";
+import { addGraphJumps } from "../src/ui/graph-jumps.ts";
 import type { TaskView } from "../src/types.ts";
 
 const sample = (dependencies: number[][], title = "Task"): TaskView[] => dependencies.map((parents, i) => ({

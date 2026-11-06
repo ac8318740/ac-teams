@@ -4,8 +4,8 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { visitMember } from "../src/terminal-ui.ts";
-import type { PanelHost } from "../src/ui-types.ts";
+import { visitMember } from "../src/ui/terminal-ui.ts";
+import type { PanelHost } from "../src/ui/types.ts";
 
 // SAFETY: main navigation only reads mode and must never open a tmux UI.
 const ctx = { mode: "tui", ui: { custom() { assert.fail("do not attach to a main through tmux"); } } } as unknown as ExtensionContext;

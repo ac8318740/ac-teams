@@ -8,9 +8,9 @@ import { networkInterfaces, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { Coordinator, type CoordinatorOptions } from "../src/coordinator.ts";
-import { extensionInventory } from "../src/worker-extensions.ts";
-import { maxSandboxed, memberImage, packageRoot, sandboxStatus } from "../src/access.ts";
+import { Coordinator, type CoordinatorOptions } from "../src/team/coordinator.ts";
+import { extensionInventory } from "../src/settings/worker-extensions.ts";
+import { maxSandboxed, memberImage, packageRoot, sandboxStatus } from "../src/sandbox/policy.ts";
 
 const fixture = fileURLToPath(new URL("./fixtures/pi-peer.mjs", import.meta.url));
 chmodSync(fixture, 0o755);

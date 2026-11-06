@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
 import { initTheme, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Container, Text, visibleWidth, setKeybindings, type TUI } from "@earendil-works/pi-tui";
-import { bindNoticeGroups } from "../src/group.ts";
+import { bindNoticeGroups } from "../src/ui/notice-groups.ts";
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 import { ToolExecutionComponent } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/tool-execution.js";
 import { CustomMessageComponent } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/custom-message.js";
-import { teamMessageRenderer, teamToolPresentation } from "../src/render.ts";
+import { teamMessageRenderer, teamToolPresentation } from "../src/ui/render.ts";
 import teams from "../src/index.ts";
 import { theme } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 

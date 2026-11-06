@@ -1,5 +1,5 @@
-import type { Access, AccessRequest } from "./access.ts";
-import type { ExtensionChoice, ExtensionSelection } from "./worker-extensions.ts";
+import type { Access, AccessRequest } from "./sandbox/policy.ts";
+import type { ExtensionChoice, ExtensionSelection } from "./settings/worker-extensions.ts";
 export interface Worktree {
   repo: string;
   path: string;
