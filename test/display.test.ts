@@ -5,12 +5,12 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CustomEditor, initTheme, type Theme, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, type Component, type EditorComponent } from "@earendil-works/pi-tui";
-import { renderTaskSummary, summaryTasks } from "../src/task-summary.ts";
-import { installTeamFooter, showDisplayConfig } from "../src/terminal-ui.ts";
-import { cleanText } from "../src/render.ts";
-import { readDisplaySettings } from "../src/config.ts";
+import { renderTaskSummary, summaryTasks } from "../src/ui/task-summary.ts";
+import { installTeamFooter, showDisplayConfig } from "../src/ui/terminal-ui.ts";
+import { cleanText } from "../src/ui/render.ts";
+import { readDisplaySettings } from "../src/settings/config.ts";
 import type { TaskView } from "../src/types.ts";
-import type { PanelHost } from "../src/ui-types.ts";
+import type { PanelHost } from "../src/ui/types.ts";
 
 const task = (number: number, extra: Partial<TaskView> = {}): TaskView => ({ id: `T${number}`, number, label: `Task ${number}`, title: `Full task ${number}`, description: "Acceptance criteria", revision: 1, status: "todo", dependencies: [], blockedBy: [], ...extra });
 // SAFETY: these bounded Pi test doubles supply exactly the UI methods used below.

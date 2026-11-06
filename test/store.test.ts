@@ -1,11 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync, rmSync, statSync, symlinkSync } from "node:fs";
+import fs, { mkdtempSync, readFileSync, writeFileSync, rmSync, statSync, symlinkSync, readdirSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { Store, processAlive, processIdentity, createMemberLabels } from "../src/store.ts";
+import { Store } from "../src/team/store.ts";
+import { processAlive, processIdentity } from "../src/process.ts";
+import { createMemberLabels } from "../src/team/snapshot.ts";
 import type { TeamState, Task, Message } from "../src/types.ts";
 
 function initial(): TeamState {
@@ -22,6 +25,18 @@ function fixture(t: test.TestContext) {
   t.after(() => store.close());
   return { home, store };
 }
+
+test("durable records and process helpers load without Pi runtime dependencies", () => {
+  const hook = `export async function resolve(specifier, context, next) {
+    if (specifier.startsWith('@earendil-works/') || specifier.startsWith('@mariozechner/')) throw new Error('Unexpected Pi runtime dependency: ' + specifier);
+    return next(specifier, context);
+  }`;
+  const script = `import { register } from 'node:module';
+    register(${JSON.stringify(`data:text/javascript,${encodeURIComponent(hook)}`)}, import.meta.url);
+    await import(${JSON.stringify(new URL("../src/team/store.ts", import.meta.url).href)});
+    await import(${JSON.stringify(new URL("../src/process.ts", import.meta.url).href)});`;
+  execFileSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script], { stdio: "pipe" });
+});
 
 test("task watches persist, distinguish completion from messages, and can be cancelled", t => {
   const { store } = fixture(t);
@@ -137,6 +152,51 @@ test("failed mutations preserve memory and durable state; malformed snapshots ar
   writeFileSync(join(store.dir, "state.json"), before);
   new Store(initial(), home).close();
 });
+
+for (const failure of ["file sync", "rename", "directory sync"]) {
+  test(`completion remains atomic when snapshot ${failure} fails`, t => {
+    const { home, store } = fixture(t);
+    const task = store.task("child", { action: "create", title: "Build" }) as Task;
+    store.task("child", { action: "start", id: task.id });
+    store.message("other", { action: "watch", tasks: [task.id] });
+    const before = structuredClone(store.state);
+    const snapshot = join(store.dir, "state.json");
+    const bytes = readFileSync(snapshot, "utf8");
+    const sync = fs.fsyncSync;
+    let syncs = 0;
+    t.mock.method(fs, "fsyncSync", (fd: number) => {
+      syncs++;
+      if (syncs === (failure === "file sync" ? 1 : 2) && failure !== "rename") throw new Error(`Injected ${failure} failure`);
+      sync(fd);
+    });
+    if (failure === "rename") t.mock.method(fs, "renameSync", () => { throw new Error("Injected rename failure"); });
+    syncBuiltinESMExports();
+    try {
+      assert.throws(() => store.task("child", { action: "complete", id: task.id, acceptance: true, summary: "Built and checked" }), /Injected/);
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+    assert.deepEqual(store.state, before, "failed flush never publishes the draft in memory");
+    assert.ok(!readdirSync(store.dir).some(name => name.startsWith(".state-")), "failed flush cleans its temporary file");
+    assert.equal(statSync(snapshot).mode & 0o777, 0o600);
+    if (failure !== "directory sync") assert.equal(readFileSync(snapshot, "utf8"), bytes);
+    store.close();
+    const reopened = new Store(initial(), home);
+    try {
+      assert.equal(reopened.state.tasks[task.id].status, failure === "directory sync" ? "done" : "in_progress", "rename precedes directory fsync, so that failure may leave the new snapshot");
+      reopened.task("child", { action: "complete", id: task.id, acceptance: true, summary: "Built and checked" });
+      const durable = JSON.parse(readFileSync(snapshot, "utf8")) as TeamState;
+      assert.deepEqual(durable, reopened.state);
+      const outcomes = durable.messages.filter(message => message.kind === "outcome");
+      assert.equal(outcomes.length, 1, "retry never duplicates the completion post");
+      assert.equal(durable.tasks[task.id].outcome, outcomes[0].id);
+      assert.equal(durable.tasks[task.id].status, "done");
+      assert.equal(durable.members.other.watches?.[0].seq, outcomes[0].seq);
+      assert.ok(outcomes[0].recipients.includes("other"));
+    } finally { reopened.close(); }
+  });
+}
 
 test("task ownership, frozen edges, and interrupted-descendant release stay separate", t => {
   const { store } = fixture(t);
@@ -308,7 +368,7 @@ test("an exited but unreaped process is not alive or an owned signal target", { 
 test("a dead owner is recovered without losing its task claims", t => {
   const home = mkdtempSync(join(tmpdir(), "ac-crash-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
-  const module = new URL("../src/store.ts", import.meta.url).href;
+  const module = new URL("../src/team/store.ts", import.meta.url).href;
   const script = `import { Store } from ${JSON.stringify(module)};
     const store = new Store(${JSON.stringify(initial())}, ${JSON.stringify(home)});
     const task = store.task('child', { action: 'create', title: 'A', description: 'B' });

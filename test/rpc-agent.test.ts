@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { RpcAgent } from "../src/rpc-agent.ts";
+import { RpcAgent } from "../src/members/rpc-agent.ts";
 import { readFileSync } from "node:fs";
 
 const fixture = fileURLToPath(new URL("./fixtures/rpc-peer.mjs", import.meta.url));

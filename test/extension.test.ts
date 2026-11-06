@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, existsSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, statSync, writeFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,13 +9,15 @@ import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
 import { DefaultResourceLoader, initTheme, type ExtensionAPI, type ExtensionContext, type ExtensionToolContext, type ToolDefinition, type ToolRenderers } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { cleanText } from "../src/render.ts";
+import { cleanText } from "../src/ui/render.ts";
 import { theme } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import teams from "../src/index.ts";
-import { Coordinator, taskRequestGuidance } from "../src/coordinator.ts";
-import { Connection } from "../src/connection.ts";
-import { Store, readState, teamsHome } from "../src/store.ts";
-import { teamEntryType } from "../src/mains.ts";
+import { Coordinator, taskRequestGuidance } from "../src/team/coordinator.ts";
+import { Connection } from "../src/team/connection.ts";
+import { Store } from "../src/team/store.ts";
+import { readState, teamsHome } from "../src/team/snapshot.ts";
+import { teamEntryType } from "../src/members/main-terminal.ts";
+import { createNotices } from "../src/extension/notices.ts";
 
 // SAFETY: this bounded test double implements only the Pi host calls used by the extension.
 function fixture() {
@@ -59,7 +61,8 @@ function fixture() {
   // Model the host's real loaded-set query, not discovery or tool-name inference.
   const path = fileURLToPath(new URL("../src/index.ts", import.meta.url));
   const sourceInfo = { path, source: "local", scope: "user" as const, origin: "top-level" as const };
-  new DefaultResourceLoader({ cwd: home, agentDir: join(home, ".pi", "agent") }).getExtensions().extensions.push({
+  const loaded = new DefaultResourceLoader({ cwd: home, agentDir: join(home, ".pi", "agent") }).getExtensions().extensions;
+  loaded.push({
     path, resolvedPath: path, sourceInfo,
     tools: new Map([...tools].map(([name, definition]) => [name, { definition, sourceInfo }])),
     handlers: new Map(), messageRenderers: new Map(), commands: new Map(), flags: new Map(), shortcuts: new Map(),
@@ -67,7 +70,7 @@ function fixture() {
   async function execute(name: string, args: unknown) {
     return (await tools.get(name)!.execute(randomUUID(), args, new AbortController().signal, undefined, ctx)).details;
   }
-  return { ctx, id, home, entries, get active() { return active; }, flags, warnings, messages, tools, commands, shortcuts, execute, events, approve(value: boolean) { approval = value; }, get confirmations() { return confirmations; },
+  return { ctx, id, home, entries, loaded, get active() { return active; }, flags, warnings, messages, tools, commands, shortcuts, execute, events, approve(value: boolean) { approval = value; }, get confirmations() { return confirmations; },
     async event(name: string, data: Record<string, unknown> = {}) { return handlers.get(name)?.({ type: name, ...data }, ctx); },
     async close() {
       try { await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, ctx); }
@@ -75,6 +78,25 @@ function fixture() {
     },
   };
 }
+
+test("worker entrypoint and loaded-set exclusion keep the actual Pi entrypoint identity", async t => {
+  const f = fixture();
+  const open = t.mock.method(Coordinator, "open");
+  const entrypoint = fileURLToPath(new URL("../src/index.ts", import.meta.url));
+  const other = join(f.home, "other.ts");
+  writeFileSync(other, "export default function () {}\n");
+  const own = f.loaded.at(-1)!;
+  // A second loader record without our tool identity still points at our entrypoint.
+  for (const path of [entrypoint, other]) f.loaded.push({ ...own, path, resolvedPath: path, tools: new Map() });
+  try {
+    await f.event("session_start");
+    await f.execute("team_agent", { action: "list" });
+    assert.equal(open.mock.calls[0].arguments[0].extension, entrypoint);
+    const config = await f.execute("team_config", { action: "read" }) as { inventory: { id: string }[] };
+    assert.ok(config.inventory.some(entry => entry.id === `explicit:${other}`));
+    assert.ok(!config.inventory.some(entry => entry.id === `explicit:${entrypoint}`));
+  } finally { await f.close(); }
+});
 
 test("/teams config starts a Pi conversation without an editor or menu", async () => {
   const f = fixture();
@@ -710,6 +732,37 @@ test("watch and unwatch register without pausing; pause leaves watches intact", 
     const cancelled = await f.execute("team_message", { action: "unwatch", tasks: [task.id] }) as { watching: unknown[] };
     assert.deepEqual(cancelled.watching, []);
   } finally { await f.close(); }
+});
+
+for (const rejectOld of [false, true]) test(`late acknowledgement ${rejectOld ? "failure" : "success"} cannot change a replacement team's receipt cursor`, async () => {
+  let identity = { team: "old", member: "root" }, through = 100;
+  const pending: { through: number; resolve(): void; reject(error: Error): void }[] = [];
+  const warnings: string[] = [];
+  // SAFETY: notice reconciliation only reads entries; this host has no tool or editor behavior.
+  const ctx = { sessionManager: { getEntries: () => [{ type: "custom_message", customType: "ac-teams", details: { ...identity, through } }] } } as unknown as ExtensionContext;
+  const api = { events: new EventEmitter(), sendMessage() {} } as unknown as ExtensionAPI;
+  const notices = createNotices(api, () => identity, () => ({}), text => warnings.push(text), () => ({
+    remote: true,
+    ack: through => new Promise<void>((resolve, reject) => pending.push({ through, resolve, reject })),
+  }));
+  notices.reconcile(ctx);
+  notices.reset();
+  identity = { team: "new", member: "other" };
+  through = 1;
+  notices.reconcile(ctx);
+  if (rejectOld) pending[0].reject(new Error("Old team disconnected"));
+  else pending[0].resolve();
+  await delay(0);
+  notices.reconcile(ctx);
+  assert.deepEqual(pending.map(ack => ack.through), [100, 1], "the current acknowledgement remains in flight");
+  assert.deepEqual(warnings, [], "stale failures do not warn in the new team");
+  pending[1].resolve();
+  await delay(0);
+  through = 2;
+  notices.reconcile(ctx);
+  assert.deepEqual(pending.map(ack => ack.through), [100, 1, 2], "the new team's next durable post is acknowledged");
+  pending[2].resolve();
+  await delay(0);
 });
 
 test("receipt cursors belong to one team/member across joins and session reloads", async () => {

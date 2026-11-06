@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { policy, readDisplaySettings, saveDisplaySettings } from "../src/config.ts";
+import { policy, readDisplaySettings, saveDisplaySettings } from "../src/settings/config.ts";
 
 test("display defaults are independent, global, private, and preserve invalid files", () => {
   const home = mkdtempSync(join(tmpdir(), "at-display-")), previous = process.env.HOME;

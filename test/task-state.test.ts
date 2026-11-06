@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Store } from "../src/store.ts";
+import { Store } from "../src/team/store.ts";
 import type { TaskView, TeamState } from "../src/types.ts";
 
 function fixture(t: test.TestContext) {

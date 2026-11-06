@@ -4,8 +4,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
-import { extensionInventory, selectExtensions } from "../src/worker-extensions.ts";
-import { workerConfiguration, saveWorkerConfiguration } from "../src/config.ts";
+import { extensionInventory, selectExtensions } from "../src/settings/worker-extensions.ts";
+import { workerConfiguration, saveWorkerConfiguration } from "../src/settings/config.ts";
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "at-extensions-"));

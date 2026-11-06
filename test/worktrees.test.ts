@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createWorktree, removeWorktree } from "../src/worktrees.ts";
+import { createWorktree, removeWorktree } from "../src/members/worktrees.ts";
 
 function fixture(t: test.TestContext) {
   const dir = mkdtempSync(join(tmpdir(), "ac-git-"));

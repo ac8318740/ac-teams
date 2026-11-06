@@ -7,13 +7,13 @@ import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { mainEnv, handoverPrompt } from "../src/mains.ts";
+import { mainEnv, handoverPrompt } from "../src/members/main-terminal.ts";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { Coordinator, assistantEvent, taskRequestGuidance, type CoordinatorOptions } from "../src/coordinator.ts";
-import { Connection } from "../src/connection.ts";
-import { saveWorkerConfiguration } from "../src/config.ts";
-import { extensionInventory } from "../src/worker-extensions.ts";
+import { Coordinator, assistantEvent, taskRequestGuidance, type CoordinatorOptions } from "../src/team/coordinator.ts";
+import { Connection } from "../src/team/connection.ts";
+import { saveWorkerConfiguration } from "../src/settings/config.ts";
+import { extensionInventory } from "../src/settings/worker-extensions.ts";
 import { mkdirSync } from "node:fs";
 
 const fixture = fileURLToPath(new URL("./fixtures/pi-peer.mjs", import.meta.url));
