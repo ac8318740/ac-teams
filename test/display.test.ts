@@ -12,10 +12,17 @@ import { readDisplaySettings } from "../src/config.ts";
 import type { TaskView } from "../src/types.ts";
 import type { PanelHost } from "../src/ui-types.ts";
 
-const task = (number: number, extra: Partial<TaskView> = {}): TaskView => ({ id: `T${number}`, number, label: `Task ${number}`, title: `Full task ${number}`, description: "Acceptance criteria", revision: 1, status: "todo", dependencies: [], blockedBy: [], ...extra });
+const task = (number: number, extra: Partial<TaskView> = {}): TaskView => ({ id: `T${number}`, number, label: `Task ${number}`, title: `Full task ${number}`, description: "Acceptance criteria", revision: 1, status: "todo", dependencies: [], completionDependencies: [], blockedBy: [], completionBlockedBy: [], ...extra });
 // SAFETY: these bounded Pi test doubles supply exactly the UI methods used below.
 const theme = { fg: (color: string, text: string) => color === "error" ? `\x1b[31m${text}\x1b[39m` : text, bold: (text: string) => text } as unknown as Theme;
 const tick = () => new Promise<void>(done => setImmediate(done));
+
+test("summary shows finish blockers without blocking useful initial work", () => {
+  const tasks = [task(1), task(2, { status: "in_progress", completionDependencies: ["T1"], completionBlockedBy: ["T1"] })];
+  const text = renderTaskSummary(tasks, theme, 200).join("\n");
+  assert.match(text, /working; finish needs #1/);
+  assert.doesNotMatch(text, /blocked by #1/);
+});
 
 test("summary prioritizes working, ready blockers, ready work, blocked, then recent completions", () => {
   const tasks = [task(20, { status: "done", completedAt: 200 }), task(2), task(1, { status: "in_progress" }), task(9),

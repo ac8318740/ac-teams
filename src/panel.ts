@@ -126,10 +126,10 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost, vie
     function taskDetails(width: number) {
       const task = selectedTask();
       if (!task) return wrap([heading("No tasks yet"), "Request a task with N. Main creates and organizes it."], width);
-      const unlocked = tasks.filter(other => other.dependencies.includes(task.id));
+      const unlocked = tasks.filter(other => other.dependencies.includes(task.id) || other.completionDependencies.includes(task.id));
       const outcome = task.outcome ? snapshot.messages.find(message => message.id === task.outcome) : undefined;
       const [first = "", ...rest] = outcome ? clean(outcome.summary).split("\n") : [];
-      const prerequisites = task.dependencies.map(id => {
+      const prerequisites = (ids: string[]) => ids.map(id => {
         const parent = tasks.find(item => item.id === id);
         return parent ? `${taskTitle(parent.id)} · ${stateLabel(parent)}` : `${clean(id)} · Unavailable`;
       });
@@ -140,8 +140,10 @@ export async function showTeamsPanel(ctx: ExtensionContext, host: PanelHost, vie
         ...(outcome ? [section(`Outcome from ${name(outcome.from)}`, width), theme.bold(first), ...rest, ...(outcome.detail ? ["", fg("muted", clean(outcome.detail))] : []), ""] : []),
         section("Description", width), clean(task.description), "",
         section("Dependencies", width),
-        label("Needs", prerequisites.length ? prerequisites.join(", ") : fg("muted", "Nothing; can start now")),
-        label("Unlocks", unlocked.length ? unlocked.map(item => taskTitle(item.id)).join(", ") : fg("muted", "No other tasks")), "",
+        label("Start needs", task.dependencies.length ? prerequisites(task.dependencies).join(", ") : fg("muted", "Nothing; can start now")),
+        label("Finish also needs", task.completionDependencies.length ? prerequisites(task.completionDependencies).join(", ") : fg("muted", "No additional prerequisites")),
+        label("Finish blocked by", task.completionBlockedBy.length ? task.completionBlockedBy.map(taskTitle).join(", ") : fg("muted", "Nothing")),
+        label("Unlocks", unlocked.length ? unlocked.map(item => `${taskTitle(item.id)} (${item.dependencies.includes(task.id) ? "start" : "finish"})`).join(", ") : fg("muted", "No other tasks")), "",
         section("Actions", width), fg("accent", "C") + "  Give feedback to creator", fg("accent", "O") + "  Open owner's session", "",
         fg("dim", `ID ${task.id}`),
       ], width);

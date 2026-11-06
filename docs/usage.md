@@ -100,7 +100,7 @@ Hiding a display does not stop agents, change tasks, or disable `/teams`. With t
 
 The tool guidance asks agents to use `team_task` for substantial work with three or more steps, explicit task lists, and coordinated deliverables, including solo research, design, implementation, and verification. Single trivial tasks and conversation need no list. This is guidance, not automatic task creation or enforcement.
 
-Before creating tasks, identify which outputs each task needs. If a task cannot start correctly without another task's verified output, record that prerequisite in `dependencies`. Keep independent work parallel, and do not add edges just to fill the graph.
+Before creating tasks, identify which outputs each task needs. If useful initial work needs another task's verified output, record that prerequisite in `dependencies` (a start and completion gate). If grounded initial work can use an agreed interface or usable intermediate output, but acceptance needs another task done, use `completionDependencies` (a completion-only gate). State the available output and remaining acceptance requirement in the description. Send a task-linked message when an intermediate output becomes usable or changes. Keep coherent tasks intact; no need to split them into microtasks. Keep independent work parallel, and do not add edges just to fill the graph.
 
 Create independent tasks in one call:
 
@@ -110,7 +110,7 @@ Create independent tasks in one call:
 
 A batch creates 1–100 tasks atomically: invalid input leaves no tasks created. Use either `tasks` or top-level task fields, not both. Existing single-task creation remains supported. A title is enough for a simple task; description defaults to title and label defaults to its first three words, capped at 60 characters. Supply explicit acceptance criteria for substantial or delegated work.
 
-For dependent tasks, give prerequisites unique batch-only `key` names and reference them with `@key` in `dependencies`. References can point forward or backward within the batch, alongside existing task UUIDs. Keys start with a letter, contain only letters, digits, underscores, or hyphens, and have at most 64 characters. Missing keys, duplicate keys or dependencies, self-dependencies, and cycles reject the whole batch without changing stored tasks. Keys are not stored; responses and later calls use UUIDs.
+For dependent tasks, give prerequisites unique batch-only `key` names and reference them with `@key` in either `dependencies` or `completionDependencies`. References can point forward or backward within the batch, alongside existing task UUIDs. Keys start with a letter, contain only letters, digits, underscores, or hyphens, and have at most 64 characters. Missing keys, duplicate keys or edges (including across both fields), self-dependencies, and cycles (including mixed edges) reject the whole batch without changing stored tasks. Keys are not stored; responses and later calls use UUIDs.
 
 For example, API and UI implementations may both need a shared contract; integration verification may need both implementations:
 
@@ -127,9 +127,11 @@ Create this graph in one call:
 
 Before starting or delegating, check that recorded dependencies match the outputs each task needs. Creating tasks together does not make them independent. Integration verification can start only when both implementations are done; `blockedBy` automatically lists unfinished prerequisites. Write tests before implementation when useful; that alone is not a reason to block test-writing behind implementation. Reassess dependencies when scope changes, subject to task ownership and edit rules.
 
-Start a task before working and complete it immediately when its own acceptance checks pass. Separately assigned review gates parent integration, not implementation-task completion, unless the task's criteria require it. One agent normally works on one task at a time; teammates can work in parallel. Never complete partial work or work with unresolved failures.
+For work that can overlap, a consumer may instead use `completionDependencies:["@api","@ui"]`, provided its description identifies what it can do from an available contract or intermediate output. It may start and launch immediately, but cannot complete until both producers are done. `completionBlockedBy` lists unfinished prerequisites from both fields. `blockedBy` lists only unfinished start prerequisites. Neither field bypasses acceptance checks.
 
-Task list and mutation responses give the model compact summaries, including UUIDs, revisions, owners, and dependencies. `read` returns full descriptions and acceptance criteria. Expanded tool responses retain full records for people to inspect.
+Start a task before working and complete it immediately when its own acceptance checks pass and every prerequisite is done. Separately assigned review gates parent integration, not implementation-task completion, unless the task's criteria require it. One agent normally works on one task at a time; teammates can work in parallel. Never complete partial work or work with unresolved failures.
+
+Task list and mutation responses give the model compact summaries, including UUIDs, revisions, owners, both dependency fields, and both blocker lists. `read` returns full descriptions and acceptance criteria. Expanded tool responses retain full records for people to inspect.
 
 ## Give members bounded assignments
 
@@ -154,7 +156,7 @@ Pass the returned task UUID as `task`. Example `team_agent` arguments:
 {"action":"launch","name":"parser-review","task":"<task-id>","brief":"Review src/parser.ts for malformed-input failures. Read only; do not delegate or edit."}
 ```
 
-The launch task must be a to-do task that is unowned or yours; a failed launch returns it. ac-teams neither creates tasks automatically nor blocks launches without tasks. After delegating, do distinct work or `wait`; do not repeat the delegated work.
+The launch task must be a to-do task that is unowned or yours. Launch reserves it even when blocked; task start still checks `dependencies`. A failed launch returns its reservation. ac-teams neither creates tasks automatically nor blocks launches without tasks. After delegating, do distinct work or `wait`; do not repeat the delegated work.
 
 Every launch needs a unique descriptive `name`: one or two lowercase words, hyphenated if two, at most 40 characters. For example, `parser-review` or `research`. `main`, `root`, and names matching an existing member's ID are reserved. Names remain stable across stop/resume; IDs remain the API references.
 
@@ -164,11 +166,11 @@ Launch returns the name, a stable member ID, PID, cwd, and native session ID/pat
 
 Children load ac-teams explicitly and seed only the parent's actually loaded extension set. Configure presets by talking with Pi through `/teams config` (no file editing required), then optionally pass `extensions: {preset: "worker", include: ["<parent-extension-id>"], exclude: ["<optional-id>"]}` on launch. `full` can retain only that parent's set; nested delegation cannot widen it. Required safety/provider extensions cannot be excluded. Resume retains saved IDs and current installed versions, not a new preset. Skills, authentication storage, and cwd instructions still use native Pi behavior; any provider extension itself must be retained. Children receive their brief, not the parent's conversation. Load ac-teams only once in the root, either through Pi package settings or an explicit extension path.
 
-Children can delegate through the same coordinator, subject to depth and capacity. You may delegate within the user's approved task unless the user restricts delegation. This does not expand filesystem, network, spending, or publishing permissions. Keep briefs bounded, agree on file ownership, and use separate worktrees for concurrent writers.
+Children can delegate through the same coordinator, subject to depth and capacity. You may delegate within the user's approved task unless the user restricts delegation. This does not expand filesystem, network, spending, or publishing permissions. Keep briefs bounded, and agree on file or section ownership and interfaces. Shared-file work needs targeted edits against current content; reread before editing and never blindly overwrite another writer's changes. Serialize overlapping edits or use separate worktrees when coordination cannot make them safe.
 
 ## Track progress separately from ownership
 
-Start ready work directly; `start` claims an unowned task and begins it atomically. Use `claim` only to reserve work in advance. Complete work after checking acceptance criteria or report blockers. Starting requires every dependency to be done.
+Start ready work directly; `start` claims an unowned task and begins it atomically. Use `claim` only to reserve work in advance. Complete work after checking acceptance criteria or report blockers. Starting requires every `dependencies` prerequisite done. Completion requires prerequisites from both fields done.
 
 Each task has a stable team-local `number` and a 1–3-word `label` (at most 60 characters). Compact tool summaries and the editor task summary prefer `#3 Parser review`. The panel uses task titles: lists and full maps may shorten them, while focused graphs wrap them. Details retain the full title, description, and UUID.
 
@@ -180,7 +182,10 @@ Progress and ownership remain separate:
 
 - **Progress:** `status` is `todo`, `in_progress`, or `done`
 - **Ownership:** `owner` is one member ID, or absent
-- **Dependencies:** `dependencies` lists prerequisite task IDs. Returned `blockedBy` lists those not yet done; the coordinator calculates it rather than storing it as a status.
+- **Start prerequisites:** `dependencies` lists task IDs required before task start and completion. Derived `blockedBy` lists those not yet done.
+- **Completion prerequisites:** `completionDependencies` lists additional task IDs required only before completion. Derived `completionBlockedBy` lists unfinished prerequisites from both fields. A task can be ready or working while its finish is blocked.
+
+Full graphs use solid arrows for start prerequisites and dotted arrows labeled `finish` for completion-only prerequisites. Focused graphs label completion-only neighbors `For finish` or `Gates finish`. Details show both prerequisite lists and all completion blockers.
 
 Use the returned task ID with these actions:
 
@@ -188,13 +193,13 @@ Use the returned task ID with these actions:
 | --- | --- |
 | `claim` | Reserve an unowned to-do task, even if blocked. Progress stays `todo`. |
 | `start` | Claim unowned work and move `todo` to `in_progress` atomically, only when every dependency is `done`. An existing owner must be the caller. |
-| `complete` | The owner moves `in_progress` to `done`, with `acceptance: true` and an outcome `summary` (optional `detail`). One atomic step records the outcome post and the done state; an identical retry returns the original. Ownership remains. |
+| `complete` | The owner moves `in_progress` to `done`, after both prerequisite lists are done, with `acceptance: true` and an outcome `summary` (optional `detail`). One atomic step records the outcome post and the done state; an identical retry returns the original. Ownership remains. |
 | `release` | Clear ownership. In-progress work returns to `todo`; done work stays `done`. |
-| `reopen` | Explicitly move `done` to `todo`, retaining any owner and clearing the outcome reference; the outcome post stays. Refuse if a dependent is in progress or done. |
+| `reopen` | Explicitly move `done` to `todo`, retaining any owner and clearing the outcome reference; the outcome post stays. Refuse for active or done hard dependents, or done completion-only dependents. Active completion-only dependents may continue working. |
 
 Starting never steals another owner's work. Only the owner can complete or release its work. An ancestor may explicitly release a stopped or interrupted descendant's ownership. The owner or root can reopen an owned task; any member can reopen an unowned one. Done tasks cannot be claimed until reopened.
 
-Include `dependencies` on creation or `edit`. Any member can edit unowned to-do work; only the owner can edit reserved to-do work. In-progress and done tasks cannot be edited. The coordinator rejects unknown dependencies and cycles. An optional `revision` rejects stale mutations.
+Include `dependencies` and/or `completionDependencies` on creation or `edit`. Any member can edit unowned to-do work; only the owner can edit reserved to-do work. In-progress and done tasks cannot be edited. The coordinator rejects unknown IDs, self-references, duplicate edges within or across fields, and cycles across both edge kinds atomically. An optional `revision` rejects stale mutations.
 
 `acceptance: true` asserts that the agent checked the acceptance criteria; it is not an independent test runner. Stop/crash retains ownership and progress. There is no automatic reassignment.
 

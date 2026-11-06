@@ -985,6 +985,24 @@ test("a new owner resumes each member to its recorded state after a handover", a
   } finally { rmSync(f.home, { recursive: true, force: true }); }
 });
 
+test("launch reserves blocked work while start enforces only hard prerequisites", async () => {
+  const f = await setup();
+  try {
+    const upstream = await f.team.handle("root", "task", { action: "create", title: "Producer" }) as { id: string };
+    const hard = await f.team.handle("root", "task", { action: "create", title: "Hard consumer", dependencies: [upstream.id] }) as { id: string };
+    const reserved = await f.team.handle("root", "agent", { ...launch, name: "waiting", task: hard.id }) as { id: string };
+    assert.equal(f.team.store.state.tasks[hard.id].status, "todo");
+    await assert.rejects(f.team.handle(reserved.id, "task", { action: "start", id: hard.id }), /blocked/);
+    const finish = await f.team.handle("root", "task", { action: "create", title: "Grounded consumer", completionDependencies: [upstream.id] }) as { id: string };
+    const member = await f.team.handle("root", "agent", { ...launch, task: finish.id }) as { id: string };
+    await f.team.handle(member.id, "task", { action: "start", id: finish.id });
+    await assert.rejects(f.team.handle(member.id, "task", { action: "complete", id: finish.id, acceptance: true, summary: "Premature" }), /completion.*blocked/);
+    const child = await f.team.handle(member.id, "task", { action: "create", title: "Nested work", completionDependencies: [finish.id] }) as { id: string };
+    await f.team.handle(member.id, "task", { action: "start", id: child.id });
+    await assert.rejects(f.team.handle(member.id, "task", { action: "complete", id: child.id, acceptance: true, summary: "Premature" }), /completion.*blocked/);
+  } finally { await f.close(); }
+});
+
 test("launch hands an existing task to the new member; its outcome reaches the delegator; a failed launch returns it", async () => {
   const f = await setup();
   try {
@@ -995,7 +1013,7 @@ test("launch hands an existing task to the new member; its outcome reaches the d
     assert.deepEqual([f.team.store.state.tasks[task.id].owner, f.team.store.state.tasks[task.id].delegator], [member.id, "root"]);
     await assert.rejects(f.team.handle("root", "agent", { ...launch, name: "second", task: task.id }), /unowned or yours/);
     await until(() => !!f.team.store.state.messages.find(message => message.from === member.id)?.summary.includes("You own team task #1"));
-    assert.match(f.team.store.state.messages.find(message => message.from === member.id)!.summary, /Start it only when its prerequisites are done/);
+    assert.match(f.team.store.state.messages.find(message => message.from === member.id)!.summary, /Start it only when its start prerequisites \(dependencies\) are done/);
     await f.team.handle(member.id, "task", { action: "start", id: task.id });
     await f.team.handle(member.id, "task", { action: "complete", id: task.id, acceptance: true, summary: "Parsed all inputs" });
     const outcome = f.team.store.state.messages.at(-1)!;

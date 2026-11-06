@@ -299,12 +299,16 @@ test("team tools guide solo planning and task-backed delegation without tracking
     assert.match(taskGuidance, /outputs each task needs/);
     assert.match(taskGuidance, /verified output/);
     assert.match(taskGuidance, /Keep independent work parallel/);
-    assert.match(taskGuidance, /Dependencies accept existing UUIDs and @key references/);
+    assert.match(taskGuidance, /completionDependencies accept existing UUIDs and @key references/);
     assert.match(taskGuidance, /Before starting or delegating, check that the recorded dependencies match/);
     assert.match(taskGuidance, /creating tasks together does not make them independent/);
     assert.doesNotMatch(taskGuidance, /Dependencies cannot refer to siblings/);
-    assert.match(taskGuidance, /all prerequisites must be done/);
+    assert.match(taskGuidance, /all dependencies must be done before task start/);
     assert.match(taskGuidance, /Reassess dependencies when scope changes/);
+    assert.match(taskGuidance, /usable intermediate output/);
+    assert.match(taskGuidance, /both fields must be done before completion/);
+    assert.match(agentGuidance, /Coordinate shared-file work/);
+    assert.doesNotMatch(agentGuidance, /Avoid concurrent writers/);
     assert.doesNotMatch(taskGuidance, /initial plan in one team_task call/);
     assert.match(JSON.stringify(task.parameters), /Prerequisite task UUIDs/);
     assert.match(JSON.stringify(task.parameters), /Unique batch-only name/);
@@ -325,6 +329,14 @@ test("task batches and lists keep model output compact while read and details re
     assert.deepEqual(checks.dependencies, [batch.tasks[0].id]);
     assert.deepEqual(checks.blockedBy, [batch.tasks[0].id]);
     await assert.rejects(call({ action: "start", id: batch.tasks[1].id }), /blocked/);
+    const consumer = await call({ action: "create", title: "Prepare integration", completionDependencies: [batch.tasks[0].id] });
+    const compact = JSON.parse(text(consumer));
+    assert.deepEqual(compact.completionDependencies, [batch.tasks[0].id]);
+    assert.deepEqual(compact.completionBlockedBy, [batch.tasks[0].id]);
+    assert.deepEqual(compact.blockedBy, []);
+    await call({ action: "start", id: compact.id });
+    await assert.rejects(call({ action: "complete", id: compact.id, acceptance: true, summary: "Too early" }), /completion.*blocked/);
+    await assert.rejects(call({ action: "create", title: "Bad", completionDependencies: [batch.tasks[0].id, batch.tasks[0].id] }), /Invalid task request/);
     await assert.rejects(call({ action: "create", tasks: [{ title: "Bad", key: "@invalid" }] }), /Invalid task request/);
     await assert.rejects(call({ action: "create", key: "outside", title: "Bad" }), /Invalid task request/);
     for (const key of ["worker\n", "a".repeat(65)]) {

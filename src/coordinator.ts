@@ -537,7 +537,7 @@ export class Coordinator {
     });
     this.analysisPolicies.set(id, policy);
     const contact = `Your delegator is ${memberName(parent)} (recipient ID: ${actor}). Use that exact ID for direct coordination; task-linked posts already reach the task's delegator.`;
-    const brief = `${args.brief}\n\n${contact}${assigned ? `\nYou own team task ${taskName(assigned)} [${assigned.id}]. Start it only when its prerequisites are done, and finish with team_task complete and an outcome summary; that one call reports back. Complete when your assigned acceptance checks pass; separately assigned review gates parent integration, not your task, unless your criteria require it.` : ""}`;
+    const brief = `${args.brief}\n\n${contact}${assigned ? `\nYou own team task ${taskName(assigned)} [${assigned.id}]. Start it only when its start prerequisites (dependencies) are done. completionDependencies allow useful grounded initial work but must also be done before acceptance. Finish with team_task complete and an outcome summary; that one call reports back. Complete when your assigned acceptance checks pass; separately assigned review gates parent integration, not your task, unless your criteria require it.` : ""}`;
     this.publishStatus();
     member.model = args.model; member.thinking = args.thinking ?? "off";
     member.terminal = this.options.interactive === true;

@@ -36,6 +36,8 @@ function crossingCells(tasks: TaskView[], graph: TaskGraph): { jumps: Set<number
       || !Number.isSafeInteger(task.number) || task.number < 1 || numbers.has(task.number) || !Array.isArray(task.dependencies)
       || (edgeCount += task.dependencies.length) > 300 || task.dependencies.some(id => typeof id !== "string" || id.length > 128)
       || new Set(task.dependencies).size !== task.dependencies.length) return null;
+    // Labeled completion edges use different routes; preserve the renderer's original art.
+    if (!Array.isArray(task.completionDependencies) || task.completionDependencies.length) return null;
     index.set(task.id, i); numbers.add(task.number);
   }
   const edges: { from: number; to: number }[] = [];
