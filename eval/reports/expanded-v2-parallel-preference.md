@@ -38,7 +38,7 @@ Usage includes all root/child transcripts; reasoning is already in output. Super
 - Normal AC Teams settings applied; no eval-specific team-size/depth override, delegation hint, or attempt cutoff. No grader feedback, repair retry, or post-grading code changes.
 - Native projects are instruction-confined, not OS-sandboxed or resource-isolated. Shared-host contention and model variance remain. One attempt per problem does not establish causal improvement or regression.
 
-[Accepted baseline](EXPANDED-BASELINE.md) · [Safe detailed candidate results](results/expanded-v2-parallel-preference-acstack-2026-11-05.json). Raw local attempts: `/tmp/ac-teams-small-local-20261105/runs/expanded-stack-p27-*/`.
+[Accepted baseline](expanded-v2-baseline.md) · [Safe detailed candidate results](../results/expanded-v2-parallel-preference-acstack-2026-11-05.json). Raw local attempts: `/tmp/ac-teams-small-local-20261105/runs/expanded-stack-p27-*/`.
 
 ## Previous candidate revision
 
@@ -46,7 +46,7 @@ The previous net-time-consideration revision stayed solo: delivery **8m23s**, in
 
 Compared with the accepted baseline, delivery elapsed time was **24.5% lower**, while indexer was **6.5% higher**. Correctness stayed at 34/34 and 47/47. Total usage was **3,830,801** tokens including cache versus baseline **2,068,727** and previous candidate **2,848,145**; total fresh input plus output was **254,481** versus baseline **105,335**. These are observations from single attempts, not causal estimates. Independent review is useful work, not automatically avoidable overhead.
 
-[Prior candidate report](EXPANDED-CANDIDATE.md) remains unchanged.
+[Prior candidate report](expanded-v2-candidate.md) remains unchanged.
 
 ## Independent review evidence
 

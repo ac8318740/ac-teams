@@ -98,7 +98,7 @@ The contract requires continuing after thrown values but specifies `String(error
 
 ## Evidence and limits
 
-The [machine-readable record](results/expanded-v2-batching-acstack-2026-11-06.json) includes source hashes, the exact patch, runtime environments, usage, grades, session hashes, fixture/submission hashes, batching counts, and the supplemental probe.
+The [machine-readable record](../results/expanded-v2-batching-acstack-2026-11-06.json) includes source hashes, the exact patch, runtime environments, usage, grades, session hashes, fixture/submission hashes, batching counts, and the supplemental probe.
 
 Raw evidence and both frozen source trees remain under `/tmp/ac-teams-batch-20261105`. The `bb29-*` attempts are baseline; `bc29-*` are candidate.
 
