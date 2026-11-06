@@ -79,7 +79,7 @@ Enforced access needs a running Docker daemon your user can use, and the member 
 When the image is missing, `team_agent list` reports the exact build command, for example:
 
 ```sh
-docker build -t ac-teams-member:1.5.0-<hash> --build-arg PI_VERSION=1.5.0 -f <ac-teams>/src/sandbox.Dockerfile <ac-teams>/src
+docker build -t ac-teams-member:1.5.0-<hash> --build-arg PI_VERSION=1.5.0 -f <ac-teams>/src/sandbox/member.Dockerfile <ac-teams>/src/sandbox
 ```
 
 The image is `node:22-bookworm-slim`, pinned by digest, with bash, curl, Git, ripgrep, CA certificates, and the same Pi version as Main. Rebuild after upgrading Pi.

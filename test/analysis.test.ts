@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { analysisPolicy } from "../src/analysis.ts";
+import { analysisPolicy } from "../src/settings/analysis.ts";
 
 test("restricted access always disables warm attach, including explicit reuse and inherited settings", () => {
   const access = { read: ["/tmp"], write: [], network: {} };

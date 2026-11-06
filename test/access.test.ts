@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { assertNarrower, assertStableGrants, mountSet, containerProblems, dockerCreateArgs, memberMemory, resolveAccess, sandboxMounts, type SandboxPlan } from "../src/access.ts";
+import { assertNarrower, assertStableGrants, mountSet, containerProblems, dockerCreateArgs, memberMemory, resolveAccess, sandboxMounts, type SandboxPlan } from "../src/sandbox/policy.ts";
 
 function tree() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "acc-")));
@@ -11,6 +13,24 @@ function tree() {
   writeFileSync(join(root, "file"), "x");
   return { root, close: () => rmSync(root, { recursive: true, force: true }) };
 }
+
+test("member image build instructions preserve installed paths with spaces and shell characters", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ac-image-")));
+  try {
+    const installed = join(root, "package space ' $HOME");
+    cpSync(new URL("../src", import.meta.url), join(installed, "src"), { recursive: true });
+    writeFileSync(join(installed, "package.json"), '{"type":"module"}');
+    const { memberImage } = await import(pathToFileURL(join(installed, "src/sandbox/policy.ts")).href);
+    const image = memberImage("1.4.0");
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const docker = join(bin, "docker");
+    writeFileSync(docker, `#!${process.execPath}\nprocess.stdout.write(JSON.stringify(process.argv.slice(2)));\n`);
+    chmodSync(docker, 0o755);
+    const args = JSON.parse(execFileSync("sh", ["-c", image.build], { env: { ...process.env, PATH: bin + ":" + process.env.PATH }, encoding: "utf8" }));
+    assert.deepEqual(args, ["build", "-t", image.tag, "--build-arg", "PI_VERSION=1.4.0", "-f", join(installed, "src/sandbox/member.Dockerfile"), join(installed, "src/sandbox")]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test("grants resolve to canonical directories and write implies read", () => {
   const t = tree();

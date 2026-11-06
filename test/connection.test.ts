@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Socket } from "node:net";
-import { readLines } from "../src/connection.ts";
+import { readLines } from "../src/team/connection.ts";
 
 test("coalesced frames are bounded individually, not as one oversized frame", () => {
   const socket = new Socket();
