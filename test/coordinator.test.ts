@@ -216,6 +216,7 @@ test("an explicit team pause survives notification turns, but final replies and 
     const task = await f.team.handle("root", "task", { action: "create", title: "Observe" }) as { id: string };
     await f.team.handle("root", "message", { action: "watch", tasks: [task.id] });
     assert.equal(busy(), false, "watch registration alone is not a pause");
+    await f.team.handle("root", "agent", { ...launch, brief: "WAIT" });
     await f.team.handle("root", "message", { action: "wait" });
     assert.equal(busy(), true);
     f.team.recordEvent("root", { type: "agent_settled" });
@@ -228,6 +229,64 @@ test("an explicit team pause survives notification turns, but final replies and 
     await f.team.handle("root", "message", { action: "wait" });
     f.team.recordEvent("root", { type: "cancelled" });
     assert.equal(busy(), false);
+  } finally { await f.close(); }
+});
+
+test("waiting without active workers does not keep Herdr working", async () => {
+  const f = await setup();
+  const busy = () => f.states.filter(state => state.kind === "busy").at(-1)?.active ?? false;
+  try {
+    await f.team.handle("root", "message", { action: "wait" });
+    f.team.recordEvent("root", { type: "agent_settled" });
+    assert.equal(busy(), false, "a workerless wait is idle");
+    const worker = await f.team.handle("root", "agent", { ...launch, brief: "WAIT" }) as { id: string };
+    await until(() => f.team.store.state.members[worker.id].activity === "Working");
+    await f.team.handle(worker.id, "message", { action: "wait" });
+    f.team.recordEvent(worker.id, { type: "agent_settled" });
+    assert.equal(busy(), false, "an idle waiting descendant is not active work");
+    f.team.recordEvent(worker.id, { type: "agent_start" });
+    assert.equal(busy(), true, "resumed work still reports busy");
+    f.team.recordEvent(worker.id, { type: "agent_settled" });
+    assert.equal(busy(), false);
+  } finally { await f.close(); }
+});
+
+for (const interactive of [false, true]) test(`unexpected child exit wakes a paused parent and clears busy (${interactive ? "native" : "RPC"})`, async () => {
+  const f = await setup(3, 2, interactive);
+  const busy = () => f.states.filter(state => state.kind === "busy").at(-1)?.active ?? false;
+  try {
+    const worker = await f.team.handle("root", "agent", { ...launch, brief: "WAIT" }) as { id: string; pid: number };
+    await until(() => f.team.store.state.members[worker.id].activity === "Working");
+    await f.team.handle("root", "message", { action: "wait" });
+    f.team.recordEvent("root", { type: "agent_settled" });
+    assert.equal(busy(), true);
+    process.kill(worker.pid, "SIGKILL");
+    await until(() => f.team.store.state.members[worker.id].status === "interrupted");
+    const notice = f.team.store.state.messages.at(-1)!;
+    assert.ok(notice, "an unexpected exit posts a durable notice");
+    assert.equal(notice.from, worker.id);
+    assert.deepEqual(notice.recipients, ["root"]);
+    assert.match(notice.summary, /exited unexpectedly/i);
+    await until(() => f.notices.includes(notice.seq));
+    assert.equal(busy(), false);
+    const stopped = await f.team.handle("root", "agent", { ...launch, name: "stopped", brief: "WAIT" }) as { id: string };
+    await f.team.stopTree(stopped.id);
+    assert.equal(f.team.store.state.messages.length, 1, "intentional stops do not send failure notices");
+  } finally { await f.close(); }
+});
+
+for (const stopping of [false, true]) test(`child exit notifies ${stopping ? "Main when its parent is stopping" : "its live parent"}`, async () => {
+  const f = await setup();
+  try {
+    const parent = await f.team.handle("root", "agent", { ...launch, brief: "WAIT" }) as { id: string };
+    const child = await f.team.handle(parent.id, "agent", { ...launch, name: "child", brief: "WAIT" }) as { id: string; pid: number };
+    if (stopping) f.team.store.update(state => { state.members[parent.id].status = "stopping"; });
+    process.kill(child.pid, "SIGKILL");
+    await until(() => f.team.store.state.members[child.id].status === "interrupted");
+    const notice = f.team.store.state.messages.at(-1)!;
+    assert.equal(notice.from, child.id);
+    assert.deepEqual(notice.recipients, [stopping ? "root" : parent.id]);
+    assert.match(notice.summary, /exited unexpectedly/i);
   } finally { await f.close(); }
 });
 
@@ -762,6 +821,8 @@ test("unexpected intermediate process exit stops its descendants", async () => {
     await until(() => f.team.live().length === 0);
     assert.equal(f.team.store.state.members[parent.id].status, "interrupted");
     assert.equal(f.team.store.state.members[descendant.id].status, "stopped");
+    assert.equal(f.team.store.state.messages.at(-1)!.from, parent.id);
+    assert.deepEqual(f.team.store.state.messages.at(-1)!.recipients, ["root"]);
   } finally { await f.close(); }
 });
 
@@ -990,6 +1051,7 @@ for (const interactive of [false, true]) test(`explicit reload preserves mid-tas
     await f.team.prepareReload(new AbortController().signal, () => true);
     await assert.rejects(f.team.handle("root", "agent", { ...launch, name: "late" }), /reload is preparing/);
     await f.team.finishReload();
+    assert.equal(f.team.store.state.messages.filter(message => message.summary.includes("exited unexpectedly")).length, 0, "expected reload exits must not wake the lead");
     assert.equal(stop.mock.calls.length, 0);
     assert.deepEqual([idle.id, busy.id].map(id => f.team.store.state.members[id].status), ["stopped", "stopped"]);
     assert.deepEqual([idle.id, busy.id].map(id => f.team.store.state.members[id].handover), ["idle", "busy"]);
@@ -1079,6 +1141,24 @@ test("a new owner resumes each member to its recorded state after a handover", a
   } finally { rmSync(f.home, { recursive: true, force: true }); }
 });
 
+test("launch reserves blocked work while start enforces only hard prerequisites", async () => {
+  const f = await setup();
+  try {
+    const upstream = await f.team.handle("root", "task", { action: "create", title: "Producer" }) as { id: string };
+    const hard = await f.team.handle("root", "task", { action: "create", title: "Hard consumer", dependencies: [upstream.id] }) as { id: string };
+    const reserved = await f.team.handle("root", "agent", { ...launch, name: "waiting", task: hard.id }) as { id: string };
+    assert.equal(f.team.store.state.tasks[hard.id].status, "todo");
+    await assert.rejects(f.team.handle(reserved.id, "task", { action: "start", id: hard.id }), /blocked/);
+    const finish = await f.team.handle("root", "task", { action: "create", title: "Grounded consumer", completionDependencies: [upstream.id] }) as { id: string };
+    const member = await f.team.handle("root", "agent", { ...launch, task: finish.id }) as { id: string };
+    await f.team.handle(member.id, "task", { action: "start", id: finish.id });
+    await assert.rejects(f.team.handle(member.id, "task", { action: "complete", id: finish.id, acceptance: true, summary: "Premature" }), /completion.*blocked/);
+    const child = await f.team.handle(member.id, "task", { action: "create", title: "Nested work", completionDependencies: [finish.id] }) as { id: string };
+    await f.team.handle(member.id, "task", { action: "start", id: child.id });
+    await assert.rejects(f.team.handle(member.id, "task", { action: "complete", id: child.id, acceptance: true, summary: "Premature" }), /completion.*blocked/);
+  } finally { await f.close(); }
+});
+
 test("launch hands an existing task to the new member; its outcome reaches the delegator; a failed launch returns it", async () => {
   const f = await setup();
   try {
@@ -1089,7 +1169,7 @@ test("launch hands an existing task to the new member; its outcome reaches the d
     assert.deepEqual([f.team.store.state.tasks[task.id].owner, f.team.store.state.tasks[task.id].delegator], [member.id, "root"]);
     await assert.rejects(f.team.handle("root", "agent", { ...launch, name: "second", task: task.id }), /unowned or yours/);
     await until(() => !!f.team.store.state.messages.find(message => message.from === member.id)?.summary.includes("You own team task #1"));
-    assert.match(f.team.store.state.messages.find(message => message.from === member.id)!.summary, /Start it only when its prerequisites are done/);
+    assert.match(f.team.store.state.messages.find(message => message.from === member.id)!.summary, /Start it only when its start prerequisites \(dependencies\) are done/);
     await f.team.handle(member.id, "task", { action: "start", id: task.id });
     await f.team.handle(member.id, "task", { action: "complete", id: task.id, acceptance: true, summary: "Parsed all inputs" });
     const outcome = f.team.store.state.messages.at(-1)!;

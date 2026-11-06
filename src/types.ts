@@ -83,6 +83,8 @@ export interface Task {
   title: string;
   description: string;
   dependencies: string[];
+  /** Acceptance prerequisites; absent in older snapshots. */
+  completionDependencies?: string[];
   status: "todo" | "in_progress" | "done";
   completedAt?: number;
   owner?: string;
@@ -93,7 +95,9 @@ export interface Task {
   outcome?: string;
 }
 export interface TaskView extends Task {
+  completionDependencies: string[];
   blockedBy: string[];
+  completionBlockedBy: string[];
 }
 export interface Message {
   seq: number;
@@ -127,6 +131,7 @@ export interface TaskInput {
   label?: string;
   description?: string;
   dependencies?: string[];
+  completionDependencies?: string[];
 }
 export interface TaskArgs {
   tasks?: TaskInput[];
@@ -140,6 +145,7 @@ export interface TaskArgs {
   label?: string;
   description?: string;
   dependencies?: string[];
+  completionDependencies?: string[];
   /** Complete: the outcome published with the completion. */
   summary?: string;
   detail?: string;

@@ -8,7 +8,7 @@ import type { TaskView } from "../src/types.ts";
 
 const sample = (dependencies: number[][], title = "Task"): TaskView[] => dependencies.map((parents, i) => ({
   id: `t${i}`, number: i + 1, label: title, title: `${title} ${i + 1}`, description: "", revision: 1,
-  status: "todo", dependencies: parents.map(n => `t${n}`), blockedBy: parents.map(n => `t${n}`),
+  status: "todo", dependencies: parents.map(n => `t${n}`), completionDependencies: [], blockedBy: parents.map(n => `t${n}`), completionBlockedBy: parents.map(n => `t${n}`),
 }));
 const crossing = () => sample([[], [], [], [0, 1, 2], [0, 1, 2], [0, 1, 2]]);
 function graphFor(tasks: TaskView[], budget = Infinity): TaskGraph {
@@ -160,6 +160,9 @@ test("mask, missing-arrow, extra-arrow, plain/styled, and unexpected-edge mismat
 test("invalid topology and bounds return the original rendering, without trusting incoming metadata", () => {
   const tasks = crossing(), graph = graphFor(tasks);
   unchanged([], graph);
+  for (const invalid of [null, [null], tasks.map(task => ({ ...task, completionDependencies: null }))]) {
+    unchanged(invalid as unknown as TaskView[], graph);
+  }
   unchanged([...tasks, tasks[0]], graph);
   unchanged(tasks.map((task, i) => i ? task : { ...task, dependencies: ["missing"] }), graph);
   unchanged(tasks.map((task, i) => i ? task : { ...task, dependencies: ["t3"] }), graph);

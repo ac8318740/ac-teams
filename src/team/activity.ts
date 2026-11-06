@@ -39,7 +39,7 @@ export class TeamActivity {
       const owner = state.members[id];
       const members = liveMembers(this.store).filter(member => member.status !== "stopping" && isDescendant(state, member.id, id));
       const next = {
-        busy: !!owner && isLive(owner) && owner.status !== "stopping" && owner.attention !== "handoff" && (owner.attention === "waiting" || members.some(member => member.status === "starting" || member.status === "busy" || member.attention === "waiting")),
+        busy: !!owner && isLive(owner) && owner.status !== "stopping" && owner.attention !== "handoff" && members.some(member => member.status === "starting" || member.status === "busy"),
         blocked: members.some(member => member.needsInput),
       };
       const previous = this.statuses.get(id);

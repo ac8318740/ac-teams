@@ -23,11 +23,13 @@ export function shortenTitle(title: string, budget: number): string {
   return (space >= cut.length * 0.6 ? cut.slice(0, space) : cut).trimEnd() + "…";
 }
 
+const prerequisites = (task: TaskView) => [...task.dependencies, ...task.completionDependencies];
+
 function validGraphTasks(tasks: TaskView[]): boolean {
   const ids = new Set(tasks.map(task => task.id));
-  return tasks.length > 0 && tasks.length <= 100 && tasks.reduce((size, task) => size + task.dependencies.length, 0) <= 300
+  return tasks.length > 0 && tasks.length <= 100 && tasks.reduce((size, task) => size + prerequisites(task).length, 0) <= 300
     && ids.size === tasks.length && new Set(tasks.map(task => task.number)).size === tasks.length
-    && !tasks.some(task => task.id.length > 128 || !Number.isSafeInteger(task.number) || task.number < 1 || task.dependencies.some(id => !ids.has(id)));
+    && !tasks.some(task => task.id.length > 128 || !Number.isSafeInteger(task.number) || task.number < 1 || prerequisites(task).some(id => !ids.has(id)));
 }
 
 /** Anchor one task; bound each neighbor group separately without clipping boxes or inventing edges. */
@@ -36,15 +38,18 @@ export function buildTaskFocus(tasks: TaskView[], id: string, width: number, hei
     || !Number.isSafeInteger(height) || height < 14 || height > 2000) return null;
   const numbers = new Map(tasks.map(task => [task.id, task.number]));
   const selected = tasks.find(task => task.id === id);
-  if (!selected || selected.dependencies.includes(id)) return null;
-  const parents = tasks.filter(task => selected.dependencies.includes(task.id));
-  const children = tasks.filter(task => task.dependencies.includes(id));
+  if (!selected || prerequisites(selected).includes(id)) return null;
+  const parents = tasks.filter(task => prerequisites(selected).includes(task.id));
+  const children = tasks.filter(task => prerequisites(task).includes(id));
   if (children.some(task => task.id === id || parents.includes(task))) return null;
   const boxWidth = width - 4, interior = boxWidth - 2, anchor = Math.floor(height / 2);
   const entry = (task: TaskView, role: "parent" | "selected" | "child") => {
     const extra = task.dependencies.filter(parent => role === "parent" || role === "child" && parent !== id);
-    const references = extra.length ? ` · ${role === "child" ? "Also needs" : "Needs"} ${extra.map(parent => `#${numbers.get(parent)}`).join(", ")}` : "";
-    const lines = wrapTextWithAnsi(`○ #${task.number} ${cleanText(task.title).replace(/\s+/g, " ")}${references} · ${taskStatus(task)}`, interior - 2);
+    const finish = task.completionDependencies.filter(parent => role !== "child" || parent !== id);
+    const edgeKind = role === "parent" ? selected.completionDependencies.includes(task.id) ? " · For finish" : "" : role === "child" ? task.completionDependencies.includes(id) ? " · Gates finish" : "" : "";
+    const references = (extra.length ? ` · ${role === "child" ? "Also needs" : "Needs"} ${extra.map(parent => `#${numbers.get(parent)}`).join(", ")}` : "")
+      + (finish.length ? ` · Finish needs ${finish.map(parent => `#${numbers.get(parent)}`).join(", ")}` : "") + edgeKind;
+    const lines = wrapTextWithAnsi(`○ #${task.number} ${cleanText(task.title).replace(/\s+/g, " ")}${references}${task.completionBlockedBy.length && !task.blockedBy.length ? " · Finish blocked" : ""} · ${taskStatus(task)}`, interior - 2);
     return { task, lines, height: lines.length + 2 };
   };
   type Entry = ReturnType<typeof entry>;
@@ -121,8 +126,11 @@ export function buildTaskFocus(tasks: TaskView[], id: string, width: number, hei
 /** Each box shows `#n title · status`; zooming out gives the title fewer columns. Number and status always stay. */
 export function buildTaskGraph(tasks: TaskView[], titleBudget = Infinity): TaskGraph | null {
   if (!validGraphTasks(tasks)) return null;
-  const source = ["flowchart TD", ...tasks.map((task, index) => `n${index}["○ ${label(`#${task.number} ${shortenTitle(cleanText(task.title), titleBudget)}`.trimEnd())} · ${taskStatus(task)}"]`),
-    ...tasks.flatMap((task, index) => task.dependencies.map(id => `n${tasks.findIndex(parent => parent.id === id)} --> n${index}`)),
+  const source = ["flowchart TD", ...tasks.map((task, index) => `n${index}["○ ${label(`#${task.number} ${shortenTitle(cleanText(task.title), titleBudget)}`.trimEnd())}${task.completionBlockedBy.length && !task.blockedBy.length ? " · Finish blocked" : ""} · ${taskStatus(task)}"]`),
+    ...tasks.flatMap((task, index) => [
+      ...task.dependencies.map(id => `n${tasks.findIndex(parent => parent.id === id)} --> n${index}`),
+      ...task.completionDependencies.map(id => `n${tasks.findIndex(parent => parent.id === id)} -.->|finish| n${index}`),
+    ]),
   ].join("\n");
   let art: MermaidArt | null;
   try { art = render(source); } catch { return null; }

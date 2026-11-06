@@ -16,7 +16,7 @@ Use Pi's `/trust` command to save approval for each project directory before lau
 
 ## Use it
 
-Use `team_task` for substantial solo work as well as team deliverables. Agents receive guidance to plan multi-step work, start tasks before working, and complete them after verification. Simple tasks need no list.
+Use `team_task` for substantial solo work as well as team deliverables. Agents receive guidance to plan multi-step work, start tasks before working, and complete them after verification. Simple tasks need no list. `dependencies` requires verified outputs before start and finish; `completionDependencies` allows grounded work from an agreed interface or usable intermediate output while still requiring upstream completion before acceptance. Both support batch `@key` references. See [task rules](docs/usage.md#track-progress-separately-from-ownership).
 
 Your Pi session is the root; its child agents are members. Ask Pi to delegate a bounded assignment, for example:
 
@@ -46,7 +46,7 @@ Defaults allow up to **10 live members** and **two levels of delegation**. Use t
 ## Know the boundaries
 
 - Members share your filesystem access unless launched with [enforced access](docs/access.md), an opt-in Docker sandbox that needs Docker and a locally built member image. All members can read all team messages, including direct messages.
-- Limits cover only `team_agent`, not other delegation tools. Use separate worktrees for concurrent writers.
+- Limits cover only `team_agent`, not other delegation tools. Coordinate shared-file edits with file or section ownership, current-content checks, and no blind overwrites. Serialize overlapping edits or use separate worktrees when needed.
 - Stop retains tasks, sessions, and worktrees. Worktree deletion is explicit and requires clean, integrated work.
 - Exit confirmation needs Pi's `session_before_exit` hook, which installed Pi 1.4.0 lacks. Without it, shutdown cleans up but cannot ask first. Signals always bypass confirmation.
 

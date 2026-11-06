@@ -12,7 +12,7 @@ import { TerminalAgent, tmux } from "../members/terminal-agent.ts";
 import { validate } from "./requests.ts";
 import { removeWorktree } from "../members/worktrees.ts";
 import { handoverPrompt } from "../members/main-terminal.ts";
-import { canControl, isDescendant, isLive, isMain, memberName, taskName, type AgentArgs, type Member, type MessageArgs, type TaskArgs, type TeamState, type UserAction, type Message, type ContextUsage } from "../types.ts";
+import { canControl, isDescendant, isLive, isMain, memberName, taskName, type AgentArgs, type Member, type MessageArgs, type TaskArgs, type TeamState, type UserAction, type Message } from "../types.ts";
 
 export const taskRequestGuidance = [
   "Assess user task requests against the agreed scope and existing work before changing shared tasks.",
@@ -45,6 +45,7 @@ export class Coordinator {
   private activity: TeamActivity;
   private closePromise?: Promise<void>;
   private reloading = false;
+  private reloadExits = new Set<string>();
   private sandboxRuntime: SandboxRuntime;
   private releasing = new Map<string, Promise<void>>();
 
@@ -255,8 +256,15 @@ export class Coordinator {
         this.operations.add(release); this.releasing.set(id, release);
         void release.finally(() => { this.operations.delete(release); if (this.releasing.get(id) === release) this.releasing.delete(id); });
         if (this.closed) return;
-        this.store.update(next => { next.members[id].status = next.members[id].status === "stopping" ? "stopped" : "interrupted"; delete next.members[id].needsInput; });
+        this.store.update(next => { next.members[id].status = next.members[id].status === "stopping" || this.reloadExits.has(id) ? "stopped" : "interrupted"; delete next.members[id].needsInput; });
         this.activity.publish();
+        const member = this.store.state.members[id];
+        if (member.status === "interrupted") {
+          const parent = member.parent && this.store.state.members[member.parent];
+          const recipient = parent && isLive(parent) && parent.status !== "stopping" ? parent.id : this.self;
+          this.store.message(id, { action: "send", recipients: [recipient], summary: `Member ${memberName(member)} (${id}) exited unexpectedly. Its work may be incomplete; inspect its status and resume or reassign as needed.` });
+          this.protocol.notify(recipient);
+        }
         // A promoted member keeps its descendants.
         if (!this.store.state.members[id].promotion) void this.stopDescendants(id).catch(error => this.options.warning(String(error)));
       });
@@ -336,19 +344,20 @@ export class Coordinator {
     for (const member of this.live().sort((a, b) => b.depth - a.depth)) {
       const agent = this.agents.get(member.id);
       if (!agent) throw new Error(`No owned transport for ${memberName(member)}`);
-      const value = await this.protocol.control(member.id, "shutdown_reload") as { ready?: boolean; resume?: boolean };
-      if (value?.ready !== true || typeof value.resume !== "boolean") throw new Error(`Invalid shutdown response from ${memberName(member)}`);
-      this.store.update(state => {
-        state.members[member.id].handover = value.resume ? "busy" : "idle";
-      });
+      this.reloadExits.add(member.id);
       let timer: NodeJS.Timeout | undefined;
       try {
+        const value = await this.protocol.control(member.id, "shutdown_reload") as { ready?: boolean; resume?: boolean };
+        if (value?.ready !== true || typeof value.resume !== "boolean") throw new Error(`Invalid shutdown response from ${memberName(member)}`);
+        this.store.update(state => {
+          state.members[member.id].handover = value.resume ? "busy" : "idle";
+        });
         await Promise.race([agent.exited, new Promise<never>((_resolve, reject) => {
           timer = setTimeout(() => reject(new Error(`${memberName(member)} did not shut down for reload; no signal was sent`)), 10000);
         })]);
         await this.releasing.get(member.id);
         this.store.update(state => { state.members[member.id].status = "stopped"; delete state.members[member.id].needsInput; });
-      } finally { clearTimeout(timer); }
+      } finally { clearTimeout(timer); this.reloadExits.delete(member.id); }
     }
   }
   close(): Promise<void> { this.closePromise ??= this.closeOnce(); return this.closePromise; }
