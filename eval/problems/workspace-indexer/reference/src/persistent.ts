@@ -49,7 +49,9 @@ function attach(storage: StorageAdapter, index: WorkspaceIndex, current: number,
     const copied = copyOperations(operations);
     if (!copied.length) return;
     revision(current + 1);
-    const nextEntries = [...entries, { revision: current + 1, operations: copied }];
+    // Covered history may end before the checkpoint; do not append across that gap.
+    const history = entries.length && entries.at(-1)!.revision < current ? [] : entries;
+    const nextEntries = [...history, { revision: current + 1, operations: copied }];
     storage.write(JOURNAL, JSON.stringify({ version: 2, entries: nextEntries }));
     // The successful atomic journal write is the only update commit point.
     index.applyBatch(copied);

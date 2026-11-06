@@ -120,6 +120,26 @@ test('recovery uses checkpoint documents over covered journal operations and rep
   assert.equal(index.revision, 3); assert.deepEqual(c.calls.map(call => call[0]), ['read', 'read']);
 });
 
+test('commits after recovery from journal history ending before the checkpoint remain reopenable', () => {
+  const c = controlled({ [CP]: checkpoint([{ path: 'x', content: 'checkpoint' }], 5), [LOG]: journal([entry(1, 'covered')]) });
+  const index = api.openIndex(c.storage);
+  assert.equal(index.revision, 5);
+  assert.deepEqual(index.search('checkpoint'), ['x']);
+  assert.deepEqual(index.search('covered'), []);
+  assert.deepEqual(c.calls.map(call => call[0]), ['read', 'read']);
+  c.setFail(`write:${LOG}`);
+  assert.throws(() => index.upsert({ path: 'y', content: 'new' }), error => error === c.failure);
+  assert.equal(index.revision, 5);
+  assert.equal(c.base.read(LOG), journal([entry(1, 'covered')]));
+  c.setFail(undefined);
+  index.upsert({ path: 'y', content: 'new' });
+  assert.equal(index.revision, 6);
+  const reopened = api.openIndex(c.storage);
+  assert.equal(reopened.revision, 6);
+  assert.deepEqual(reopened.search('checkpoint OR new'), ['x', 'y']);
+  assert.deepEqual(reopened.search('covered'), []);
+});
+
 test('v1 snapshot migration writes a v2 checkpoint and supports full search/update/reopen', () => {
   const c = controlled({ [CP]: api.createIndex(docs).snapshot() });
   const index = api.openIndex(c.storage);
