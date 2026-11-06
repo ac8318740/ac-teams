@@ -213,6 +213,7 @@ test("an explicit team pause survives notification turns, but final replies and 
     const task = await f.team.handle("root", "task", { action: "create", title: "Observe" }) as { id: string };
     await f.team.handle("root", "message", { action: "watch", tasks: [task.id] });
     assert.equal(busy(), false, "watch registration alone is not a pause");
+    await f.team.handle("root", "agent", { ...launch, brief: "WAIT" });
     await f.team.handle("root", "message", { action: "wait" });
     assert.equal(busy(), true);
     f.team.recordEvent("root", { type: "agent_settled" });
@@ -225,6 +226,64 @@ test("an explicit team pause survives notification turns, but final replies and 
     await f.team.handle("root", "message", { action: "wait" });
     f.team.recordEvent("root", { type: "cancelled" });
     assert.equal(busy(), false);
+  } finally { await f.close(); }
+});
+
+test("waiting without active workers does not keep Herdr working", async () => {
+  const f = await setup();
+  const busy = () => f.states.filter(state => state.kind === "busy").at(-1)?.active ?? false;
+  try {
+    await f.team.handle("root", "message", { action: "wait" });
+    f.team.recordEvent("root", { type: "agent_settled" });
+    assert.equal(busy(), false, "a workerless wait is idle");
+    const worker = await f.team.handle("root", "agent", { ...launch, brief: "WAIT" }) as { id: string };
+    await until(() => f.team.store.state.members[worker.id].activity === "Working");
+    await f.team.handle(worker.id, "message", { action: "wait" });
+    f.team.recordEvent(worker.id, { type: "agent_settled" });
+    assert.equal(busy(), false, "an idle waiting descendant is not active work");
+    f.team.recordEvent(worker.id, { type: "agent_start" });
+    assert.equal(busy(), true, "resumed work still reports busy");
+    f.team.recordEvent(worker.id, { type: "agent_settled" });
+    assert.equal(busy(), false);
+  } finally { await f.close(); }
+});
+
+for (const interactive of [false, true]) test(`unexpected child exit wakes a paused parent and clears busy (${interactive ? "native" : "RPC"})`, async () => {
+  const f = await setup(3, 2, interactive);
+  const busy = () => f.states.filter(state => state.kind === "busy").at(-1)?.active ?? false;
+  try {
+    const worker = await f.team.handle("root", "agent", { ...launch, brief: "WAIT" }) as { id: string; pid: number };
+    await until(() => f.team.store.state.members[worker.id].activity === "Working");
+    await f.team.handle("root", "message", { action: "wait" });
+    f.team.recordEvent("root", { type: "agent_settled" });
+    assert.equal(busy(), true);
+    process.kill(worker.pid, "SIGKILL");
+    await until(() => f.team.store.state.members[worker.id].status === "interrupted");
+    const notice = f.team.store.state.messages.at(-1)!;
+    assert.ok(notice, "an unexpected exit posts a durable notice");
+    assert.equal(notice.from, worker.id);
+    assert.deepEqual(notice.recipients, ["root"]);
+    assert.match(notice.summary, /exited unexpectedly/i);
+    await until(() => f.notices.includes(notice.seq));
+    assert.equal(busy(), false);
+    const stopped = await f.team.handle("root", "agent", { ...launch, name: "stopped", brief: "WAIT" }) as { id: string };
+    await f.team.stopTree(stopped.id);
+    assert.equal(f.team.store.state.messages.length, 1, "intentional stops do not send failure notices");
+  } finally { await f.close(); }
+});
+
+for (const stopping of [false, true]) test(`child exit notifies ${stopping ? "Main when its parent is stopping" : "its live parent"}`, async () => {
+  const f = await setup();
+  try {
+    const parent = await f.team.handle("root", "agent", { ...launch, brief: "WAIT" }) as { id: string };
+    const child = await f.team.handle(parent.id, "agent", { ...launch, name: "child", brief: "WAIT" }) as { id: string; pid: number };
+    if (stopping) f.team.store.update(state => { state.members[parent.id].status = "stopping"; });
+    process.kill(child.pid, "SIGKILL");
+    await until(() => f.team.store.state.members[child.id].status === "interrupted");
+    const notice = f.team.store.state.messages.at(-1)!;
+    assert.equal(notice.from, child.id);
+    assert.deepEqual(notice.recipients, [stopping ? "root" : parent.id]);
+    assert.match(notice.summary, /exited unexpectedly/i);
   } finally { await f.close(); }
 });
 
@@ -739,6 +798,8 @@ test("unexpected intermediate process exit stops its descendants", async () => {
     await until(() => f.team.live().length === 0);
     assert.equal(f.team.store.state.members[parent.id].status, "interrupted");
     assert.equal(f.team.store.state.members[descendant.id].status, "stopped");
+    assert.equal(f.team.store.state.messages.at(-1)!.from, parent.id);
+    assert.deepEqual(f.team.store.state.messages.at(-1)!.recipients, ["root"]);
   } finally { await f.close(); }
 });
 
