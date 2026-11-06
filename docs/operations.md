@@ -207,6 +207,8 @@ Schema 1 also migrates progress: `pending` becomes `todo`, `claimed` becomes `in
 
 State schema 5 turns messages into board posts: each has a `summary`, optional `detail`, and an optional `task` or `replyTo`; tasks gain an optional `delegator` and `outcome` post reference, and records an optional `waiting` registration. Opening a schema 4 team keeps every message's text unchanged as its summary. Older done tasks have no outcome, and no delegation is inferred. Schema 5 state cannot be opened by older ac-teams versions.
 
+Tasks may also store `completionDependencies` in schema 5. Its absence in existing snapshots means no additional completion prerequisites; views always return an array. `dependencies` still gates both start and finish. Both edge kinds are validated together for missing IDs, duplicate edges, self-references, and cycles. Active tasks may have unfinished completion-only prerequisites; done tasks may not. Stop older code before using completion-only edges: older versions do not enforce these gates.
+
 State schema 4 adds a role to each record: `main` or `member`. Opening a schema 3 team makes the root record a main session and every other record a member. A record without a role has left the team. A promotion records each step, so a failure rolls the member back to a stopped member with its original transcript path.
 
 Only the coordinator writes state. Mutations validate a copy, flush a temporary snapshot, atomically rename it, and flush the directory before returning success. An exclusive process-identity lock prevents concurrent owners. Private team directories use 0700; state files and the authenticated Unix socket use 0600. Uncertain locks fail closed.

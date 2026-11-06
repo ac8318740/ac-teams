@@ -8,7 +8,7 @@ import { cleanText } from "../src/ui/render.ts";
 import type { TaskView } from "../src/types.ts";
 
 const task = (id: string, overrides: Partial<TaskView> = {}): TaskView => ({
-  id, number: Number(id.replace(/^T/, "")) || 1, label: `Task ${id}`, revision: 1, title: `Task ${id}`, description: "Real task description", dependencies: [], status: "todo", blockedBy: [], ...overrides,
+  id, number: Number(id.replace(/^T/, "")) || 1, label: `Task ${id}`, revision: 1, title: `Task ${id}`, description: "Real task description", dependencies: [], completionDependencies: [], status: "todo", blockedBy: [], completionBlockedBy: [], ...overrides,
 });
 const tasks = [task("T03", { status: "done" }), task("T12", { status: "in_progress", dependencies: ["T03"] }),
   task("T21", { dependencies: ["T03"] }), task("T18", { dependencies: ["T12", "T21"], blockedBy: ["T12", "T21"] })];
@@ -19,6 +19,24 @@ const theme = {
   underline(text: string) { return `\x1b[4m${text}\x1b[24m`; },
   style(text: string, options: { fg: Parameters<typeof foregroundAnsi>[0] }) { return foregroundAnsi(options.fg, "256color") + text + "\x1b[39m"; },
 } as unknown as Theme;
+
+test("graphs distinguish completion-only edges and retain ready-to-start status", () => {
+  const producer = task("T1");
+  const consumer = task("T2", { completionDependencies: [producer.id], completionBlockedBy: [producer.id] });
+  const graph = buildTaskGraph([producer, consumer]);
+  assert.ok(graph);
+  assert.match(graph.art.plain.join("\n"), /finish/);
+  assert.match(graph.art.plain.join("\n"), /Finish/);
+  assert.match(graph.art.plain.join("\n"), /blocked/);
+  assert.match(graph.art.plain.join("\n"), /Ready/);
+  const focus = buildTaskFocus([producer, consumer], consumer.id, 100, 30);
+  assert.ok(focus);
+  assert.ok(focus.bounds.has(producer.id));
+  assert.match(focus.art.plain.join("\n"), /For finish/);
+  const reverse = buildTaskFocus([producer, consumer], producer.id, 100, 30);
+  assert.ok(reverse);
+  assert.match(reverse.art.plain.join("\n"), /Gates finish/);
+});
 
 test("graph viewport reuses rows, invalidates styles, and replaces task snapshots", () => {
   const viewport = new GraphViewport();

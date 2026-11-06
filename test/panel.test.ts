@@ -6,12 +6,13 @@ import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-ag
 import { cleanText } from "../src/ui/render.ts";
 import { showTeamsPanel } from "../src/ui/panel.ts";
 import { panelFormat } from "../src/ui/panel-format.ts";
+import { taskDetails } from "../src/ui/panel-details.ts";
 import { panelLists } from "../src/ui/panel-lists.ts";
 import type { PanelHost, TeamSnapshot } from "../src/ui/types.ts";
 import type { TaskView } from "../src/types.ts";
 
 const task = (id: string, overrides: Partial<TaskView> = {}): TaskView => ({
-  id, number: Number(id.replace(/^T/, "")) || 1, label: `Task ${id}`, revision: 1, title: `Task ${id}`, description: "Real task description", dependencies: [], status: "todo", blockedBy: [], ...overrides,
+  id, number: Number(id.replace(/^T/, "")) || 1, label: `Task ${id}`, revision: 1, title: `Task ${id}`, description: "Real task description", dependencies: [], completionDependencies: [], status: "todo", blockedBy: [], completionBlockedBy: [], ...overrides,
 });
 const tasks = [task("T03", { status: "done" }), task("T12", { status: "in_progress", dependencies: ["T03"] }),
   task("T21", { dependencies: ["T03"] }), task("T18", { dependencies: ["T12", "T21"], blockedBy: ["T12", "T21"] })];
@@ -52,6 +53,18 @@ async function panelFixture(snapshot: TeamSnapshot, view?: { graph: boolean }) {
 }
 
 const snapshot = (): TeamSnapshot => ({ members: [], tasks: tasks.map(item => ({ ...item })), messages: [], limit: 4, depth: 2 });
+
+test("task details distinguish start and finish prerequisites and unlocks", () => {
+  const producer = task("T1");
+  const consumer = task("T2", { completionDependencies: [producer.id], completionBlockedBy: [producer.id] });
+  const data = [producer, consumer];
+  const style = panelFormat(theme, data, []);
+  const details = (item: TaskView) => taskDetails(item, data, [], style, 150).map(cleanText).join("\n");
+  assert.match(details(consumer), /Start needs +Nothing; can start now/);
+  assert.match(details(consumer), /Finish also needs +#1 Task T1/);
+  assert.match(details(consumer), /Finish blocked by +#1 Task T1/);
+  assert.match(details(producer), /Unlocks +#2 Task T2 \(finish\)/);
+});
 
 test("panel views render explicit data without changing selection or snapshots", () => {
   const data: Parameters<typeof panelLists>[0] = {

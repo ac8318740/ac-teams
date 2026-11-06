@@ -5,7 +5,9 @@ import { integer, object, requireValue, taskLabel, text } from "./snapshot.ts";
 import { post } from "./messages.ts";
 
 function taskView(state: TeamState, task: Task): TaskView {
-  return structuredClone({ ...task, blockedBy: task.dependencies.filter(id => state.tasks[id]?.status !== "done") });
+  const completionDependencies = task.completionDependencies ?? [];
+  const unfinished = (id: string) => state.tasks[id]?.status !== "done";
+  return structuredClone({ ...task, completionDependencies, blockedBy: task.dependencies.filter(unfinished), completionBlockedBy: [...task.dependencies, ...completionDependencies].filter(unfinished) });
 }
 
 export function task(state: TeamState, actor: string, args: TaskArgs): TaskView | { tasks: TaskView[]; total: number } {
@@ -22,7 +24,7 @@ export function task(state: TeamState, actor: string, args: TaskArgs): TaskView 
   }
   if (args.action === "create") {
     requireValue(args.tasks === undefined || (Array.isArray(args.tasks) && args.tasks.length > 0 && args.tasks.length <= 100), "Batch create requires 1-100 tasks");
-    requireValue(args.tasks === undefined || [args.title, args.label, args.description, args.dependencies].every(value => value === undefined), "Use tasks or top-level task fields, not both");
+    requireValue(args.tasks === undefined || [args.title, args.label, args.description, args.dependencies, args.completionDependencies].every(value => value === undefined), "Use tasks or top-level task fields, not both");
     const inputs = args.tasks ?? [args];
     let number = Object.values(state.tasks).reduce((max, task) => Math.max(max, task.number), 0);
     const ids = inputs.map(() => randomUUID());
@@ -40,19 +42,22 @@ export function task(state: TeamState, actor: string, args: TaskArgs): TaskView 
       requireValue(text(description), "Task requires a description (max 16000)");
       const label = input.label === undefined ? taskLabel(input.title) : input.label;
       requireValue(text(label, taskLabelMaxLength) && taskLabelPattern.test(label), "Task requires a 1–3-word label (max 60 characters)");
-      const refs = input.dependencies === undefined ? [] : input.dependencies;
-      requireValue(Array.isArray(refs) && refs.length <= 100, "Invalid task dependencies (max 100)");
-      const dependencies = refs.map(ref => {
-        requireValue(typeof ref === "string", "Invalid task dependency");
-        if (args.tasks !== undefined && ref.startsWith("@")) {
-          const id = keys.get(ref.slice(1));
-          requireValue(id, `Unknown batch task reference: ${ref}`);
-          return id;
-        }
-        requireValue(Object.hasOwn(state.tasks, ref), "Dependencies must refer to existing tasks or @keys in this batch");
-        return ref;
-      });
-      const task: Task = { id: ids[index], number: ++number, label, revision: 1, creator: actor, title: input.title, description, dependencies, status: "todo" };
+      const resolveDependencies = (refs: string[] = []) => {
+        requireValue(Array.isArray(refs) && refs.length <= 100, "Invalid task dependencies (max 100)");
+        return refs.map(ref => {
+          requireValue(typeof ref === "string", "Invalid task dependency");
+          if (args.tasks !== undefined && ref.startsWith("@")) {
+            const id = keys.get(ref.slice(1));
+            requireValue(id, `Unknown batch task reference: ${ref}`);
+            return id;
+          }
+          requireValue(Object.hasOwn(state.tasks, ref), "Dependencies must refer to existing tasks or @keys in this batch");
+          return ref;
+        });
+      };
+      const dependencies = resolveDependencies(input.dependencies);
+      const completionDependencies = resolveDependencies(input.completionDependencies);
+      const task: Task = { id: ids[index], number: ++number, label, revision: 1, creator: actor, title: input.title, description, dependencies, completionDependencies, status: "todo" };
       state.tasks[task.id] = task;
       return task;
     }).map(task => taskView(state, task));
@@ -73,7 +78,11 @@ export function task(state: TeamState, actor: string, args: TaskArgs): TaskView 
     if (args.title !== undefined) task.title = args.title;
     if (args.label !== undefined) task.label = args.label;
     if (args.description !== undefined) task.description = args.description;
-    if (args.dependencies !== undefined) task.dependencies = structuredClone(args.dependencies);
+    for (const field of ["dependencies", "completionDependencies"] as const) {
+      if (args[field] === undefined) continue;
+      requireValue(Array.isArray(args[field]) && args[field].length <= 100, "Invalid task dependencies (max 100)");
+      task[field] = structuredClone(args[field]);
+    }
   } else if (args.action === "claim") {
     requireValue(task.status !== "done", "Task is done; explicitly reopen it before claiming");
     requireValue(!task.owner, `Task is already owned by ${task.owner}`);
@@ -88,6 +97,8 @@ export function task(state: TeamState, actor: string, args: TaskArgs): TaskView 
   } else if (args.action === "complete") {
     requireValue(task.owner === actor, "Only the owner can complete this task");
     requireValue(task.status === "in_progress", "Only in-progress tasks can be completed; start it first");
+    const blocked = taskView(state, task).completionBlockedBy;
+    requireValue(blocked.length === 0, `Task completion is blocked by unfinished dependencies: ${blocked.join(", ")}`);
     requireValue(args.acceptance === true, "Completion requires acceptance=true after checking acceptance criteria");
     requireValue(text(args.summary), "Completion requires an outcome summary: what was done, how it was checked, and any caveats");
     const outcome = post(state, actor, { summary: args.summary, detail: args.detail, task: task.id, kind: "outcome" });
@@ -103,7 +114,7 @@ export function task(state: TeamState, actor: string, args: TaskArgs): TaskView 
   } else if (args.action === "reopen") {
     requireValue(task.status === "done", "Only done tasks can be reopened");
     requireValue(!task.owner || task.owner === actor || isMain(state.members[actor]), "Only the owner or a main session can reopen an owned task");
-    const dependents = Object.values(state.tasks).filter(other => other.dependencies.includes(task.id) && other.status !== "todo");
+    const dependents = Object.values(state.tasks).filter(other => (other.dependencies.includes(task.id) && other.status !== "todo") || ((other.completionDependencies ?? []).includes(task.id) && other.status === "done"));
     requireValue(dependents.length === 0, `Cannot reopen task with active or done dependents: ${dependents.map(t => t.id).join(", ")}`);
     task.status = "todo";
     delete task.completedAt; delete task.outcome;

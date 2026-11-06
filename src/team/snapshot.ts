@@ -109,13 +109,17 @@ export function validate(state: unknown): asserts state is TeamState {
     requireValue(integer(task.number, 1) && !taskNumbers.has(task.number) && text(task.label, taskLabelMaxLength) && taskLabelPattern.test(task.label), "Invalid task number or label");
     taskNumbers.add(task.number);
     requireValue(task.completedAt === undefined || integer(task.completedAt), "Invalid task completion time");
-    requireValue(task.dependencies.every(dep => typeof dep === "string" && dep !== key && Object.hasOwn(tasks, dep)) && new Set(task.dependencies).size === task.dependencies.length, "Invalid task dependencies");
+    requireValue(task.completionDependencies === undefined || Array.isArray(task.completionDependencies), "Invalid task completion dependencies");
+    const completionDependencies = task.completionDependencies ?? [];
+    const dependencies = [...task.dependencies, ...completionDependencies];
+    requireValue(dependencies.every(dep => typeof dep === "string" && dep !== key && Object.hasOwn(tasks, dep)) && new Set(dependencies).size === dependencies.length, "Invalid task dependencies");
     requireValue(task.owner === undefined || (typeof task.owner === "string" && Object.hasOwn(members, task.owner)), "Invalid task owner");
     requireValue([task.creator, task.delegator].every(member => member === undefined || (typeof member === "string" && Object.hasOwn(members, member))), "Invalid task creator or delegator");
     requireValue(task.outcome === undefined || (task.status === "done" && state.messages.some(message => object(message) && message.id === task.outcome && message.task === key)), "Invalid task outcome");
     requireValue(task.status !== "in_progress" || task.owner !== undefined, "In-progress task requires an owner");
     requireValue(task.status === "todo" || task.dependencies.every(dep => (tasks[dep] as Record<string, unknown>).status === "done"), "Active or done task has unfinished dependencies");
-    edges[key] = task.dependencies;
+    requireValue(task.status !== "done" || completionDependencies.every(dep => (tasks[dep] as Record<string, unknown>).status === "done"), "Done task has unfinished completion dependencies");
+    edges[key] = dependencies;
   }
   const visiting = new Set<string>();
   const visited = new Set<string>();
