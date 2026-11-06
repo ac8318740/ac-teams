@@ -47,6 +47,29 @@ test("allowlists name hosts and ports explicitly, and children can only narrow t
   assert.throws(() => assertNetworkNarrower({ allow: ["x.example.com"] }, { allow: ["x.example.com:22"] }), /exceeds/);
 });
 
+test("wildcard inheritance permits equal or narrower subdomains and ports, never an apex or wider policy", () => {
+  for (const [parent, child] of [
+    ["*.github.com", "*.github.com"],
+    ["*.github.com", "*.github.com:443"],
+    ["*.github.com:8443", "*.github.com:8443"],
+    ["*.github.com", "*.api.github.com"],
+    ["*.github.com:8443", "*.api.github.com:8443"],
+  ]) {
+    assert.doesNotThrow(() => assertNetworkNarrower({ allow: [parent] }, { allow: [child] }), `${parent} permits ${child}`);
+  }
+  for (const [parent, child] of [
+    ["*.github.com", "github.com"],
+    ["*.github.com", "*.evilgithub.com"],
+    ["*.api.github.com", "*.github.com"],
+    ["raw.github.com", "*.github.com"],
+    ["*.github.com", "*.github.com:8443"],
+    ["*.github.com:443", "*.github.com"],
+    ["*.github.com:8443", "*.api.github.com"],
+  ]) {
+    assert.throws(() => assertNetworkNarrower({ allow: [parent] }, { allow: [child] }), /exceeds/, `${parent} refuses ${child}`);
+  }
+});
+
 test("authorities are parsed strictly", () => {
   assert.deepEqual(parseAuthority("example.com:443"), { host: "example.com", port: 443 });
   assert.deepEqual(parseAuthority("[2606:4700::1]:443"), { host: "2606:4700::1", port: 443 });

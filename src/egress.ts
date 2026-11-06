@@ -40,7 +40,7 @@ export function assertNetworkNarrower(parent: NetworkPolicy, child: NetworkPolic
     const ok = parent.allow.some(parentText => {
       const outer = parseEntry(parentText);
       if (!entry.ports.every(port => outer.ports.includes(port))) return false;
-      if (outer.wildcard) return entry.host.endsWith("." + outer.host);
+      if (outer.wildcard) return (entry.wildcard && entry.host === outer.host) || entry.host.endsWith("." + outer.host);
       return !entry.wildcard && entry.host === outer.host;
     });
     if (!ok) throw new Error(`Network access to ${text} exceeds the requesting member's access`);
