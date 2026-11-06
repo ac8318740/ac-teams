@@ -10,7 +10,9 @@ Requires Linux, Node 22.19 or newer, and an authenticated `pi` executable on `PA
 pi install npm:ac-teams
 ```
 
-Restart Pi after installation. Use Pi's `/trust` command to save approval for each project directory before launching members there; headless children cannot answer the initial trust prompt.
+Restart Pi after installation or updates.
+
+Use Pi's `/trust` command to save approval for each project directory before launching members there; headless children cannot answer the initial trust prompt.
 
 ## Use it
 
@@ -32,6 +34,12 @@ Your Pi session is the root; its child agents are members. Ask Pi to delegate a 
 The task summary sits above the input. The agent selector sits below the input, above your existing footer, and shows descriptive names, models, and context usage. ac-teams publishes a compact team status without replacing the footer or editor supplied by other extensions. `/teams config display` toggles these displays independently. `/teams config` starts a conversation with Pi to configure lean worker extension presets, without editing files or navigating a wizard. A worker can only retain or remove extensions already loaded by its parent; it cannot add installed-but-unloaded or child-directory extensions. See [worker configuration](docs/operations.md#configure-lean-workers-without-adding-extensions).
 
 From an empty editor, press Down to select the team row, then Enter to open a member. A red **Needs input** label marks a member with an open question. Ctrl+Shift+Left returns to Main without stopping the member or dismissing its question. `/teams stop` stops every member; main sessions keep running. `/teams join` and `/teams leave` add this session to another team or take it out.
+
+Use `/teams reload` in the main session hosting the coordinator to refresh the team. Running tools finish before members pause. Pi submits queued input and editor text first.
+
+The main session reloads, automatically rejoins, and resumes paused work in the same sessions. Cancel while waiting to leave the team running.
+
+In a teammate, the command refreshes only that teammate. Ordinary `/reload` keeps Pi's existing behavior.
 
 Defaults allow up to **10 live members** and **two levels of delegation**. Use the fewest useful agents.
 
