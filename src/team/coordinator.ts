@@ -11,7 +11,7 @@ import { TerminalAgent, tmux } from "../members/terminal-agent.ts";
 import { validate } from "./requests.ts";
 import { removeWorktree } from "../members/worktrees.ts";
 import { handoverPrompt } from "../members/main-terminal.ts";
-import { canControl, isDescendant, isLive, isMain, memberName, taskName, type AgentArgs, type Member, type MessageArgs, type TaskArgs, type TeamState, type UserAction, type Message, type ContextUsage } from "../types.ts";
+import { canControl, isDescendant, isLive, isMain, memberName, taskName, type AgentArgs, type Member, type MessageArgs, type TaskArgs, type TeamState, type UserAction, type Message } from "../types.ts";
 
 export const taskRequestGuidance = [
   "Assess user task requests against the agreed scope and existing work before changing shared tasks.",
@@ -253,6 +253,13 @@ export class Coordinator {
         if (this.closed) return;
         this.store.update(next => { next.members[id].status = next.members[id].status === "stopping" ? "stopped" : "interrupted"; delete next.members[id].needsInput; });
         this.activity.publish();
+        const member = this.store.state.members[id];
+        if (member.status === "interrupted") {
+          const parent = member.parent && this.store.state.members[member.parent];
+          const recipient = parent && isLive(parent) && parent.status !== "stopping" ? parent.id : this.self;
+          this.store.message(id, { action: "send", recipients: [recipient], summary: `Member ${memberName(member)} (${id}) exited unexpectedly. Its work may be incomplete; inspect its status and resume or reassign as needed.` });
+          this.protocol.notify(recipient);
+        }
         // A promoted member keeps its descendants.
         if (!this.store.state.members[id].promotion) void this.stopDescendants(id).catch(error => this.options.warning(String(error)));
       });
