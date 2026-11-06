@@ -9,8 +9,9 @@ import { isDescendant, isLive, isMain, type ContextUsage } from "../types.ts";
 
 export function assistantEvent(message: unknown): { type: string; text: string } | undefined {
   if (!isRecord(message) || message.role !== "assistant") return;
+  // Pi can report its AbortError as an error after a completed tool batch.
+  if (message.stopReason === "aborted" || (message.stopReason === "error" && message.errorMessage === "This operation was aborted")) return { type: "cancelled", text: "" };
   if (message.stopReason === "error") return { type: "model_error", text: String(message.errorMessage || "Model request failed").slice(0, 2000) };
-  if (message.stopReason === "aborted") return { type: "cancelled", text: "" };
   if (message.stopReason !== "stop" || !Array.isArray(message.content)) return;
   const text = message.content.filter(part => isRecord(part) && part.type === "text" && typeof part.text === "string").map(part => part.text).join(" ").trim().split("\n")[0].slice(0, 500);
   return text ? { type: "summary", text } : undefined;

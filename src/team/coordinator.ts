@@ -1,6 +1,7 @@
 import { createServer, type Server } from "node:net";
 import { chmodSync, unlinkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { join } from "node:path";
 import { type SandboxStatus } from "../sandbox/policy.ts";
 import { SandboxRuntime } from "../sandbox/runtime.ts";
@@ -43,6 +44,7 @@ export class Coordinator {
   private closed = false;
   private activity: TeamActivity;
   private closePromise?: Promise<void>;
+  private reloading = false;
   private sandboxRuntime: SandboxRuntime;
   private releasing = new Map<string, Promise<void>>();
 
@@ -178,6 +180,7 @@ export class Coordinator {
     validate(operation, args);
     if (operation === "event") return this.activity.record(actor, args);
     if (operation === "ui") {
+      if (this.reloading) throw new Error("Team reload is preparing; cancel it before changing the team");
       // User actions can resume any member as Main, so sandboxed members cannot send them.
       if (member.access) throw new Error("Sandboxed members cannot send user team actions; use Main");
       return this.userAction(actor, args as UserAction);
@@ -204,6 +207,7 @@ export class Coordinator {
       return { limit: this.store.state.limit, depth: this.store.state.depth, sandbox: this.sandboxStatus(), resources: this.launcher.resources() };
     }
     if (args.action === "launch" || args.action === "resume") {
+      if (this.reloading) throw new Error("Team reload is preparing; cancel it before launching members");
       const launch = this.launcher.run(actor, args);
       this.operations.add(launch);
       try { return await launch; } finally { this.operations.delete(launch); }
@@ -289,6 +293,64 @@ export class Coordinator {
     this.store.update(next => { next.members[id].status = "stopped"; });
   }
   async stopTree(id: string): Promise<void> { await this.stopDescendants(id); await this.stopOne(id); }
+  /** Prepare without interrupting tools; each member acknowledges only once its run has settled. */
+  async prepareReload(signal: AbortSignal, selfReady: () => boolean): Promise<void> {
+    if (this.reloading) throw new Error("Team reload is already preparing");
+    this.reloading = true;
+    try {
+      while (this.operations.size) await delay(100, undefined, { signal });
+      const members = this.live();
+      for (;;) {
+        signal.throwIfAborted();
+        for (const member of members) if (!isLive(this.store.state.members[member.id])) throw new Error(`${memberName(member)} exited while preparing reload`);
+        const results = await Promise.allSettled(members.map(member => this.protocol.control(member.id, "prepare_reload")));
+        let ready = selfReady();
+        for (let i = 0; i < results.length; i++) {
+          const result = results[i];
+          if (result.status === "rejected") throw result.reason;
+          const value = result.value as { ready?: boolean; resume?: boolean };
+          if (typeof value?.ready !== "boolean" || typeof value.resume !== "boolean") throw new Error(`Invalid reload response from ${memberName(members[i])}`);
+          ready = ready && value.ready;
+        }
+        if (ready) { signal.throwIfAborted(); return; }
+        await delay(100, undefined, { signal });
+      }
+    } catch (error) {
+      await this.cancelReload();
+      throw error;
+    }
+  }
+  async cancelReload(): Promise<void> {
+    if (!this.reloading) return;
+    const members = this.live();
+    const results = await Promise.allSettled(members.map(member => this.protocol.control(member.id, "cancel_reload")));
+    this.reloading = false;
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      if (result.status === "rejected") this.options.warning(`Could not cancel reload for ${memberName(members[i])}: ${String(result.reason)}`);
+    }
+  }
+  /** Explicit reload never escalates to signals or calls the ordinary aborting stop path. */
+  async finishReload(): Promise<void> {
+    if (!this.reloading) throw new Error("Team reload was not prepared");
+    for (const member of this.live().sort((a, b) => b.depth - a.depth)) {
+      const agent = this.agents.get(member.id);
+      if (!agent) throw new Error(`No owned transport for ${memberName(member)}`);
+      const value = await this.protocol.control(member.id, "shutdown_reload") as { ready?: boolean; resume?: boolean };
+      if (value?.ready !== true || typeof value.resume !== "boolean") throw new Error(`Invalid shutdown response from ${memberName(member)}`);
+      this.store.update(state => {
+        state.members[member.id].handover = value.resume ? "busy" : "idle";
+      });
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([agent.exited, new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error(`${memberName(member)} did not shut down for reload; no signal was sent`)), 10000);
+        })]);
+        await this.releasing.get(member.id);
+        this.store.update(state => { state.members[member.id].status = "stopped"; delete state.members[member.id].needsInput; });
+      } finally { clearTimeout(timer); }
+    }
+  }
   close(): Promise<void> { this.closePromise ??= this.closeOnce(); return this.closePromise; }
   private async closeOnce(): Promise<void> {
     this.closed = true;

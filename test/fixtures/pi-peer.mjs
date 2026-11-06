@@ -22,6 +22,7 @@ const socket = createConnection(process.env.AC_TEAMS_SOCKET);
 const pending = new Map();
 let buffer = "";
 let errorOnAbort = false;
+let busy = false, preparingReload = false, resumeReload = false;
 function request(operation, args) {
   const id = randomUUID();
   return new Promise((resolve, reject) => {
@@ -31,6 +32,8 @@ function request(operation, args) {
 }
 const native = !process.argv.includes("--mode");
 const emit = event => {
+  if (event.type === "agent_start") busy = true;
+  if (event.type === "agent_settled") busy = false;
   if (!native) process.stdout.write(JSON.stringify(event) + "\n");
   else if (event.type === "agent_start" || event.type === "agent_settled") void request("event", { type: event.type });
   else if (event.type === "message_end") void request("event", { type: "model_error", text: event.message.errorMessage });
@@ -40,7 +43,7 @@ socket.on("data", chunk => {
   let end;
   while ((end = buffer.indexOf("\n")) >= 0) {
     const event = JSON.parse(buffer.slice(0, end)); buffer = buffer.slice(end + 1);
-    if (event.type === "command") { void run({ type: event.command, id: event.id, ...event.args }); continue; }
+    if (event.type === "command") { void run({ type: event.command, id: event.id, ...event.args }, true); continue; }
     if (event.type === "notice") { void request("ack", { through: event.through }); continue; }
     const entry = pending.get(event.id);
     if (entry) {
@@ -54,13 +57,19 @@ socket.on("close", () => process.exit(0));
 socket.on("connect", () => {
   void request("join", { sessionId, sessionFile: process.env.AC_TEAMS_TEST_SESSION_FILE ?? sessionFile, tools: ["team_agent", "team_task", "team_message"], trusted: process.env.AC_TEAMS_TEST_UNTRUSTED !== "1", extensionPaths: process.argv.flatMap((value, index) => value === "-e" ? [process.argv[index + 1]] : []) }).catch(() => process.exit(1));
 });
-async function run(command) {
-  const data = command.type === "get_state" ? { sessionId, sessionFile, model: { provider: arg("--provider"), id: arg("--model"), name: "Fixture model" }, contextUsage: { tokens: 48000, contextWindow: 200000, percent: 24 } } : {};
-  if (native) await request("control_result", { id: command.id, data });
+async function run(command, control = native) {
+  if (command.type === "prepare_reload" && !preparingReload) {
+    preparingReload = true;
+    resumeReload = busy;
+    if (busy) emit({ type: "agent_settled" });
+  }
+  if (command.type === "cancel_reload") preparingReload = false;
+  const data = command.type === "prepare_reload" || command.type === "shutdown_reload" ? { ready: true, resume: resumeReload } : command.type === "get_state" ? { sessionId, sessionFile, model: { provider: arg("--provider"), id: arg("--model"), name: "Fixture model" }, contextUsage: { tokens: 48000, contextWindow: 200000, percent: 24 } } : {};
+  if (control) await request("control_result", { id: command.id, data });
   else emit({ type: "response", id: command.id, success: true, data });
-  if (native && command.type === "shutdown") process.exit(0);
+  if ((native && command.type === "shutdown") || command.type === "shutdown_reload") process.exit(0);
   if (command.type === "prompt") {
-    if (native) entry(command.message);
+    entry(command.message);
     const prompt = command.message.split("\n\nYour delegator is ")[0];
     errorOnAbort = prompt === "ERROR_ON_ABORT";
     emit({ type: "agent_start" });

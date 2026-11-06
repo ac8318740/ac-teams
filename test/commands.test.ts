@@ -4,7 +4,7 @@ import { teamsCompletions, resolveTeammate } from "../src/extension/commands.ts"
 
 const members = [{ id: "root", status: "idle" as const }, { id: "1234-abcd-5678", name: "code-review", status: "busy" as const }];
 test("teams actions and teammate names complete without memorizing IDs", () => {
-  assert.deepEqual(teamsCompletions("", members)?.map(item => item.value), ["panel", "teammate", "config", "back", "stop", "status", "join", "leave"]);
+  assert.deepEqual(teamsCompletions("", members)?.map(item => item.value), ["panel", "teammate", "config", "back", "stop", "status", "join", "leave", "reload"]);
   assert.deepEqual(teamsCompletions("co", members)?.map(item => item.value), ["config"]);
   assert.deepEqual(teamsCompletions("teammate c", members)?.map(item => item.value), ["teammate code-review"]);
   assert.deepEqual(teamsCompletions("teammate 1234", members)?.map(item => item.value), ["teammate code-review"]);

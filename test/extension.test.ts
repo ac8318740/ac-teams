@@ -20,7 +20,7 @@ import { teamEntryType } from "../src/members/main-terminal.ts";
 import { createNotices } from "../src/extension/notices.ts";
 
 // SAFETY: this bounded test double implements only the Pi host calls used by the extension.
-function fixture() {
+function fixture(entries: { type: string; id: string; customType: string; data: unknown }[] = []) {
   const home = mkdtempSync(join(tmpdir(), "at-ext-"));
   const oldHome = process.env.HOME, oldPi = process.env.AC_TEAMS_PI, oldHerdr = process.env.HERDR_ENV;
   process.env.HERDR_ENV = "0";
@@ -34,7 +34,6 @@ function fixture() {
   const warnings: string[] = [], messages: unknown[] = [];
   let approval = false, confirmations = 0;
   const events = new EventEmitter();
-  const entries: { type: string; id: string; customType: string; data: unknown }[] = [];
   let active = ["team_agent", "team_task", "team_message"];
   const api = {
     events,
@@ -71,7 +70,7 @@ function fixture() {
     return (await tools.get(name)!.execute(randomUUID(), args, new AbortController().signal, undefined, ctx)).details;
   }
   return { ctx, id, home, entries, loaded, get active() { return active; }, flags, warnings, messages, tools, commands, shortcuts, execute, events, approve(value: boolean) { approval = value; }, get confirmations() { return confirmations; },
-    async event(name: string, data: Record<string, unknown> = {}) { return handlers.get(name)?.({ type: name, ...data }, ctx); },
+    async event(name: string, data: Record<string, unknown> = {}) { return handlers.get(name)?.({ type: name, toolResults: [], ...data }, ctx); },
     async close() {
       try { await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, ctx); }
       finally { if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome; if (oldPi === undefined) delete process.env.AC_TEAMS_PI; else process.env.AC_TEAMS_PI = oldPi; if (oldHerdr === undefined) delete process.env.HERDR_ENV; else process.env.HERDR_ENV = oldHerdr; rmSync(home, { recursive: true, force: true }); }
@@ -95,6 +94,56 @@ test("worker entrypoint and loaded-set exclusion keep the actual Pi entrypoint i
     const config = await f.execute("team_config", { action: "read" }) as { inventory: { id: string }[] };
     assert.ok(config.inventory.some(entry => entry.id === `explicit:${other}`));
     assert.ok(!config.inventory.some(entry => entry.id === `explicit:${entrypoint}`));
+  } finally { await f.close(); }
+});
+
+test("/teams reload consumes a one-shot automatic recovery marker; ordinary reload still asks", async t => {
+  const f = fixture();
+  let reloads = 0;
+  Object.assign(f.ctx, { hasUI: false, isIdle: () => true, hasPendingMessages: () => false,
+    reload: async () => { reloads++; await f.event("session_shutdown"); } });
+  const confirmations = t.mock.method(f.ctx.ui, "confirm", async () => { assert.fail("Explicit reload must not ask to rejoin"); });
+  try {
+    await f.event("session_start");
+    const member = await f.execute("team_agent", { action: "launch", name: "peer", brief: "hello" }) as { id: string };
+    await f.commands.get("teams")!.handler("reload", f.ctx);
+    assert.equal(reloads, 1);
+    assert.ok(f.entries.some(entry => entry.customType === "ac-teams-reload" && (entry.data as { rejoin?: boolean }).rejoin));
+    // A fresh extension runtime has no coordinator and must consume the persisted intent.
+    const restarted = fixture(f.entries);
+    try {
+      Object.assign(restarted.ctx, { hasUI: false });
+      Object.assign(restarted.ctx.sessionManager, { getSessionId: () => f.id });
+      // Use the original HOME and state, just as Pi reload does.
+      process.env.HOME = f.home;
+      await restarted.event("session_start");
+      assert.equal(restarted.confirmations, 0);
+      assert.ok(restarted.entries.some(entry => entry.customType === "ac-teams-reload" && Object.keys(entry.data as object).length === 0), "recovery intent is consumed before linking");
+      const state = readState(join(teamsHome(), f.id))!;
+      assert.notEqual(state.members[member.id].status, "stopped");
+    } finally { await restarted.close(); process.env.HOME = f.home; }
+    confirmations.mock.restore();
+    const ordinary = fixture(f.entries);
+    try {
+      process.env.HOME = f.home;
+      Object.assign(ordinary.ctx.sessionManager, { getSessionId: () => f.id });
+      await ordinary.event("session_start");
+      assert.equal(ordinary.confirmations, 1, "ordinary startup must not reuse explicit reload approval");
+    } finally { await ordinary.close(); process.env.HOME = f.home; }
+  } finally { confirmations.mock.restore(); await f.close(); }
+});
+
+test("/teams reload cancels before interrupting a running tool", async () => {
+  const f = fixture();
+  let aborted = false, reloaded = false;
+  Object.assign(f.ctx, { isIdle: () => false, hasPendingMessages: () => false,
+    abort: () => { aborted = true; }, reload: async () => { reloaded = true; } });
+  try {
+    await f.event("session_start");
+    await f.commands.get("teams")!.handler("reload", f.ctx);
+    assert.equal(aborted, false);
+    assert.equal(reloaded, false);
+    assert.ok(f.warnings.some(text => /reload cancelled/.test(text)));
   } finally { await f.close(); }
 });
 

@@ -9,7 +9,7 @@ import { memberName, type Member } from "../types.ts";
 import { cleanText } from "../ui/render.ts";
 
 type NamedMember = Pick<Member, "id" | "name" | "status">;
-const actions = ["panel", "teammate", "config", "back", "stop", "status", "join", "leave"];
+const actions = ["panel", "teammate", "config", "back", "stop", "status", "join", "leave", "reload"];
 
 export function resolveTeammate(members: NamedMember[], value: string): string | undefined {
   const key = value === "main" ? "root" : value;
@@ -29,7 +29,7 @@ export function teamsCompletions(prefix: string, members: NamedMember[]): Autoco
 }
 
 type CommandSession = Pick<TeamSession,
-  "child" | "link" | "handle" | "joinTeam" | "leaveTeam" | "context" | "started" | "setContext">;
+  "child" | "link" | "handle" | "joinTeam" | "leaveTeam" | "context" | "started" | "setContext" | "reload">;
 
 export function registerCommands(pi: ExtensionAPI, session: CommandSession,
   presentation: Pick<TeamPresentation, "host" | "configureDisplay">) {
@@ -45,7 +45,7 @@ export function registerCommands(pi: ExtensionAPI, session: CommandSession,
     },
   });
   pi.registerCommand("teams", {
-    description: "Team panel; /teams teammate <name-or-id>, config, back, stop, status, join [team-id], or leave",
+    description: "Team panel; /teams teammate <name-or-id>, config, back, stop, status, join [team-id], leave, or reload",
     async getArgumentCompletions(prefix) {
       if (!prefix.includes(" ") || prefix.startsWith("config ")) return teamsCompletions(prefix, []);
       const context = session.context;
@@ -57,6 +57,7 @@ export function registerCommands(pi: ExtensionAPI, session: CommandSession,
     },
     async handler(args, ctx) {
       session.setContext(ctx);
+      if (args.trim() === "reload") { await session.reload(ctx); return; }
       if (args.trim() === "config" || args.trim() === "config display") {
         if (ctx.mode !== "tui") { ctx.ui.notify("/teams config requires an interactive terminal", "error"); return; }
         try {
@@ -94,7 +95,7 @@ export function registerCommands(pi: ExtensionAPI, session: CommandSession,
           else ctx.ui.notify(`Unknown teammate: ${cleanText(value)}. Use autocomplete or /teams panel.`, "error");
         }
         else if (!args.trim() || args.trim() === "panel") await showTeamsPanel(ctx, api, panelView);
-        else ctx.ui.notify("Usage: /teams [panel|teammate <name-or-id>|config|back|stop|status|join [team-id]|leave]", "info");
+        else ctx.ui.notify("Usage: /teams [panel|teammate <name-or-id>|config|back|stop|status|join [team-id]|leave|reload]", "info");
       } else {
         const status = await handle("agent", { action: "list" }, ctx);
         ctx.ui.notify(JSON.stringify(status, null, 2), "info");

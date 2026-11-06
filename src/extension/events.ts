@@ -10,7 +10,7 @@ import type { TeamPresentation } from "./presentation.ts";
 type EventSession = Pick<TeamSession,
   "child" | "link" | "teamId" | "report" | "warn" | "notices" | "stopping" | "connected" | "publish" |
   "blocked" | "clearBlocked" | "disabled" | "start" | "memberLabels" | "memberId" | "ownWarnings" |
-  "close" | "switchBlocked" | "liveCount">;
+  "close" | "switchBlocked" | "liveCount" | "reloadStarted" | "reloadBoundary" | "reloadSettled">;
 
 export function createEvents(pi: ExtensionAPI, session: EventSession,
   presentation: Pick<TeamPresentation, "installUI">, observe: () => void) {
@@ -42,9 +42,9 @@ export function createEvents(pi: ExtensionAPI, session: EventSession,
     if (!isRecord(data) || typeof data.active !== "boolean" || data.source === "ac-teams") return;
     session.blocked(data.active);
   });
-  pi.on("agent_start", (_event, ctx) => report(ctx, { type: "agent_start" }));
-  pi.on("turn_end", (_event, ctx) => reconcile(ctx));
-  pi.on("agent_settled", (_event, ctx) => { session.clearBlocked(); reconcile(ctx); report(ctx, { type: "agent_settled" }); });
+  pi.on("agent_start", (_event, ctx) => { session.reloadStarted(); report(ctx, { type: "agent_start" }); });
+  pi.on("turn_end", (event, ctx) => { reconcile(ctx); session.reloadBoundary(ctx, event.toolResults.length > 0); });
+  pi.on("agent_settled", (_event, ctx) => { session.clearBlocked(); reconcile(ctx); report(ctx, { type: "agent_settled" }); session.reloadSettled(ctx); });
   pi.on("tool_execution_start", (event, ctx) => report(ctx, { type: "activity", text: `Running ${event.toolName}`.slice(0, 500) }));
   pi.on("tool_result", async (event, ctx) => {
     if (child || session.disabled || session.stopping || event.toolName !== "read" || event.isError || typeof event.input.path !== "string" || !/(?:^|[\\/\\\\])handoff[\\/\\\\]SKILL\.md$/.test(event.input.path)) return;

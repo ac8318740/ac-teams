@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { VERSION, readStoredCredential } from "@earendil-works/pi-coding-agent";
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -6,7 +6,7 @@ import { execFile } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { promisify } from "node:util";
 import { createMemberLabels, readState, stateLabels, teamsHome } from "../team/snapshot.ts";
-import { teamEntryType, type TeamEntry } from "../members/main-terminal.ts";
+import { handoverPrompt, teamEntryType, type TeamEntry } from "../members/main-terminal.ts";
 import { isMain, memberName, taskName, type TeamState, type AgentArgs, type UserAction } from "../types.ts";
 import { Coordinator } from "../team/coordinator.ts";
 import { Connection } from "../team/connection.ts";
@@ -15,6 +15,10 @@ import { providerRoutes } from "../sandbox/egress.ts";
 import { readTelemetry } from "../ui/telemetry.ts";
 import { cleanText } from "../ui/render.ts";
 import { createNotices } from "./notices.ts";
+import { createReloadPause } from "./reload.ts";
+import { setTimeout as delay } from "node:timers/promises";
+
+const reloadEntryType = "ac-teams-reload";
 import { validate } from "../team/requests.ts";
 import type { extensionInventory } from "../settings/worker-extensions.ts";
 
@@ -34,6 +38,8 @@ export function createSession(pi: ExtensionAPI, extension: string, loadedPaths: 
   let context: ExtensionContext | undefined;
   let exiting = false;
   let inputCount = 0;
+  let reloadCommand = false;
+  const reloadPause = createReloadPause(pi, () => inputCount > 0);
   /** This main session's team, from its transcript's team entry; a session with no entry leads its own team as "root". */
   let team: TeamEntry | undefined;
   /** Why team tools are off in this session, if they are. */
@@ -87,12 +93,21 @@ export function createSession(pi: ExtensionAPI, extension: string, loadedPaths: 
           } else if (command.command === "prompt") {
             if (typeof command.args.message !== "string" || !command.args.message.trim() || command.args.message.length > 16000) throw new Error("Invalid native prompt");
             pi.sendUserMessage(command.args.message, { deliverAs: "followUp" });
+          } else if (command.command === "prepare_reload") data = reloadPause.prepare(ctx);
+          else if (command.command === "cancel_reload") reloadPause.cancel(ctx);
+          else if (command.command === "shutdown_reload") {
+            data = reloadPause.state(ctx);
+            if (!(data as { ready: boolean }).ready) throw new Error("Member is no longer ready for reload; no shutdown requested");
           } else if (command.command === "abort") ctx.abort();
           else if (command.command !== "shutdown") throw new Error("Unsupported native command");
         } catch (failure) { error = String(failure).slice(0, 2000); }
         try { await link.request("control_result", { id: command.id, data, error }); }
         catch { return; }
-        if (command.command === "shutdown" && !error) {
+        if ((command.command === "shutdown" || command.command === "shutdown_reload") && !error) {
+          if (command.command === "shutdown_reload" && !reloadPause.state(ctx).ready) {
+            warn("New input arrived before shutdown; this member was left running");
+            return;
+          }
           exiting = true;
           ctx.shutdown();
         }
@@ -224,7 +239,7 @@ export function createSession(pi: ExtensionAPI, extension: string, loadedPaths: 
     linkedSession = undefined;
   }
   /** A resumed main session reconnects to its team, or offers to run the coordinator and resume the team's members. */
-  async function rejoin(ctx: ExtensionContext) {
+  async function rejoin(ctx: ExtensionContext, automatic = false) {
     try {
       if (await connectMain(ctx)) return;
       const dir = join(teamsHome(), teamId(ctx));
@@ -234,6 +249,7 @@ export function createSession(pi: ExtensionAPI, extension: string, loadedPaths: 
         disable("This session is no longer a main session of its team; use /teams join");
         return;
       }
+      if (automatic) { await link(ctx); return; }
       const others = Object.values(state.members).filter(member => member.id !== memberId() && member.role);
       if (!ctx.hasUI || !others.length) return;
       if (await ctx.ui.confirm("Run the team coordinator?", `This is a main session of a team with ${others.length} other member(s), and no coordinator is running. Run it here and resume the members that were working?`)) await link(ctx);
@@ -311,6 +327,33 @@ export function createSession(pi: ExtensionAPI, extension: string, loadedPaths: 
     disable("This session left its team; use /teams join to join one");
     ctx.ui.notify(String(result), "info");
   }
+  /** Explicitly requested refresh; ordinary /reload retains its normal recovery prompt. */
+  async function reload(ctx: ExtensionCommandContext) {
+    if (reloadCommand) throw new Error("Team reload is already preparing");
+    if (!child && connection) throw new Error("Run /teams reload in the main session hosting the coordinator");
+    reloadCommand = true;
+    const cancel = new AbortController(), dialog = new AbortController();
+    try {
+      reloadPause.prepare(ctx);
+      if (ctx.hasUI) void ctx.ui.select("Waiting for running tools and queued input before reload", ["Cancel reload"], { signal: dialog.signal })
+        .then(() => { if (!dialog.signal.aborted) cancel.abort(); }, () => { if (!dialog.signal.aborted) cancel.abort(); });
+      if (coordinator) await coordinator.prepareReload(cancel.signal, () => reloadPause.state(ctx).ready);
+      else while (!reloadPause.state(ctx).ready) await delay(100, undefined, { signal: cancel.signal });
+      cancel.signal.throwIfAborted();
+      dialog.abort();
+      if (!reloadPause.state(ctx).ready) throw new Error("New input arrived before reload; no shutdown requested");
+      if (coordinator) await coordinator.finishReload();
+      if (!reloadPause.state(ctx).ready) throw new Error("New input arrived during reload preparation");
+      pi.appendEntry(reloadEntryType, { session: ctx.sessionManager.getSessionId(), rejoin: Boolean(coordinator), resume: reloadPause.state(ctx).resume });
+    } catch (error) {
+      await coordinator?.cancelReload();
+      reloadPause.cancel(ctx);
+      ctx.ui.notify(cancel.signal.aborted ? "Team reload cancelled" : `Team reload failed: ${String(error)}`, cancel.signal.aborted ? "info" : "error");
+      reloadCommand = false;
+      return;
+    } finally { dialog.abort(); }
+    await ctx.reload();
+  }
   async function start(ctx: ExtensionContext) {
     if (!child && linkedSession && linkedSession !== ctx.sessionManager.getSessionId()) {
       await close();
@@ -320,6 +363,10 @@ export function createSession(pi: ExtensionAPI, extension: string, loadedPaths: 
     exiting = false;
     inputCount = 0;
     resetReceipts();
+    const reloadEntry = ctx.sessionManager.getEntries().filter(entry => entry.type === "custom" && entry.customType === reloadEntryType).at(-1);
+    const reload = reloadEntry?.type === "custom" ? reloadEntry.data as { session?: string; rejoin?: boolean; resume?: boolean } : undefined;
+    const refreshing = reload?.session === ctx.sessionManager.getSessionId();
+    if (refreshing) pi.appendEntry(reloadEntryType, {});
     if (child) {
       if (environment.some(value => !value)) throw new Error("Incomplete AC_TEAMS membership environment; refusing independent-root fallback");
       const link = new Connection(environment[0]!, environment[1]!, environment[2]!);
@@ -341,10 +388,11 @@ export function createSession(pi: ExtensionAPI, extension: string, loadedPaths: 
       team = data && !data.left ? { team: data.team, member: data.member } : undefined;
       disabled = undefined;
       if (data?.left) disable("This session left its team; use /teams join to join one");
-      else if (team) await rejoin(ctx);
+      else if (team) await rejoin(ctx, refreshing && reload?.rejoin === true);
     }
     // Notices persisted before a crash or reconnect count as delivered; acknowledge them so they are not shown twice.
     reconcile(ctx);
+    if (refreshing && reload?.resume) pi.sendUserMessage(handoverPrompt, { deliverAs: "followUp" });
   }
   async function userAction(ctx: ExtensionContext, args: UserAction): Promise<string> {
     const value = { ...args, model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined, thinking: pi.getThinkingLevel() };
@@ -370,7 +418,10 @@ export function createSession(pi: ExtensionAPI, extension: string, loadedPaths: 
   }
   return {
     child, memberId, memberLabels, teamId, notices, warn, ownWarnings,
-    link, handle, userAction, start, close, joinTeam, leaveTeam, report, publish, blocked,
+    link, handle, userAction, start, close, joinTeam, leaveTeam, report, publish, blocked, reload,
+    reloadStarted() { reloadPause.started(); },
+    reloadBoundary(ctx: ExtensionContext, hasTools: boolean) { reloadPause.boundary(ctx, hasTools); },
+    reloadSettled(ctx: ExtensionContext) { reloadPause.settled(ctx); },
     setContext(ctx: ExtensionContext) { context = ctx; },
     clearBlocked() { inputCount = 0; },
     get context() { return context; },

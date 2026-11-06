@@ -8,10 +8,13 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { mainEnv, handoverPrompt } from "../src/members/main-terminal.ts";
+import { RpcAgent } from "../src/members/rpc-agent.ts";
+import { TerminalAgent } from "../src/members/terminal-agent.ts";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { Coordinator, assistantEvent, taskRequestGuidance, type CoordinatorOptions } from "../src/team/coordinator.ts";
 import { Connection } from "../src/team/connection.ts";
+import { TeamProtocol } from "../src/team/protocol.ts";
 import { saveWorkerConfiguration } from "../src/settings/config.ts";
 import { extensionInventory } from "../src/settings/worker-extensions.ts";
 import { mkdirSync } from "node:fs";
@@ -664,6 +667,26 @@ test("native members keep PID while idle, stop cleanly, and quietly resume for c
   } finally { await f.close(); }
 });
 
+test("Pi abort errors are cancellation, not model failures that wake the lead during reload", async () => {
+  const f = await setup();
+  try {
+    const member = await f.team.handle("root", "agent", launch) as { id: string };
+    await until(() => f.team.store.state.members[member.id].status === "idle");
+    for (const stopReason of ["aborted", "error"]) {
+      const event = assistantEvent({ role: "assistant", stopReason, errorMessage: "This operation was aborted", content: [] })!;
+      assert.deepEqual(event, { type: "cancelled", text: "" });
+      await f.team.handle(member.id, "event", event);
+      assert.equal(f.team.store.state.messages.length, 0, "a deliberate pause must not trigger a new lead turn");
+      assert.equal(f.team.store.state.members[member.id].error, undefined);
+    }
+    const failure = assistantEvent({ role: "assistant", stopReason: "error", errorMessage: "503 Service unavailable", content: [] })!;
+    assert.deepEqual(failure, { type: "model_error", text: "503 Service unavailable" });
+    await f.team.handle(member.id, "event", failure);
+    assert.equal(f.team.store.state.messages.length, 1, "genuine failures still notify the lead");
+    assert.match(f.team.store.state.messages[0].summary, /model error: 503 Service unavailable/);
+  } finally { await f.close(); }
+});
+
 test("idle members retain a bounded completion summary rather than stale tool activity", async () => {
   const f = await setup();
   try {
@@ -952,6 +975,77 @@ test("leaving returns in-progress tasks and keeps the leaver's members manageabl
     assert.equal(f.team.store.state.members[member.id].status, "stopped");
     client.close();
   } finally { await f.close(); }
+});
+
+for (const interactive of [false, true]) test(`explicit reload preserves mid-task resume intent without ordinary stop (${interactive ? "native" : "RPC"})`, async t => {
+  const f = await setup(10, 2, interactive);
+  const stop = t.mock.method(interactive ? TerminalAgent.prototype : RpcAgent.prototype, "stop", async () => { assert.fail("Reload must not use aborting or forceful stop"); });
+  try {
+    const idle = await f.team.handle("root", "agent", { ...launch, analysis: "separate" }) as { id: string; sessionFile: string };
+    const busy = await f.team.handle("root", "agent", { ...launch, name: "busy", brief: "WAIT" }) as { id: string; sessionFile: string };
+    await until(() => f.team.store.state.members[idle.id].status === "idle" && f.team.store.state.members[busy.id].status === "busy");
+    const task = await f.team.handle(busy.id, "task", { action: "create", title: "Keep working" }) as { id: string };
+    await f.team.handle(busy.id, "task", { action: "start", id: task.id });
+    const savedTask = structuredClone(f.team.store.state.tasks[task.id]);
+    await f.team.prepareReload(new AbortController().signal, () => true);
+    await assert.rejects(f.team.handle("root", "agent", { ...launch, name: "late" }), /reload is preparing/);
+    await f.team.finishReload();
+    assert.equal(stop.mock.calls.length, 0);
+    assert.deepEqual([idle.id, busy.id].map(id => f.team.store.state.members[id].status), ["stopped", "stopped"]);
+    assert.deepEqual([idle.id, busy.id].map(id => f.team.store.state.members[id].handover), ["idle", "busy"]);
+    await f.team.close();
+    stop.mock.restore();
+    const next = await Coordinator.open(f.options);
+    try {
+      await until(() => [idle.id, busy.id].every(id => next.store.state.members[id].status === "idle"));
+      assert.equal(next.store.state.members[idle.id].sessionFile, idle.sessionFile);
+      assert.equal(next.store.state.members[busy.id].sessionFile, busy.sessionFile);
+      assert.equal(next.store.state.members[idle.id].analysis, "separate");
+      assert.deepEqual(next.store.state.tasks[task.id], savedTask);
+      assert.ok(readFileSync(busy.sessionFile, "utf8").includes(handoverPrompt));
+      assert.ok(!readFileSync(idle.sessionFile, "utf8").includes(handoverPrompt));
+    } finally { await next.close(); }
+  } finally { stop.mock.restore(); await f.close(); }
+});
+
+test("partial reload failure preserves survivors, reports cancellation failures, and unlocks launch", async t => {
+  const f = await setup();
+  const original = TeamProtocol.prototype.control;
+  try {
+    const parent = await f.team.handle("root", "agent", launch) as { id: string };
+    const child = await f.team.handle(parent.id, "agent", { ...launch, name: "child" }) as { id: string };
+    await f.team.prepareReload(new AbortController().signal, () => true);
+    const control = t.mock.method(TeamProtocol.prototype, "control", function(this: TeamProtocol, id: string, command: string, args?: Record<string, unknown>, timeout?: number) {
+      if (id === parent.id && command === "shutdown_reload") return Promise.reject(new Error("New input arrived; no shutdown requested"));
+      if (id === parent.id && command === "cancel_reload") return Promise.reject(new Error("Cancel transport failed"));
+      return original.call(this, id, command, args, timeout);
+    });
+    await assert.rejects(f.team.finishReload(), /New input arrived/);
+    assert.equal(f.team.store.state.members[child.id].status, "stopped");
+    assert.ok(["busy", "idle"].includes(f.team.store.state.members[parent.id].status));
+    assert.notEqual(f.team.store.state.members.root.status, "stopped");
+    await f.team.cancelReload();
+    assert.ok(f.warnings.some(text => /Could not cancel reload.*worker.*Cancel transport failed/.test(text)));
+    control.mock.restore();
+    await f.team.handle("root", "agent", { ...launch, name: "still-usable" });
+  } finally { t.mock.restoreAll(); await f.close(); }
+});
+
+test("cancelling preparation leaves the team usable without stopping members", async t => {
+  const f = await setup();
+  const original = TeamProtocol.prototype.control;
+  const cancel = new AbortController();
+  try {
+    const member = await f.team.handle("root", "agent", launch) as { id: string };
+    const control = t.mock.method(TeamProtocol.prototype, "control", function(this: TeamProtocol, id: string, command: string, args?: Record<string, unknown>, timeout?: number) {
+      if (command === "prepare_reload") { cancel.abort(); return Promise.resolve({ ready: false, resume: true }); }
+      return original.call(this, id, command, args, timeout);
+    });
+    await assert.rejects(f.team.prepareReload(cancel.signal, () => true), /aborted/i);
+    assert.ok(["busy", "idle"].includes(f.team.store.state.members[member.id].status));
+    control.mock.restore();
+    await f.team.handle("root", "agent", { ...launch, name: "still-usable" });
+  } finally { t.mock.restoreAll(); await f.close(); }
 });
 
 test("a new owner resumes each member to its recorded state after a handover", async () => {
