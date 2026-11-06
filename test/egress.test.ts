@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
-import { Egress, allowed, maxEgressConnections, assertNetworkNarrower, isHostAddress, isPublicAddress, parseAuthority, validatePolicy } from "../src/egress.ts";
+import { Egress, allowed, maxEgressConnections, assertNetworkNarrower, isHostAddress, isPublicAddress, parseAuthority, validatePolicy } from "../src/sandbox/egress.ts";
 import { networkInterfaces } from "node:os";
 
 const until = async (check: () => boolean) => { for (const end = Date.now() + 5000; !check(); await new Promise(resolve => setTimeout(resolve, 20))) if (Date.now() > end) throw new Error("Condition timed out"); };

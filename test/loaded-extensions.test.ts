@@ -7,10 +7,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createExtensionRuntime, DefaultResourceLoader, getPackageDir, ProjectTrustStore } from "@earendil-works/pi-coding-agent";
-import { RpcAgent } from "../src/rpc-agent.ts";
-import { extensionInventory } from "../src/worker-extensions.ts";
-import { observeLoadedExtensions } from "../src/loaded-extensions.ts";
-import { TerminalAgent } from "../src/terminal-agent.ts";
+import { RpcAgent } from "../src/members/rpc-agent.ts";
+import { extensionInventory } from "../src/settings/worker-extensions.ts";
+import { observeLoadedExtensions } from "../src/settings/loaded-extensions.ts";
+import { TerminalAgent } from "../src/members/terminal-agent.ts";
 
 test("loaded-extension observation always restores the method, including missing and unmatched results", () => {
   class FixtureLoader extends DefaultResourceLoader { override getExtensions() { return { extensions: [], errors: [], runtime: createExtensionRuntime() }; } }

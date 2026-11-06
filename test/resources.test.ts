@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { hostResources } from "../src/resources.ts";
+import { hostResources } from "../src/members/resources.ts";
 
 const memory = "MemTotal: 10000000 kB\nMemAvailable: 2000000 kB\nSwapTotal: 8000000 kB\nSwapFree: 3000000 kB\n";
 const pressure = "some avg10=0.00 avg60=1.20 avg300=2.00 total=1234\nfull avg10=0.00 avg60=0.50 avg300=1.00 total=1000\n";

@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { readTelemetry, modelContext } from "../src/telemetry.ts";
-import { validate } from "../src/schemas.ts";
+import { readTelemetry, modelContext } from "../src/ui/telemetry.ts";
+import { validate } from "../src/team/requests.ts";
 
 test("model and context labels use Pi's reported estimates and distinguish unknown from zero", () => {
   const ctx = { model: { provider: "anthropic", id: "claude-fixture", name: "Claude Opus 4.6" }, getContextUsage: () => ({ tokens: 48000, contextWindow: 200000, percent: 24 }) } as unknown as ExtensionContext;
