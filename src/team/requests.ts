@@ -32,11 +32,12 @@ const taskFields = {
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
   label: Type.Optional(Type.String({ minLength: 1, maxLength: taskLabelMaxLength, pattern: taskLabelPattern.source, description: "Optional 1–3-word label. Derived from title when omitted." })),
   description: Type.Optional(Type.String({ maxLength: 16000, description: "Details and acceptance criteria. Defaults to title; include explicit criteria for substantial or delegated work." })),
-  dependencies: Type.Optional(Type.Array(id, { maxItems: 100, uniqueItems: true, description: "Prerequisite task UUIDs whose verified outputs this task needs before it can start; all must be done. In a create batch, use @key to reference another entry's key, including later entries. Use only when grounded initial work needs the verified output; these also gate completion. Leave independent work unlinked. blockedBy is derived automatically." })),
+  dependencies: Type.Optional(Type.Array(id, { maxItems: 100, uniqueItems: true, description: "Prerequisite task UUIDs whose verified outputs this task needs before it can start; all must be done. In a create batch, use @key to reference another entry's key, including later entries. Use only when grounded initial work needs the verified output; these also gate completion. Owners can edit active edges: changes warn, new unfinished prerequisites block completion. Continue only useful grounded work; pause when continuing is unsound. Leave independent work unlinked. blockedBy is derived automatically." })),
   completionDependencies: Type.Optional(Type.Array(id, { maxItems: 100, uniqueItems: true, description: "Prerequisite task UUIDs required for acceptance, but not for useful grounded initial work. Gate completion only; start and launch remain allowed. In a create batch, @key also works here. Do not repeat dependencies. completionBlockedBy includes unfinished prerequisites from both fields." })),
 };
 export const TaskSchema = Type.Object({
-  revision: Type.Optional(Type.Integer({ minimum: 1 })), acceptance: Type.Optional(Type.Boolean()),
+  revision: Type.Optional(Type.Integer({ minimum: 1, description: "Expected current revision for stale-write safety. Required with confirmDependencyRemoval for removals/replacements." })), acceptance: Type.Optional(Type.Boolean()),
+  confirmDependencyRemoval: Type.Optional(Type.Boolean({ description: "Edit only: TASK OWNER confirms the exact supplied dependency lists and removals/replacements at revision. Agent confirmation, not routine human approval. Required for both todo and active removals; claim unowned work first. Pure additions only warn. Read and reassess before confirming; never blindly retry stale requests." })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
   action: Type.Union(["create", "list", "read", "edit", "claim", "start", "release", "complete", "reopen"].map(v => Type.Literal(v))),
   id: Type.Optional(id), ...taskFields,
@@ -49,10 +50,10 @@ export const TaskSchema = Type.Object({
 }, { additionalProperties: false });
 export const MessageSchema = Type.Object({
   action: Type.Union(["send", "history", "search", "wait", "watch", "unwatch"].map(v => Type.Literal(v))),
-  event: Type.Optional(Type.Union([Type.Literal("message"), Type.Literal("completed")], { description: "Watch: trigger on task completion (default) or the next task-linked message. Unwatch: optionally cancel only this event." })),
+  event: Type.Optional(Type.Union([Type.Literal("message"), Type.Literal("completed"), Type.Literal("edited")], { description: "Watch: completed (default) and message are one-shot; edited subscribes persistently to every effective task edit until unwatch. Unwatch: optionally cancel only this event. Wait rejects edited; use watch then wait." })),
   seq: Type.Optional(Type.Integer({ minimum: 1, description: "History/search: retrieve only this post's sequence number, shown in notices." })),
   includeDetail: Type.Optional(Type.Boolean({ description: "History/search: include full supporting detail in model output (default false). Prefer seq or task to avoid fetching unrelated evidence." })),
-  tasks: Type.Optional(Type.Array(id, { maxItems: 100, uniqueItems: true, description: "Watch: register persistent one-shot notifications for these tasks without pausing. Unwatch: cancel these tasks (omit to cancel all). Wait: optionally watch their next messages before pausing; existing watches survive." })),
+  tasks: Type.Optional(Type.Array(id, { maxItems: 100, uniqueItems: true, description: "Watch: register task notifications without pausing; edited persists, message/completed are one-shot. Unwatch: cancel these tasks (omit to cancel all). Wait: optionally watch their next messages before pausing; existing watches survive." })),
   recipients: Type.Optional(Type.Array(id, { minItems: 1, maxItems: 100, uniqueItems: true, description: "Exact teammate names or member IDs." })),
   summary: Type.Optional(Type.String({ minLength: 1, maxLength: 16000, description: "Send: brief outcome, question, or update, with any required action and critical caveats, delivered directly to recipients. Put supporting evidence, file references, and check-by-check results in detail." })),
   detail: Type.Optional(Type.String({ minLength: 1, maxLength: 16000, description: "Send: optional supporting evidence, checks run, file references, and fuller limitations, read only when needed." })),

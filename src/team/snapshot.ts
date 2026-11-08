@@ -83,7 +83,7 @@ export function validate(state: unknown): asserts state is TeamState {
     requireValue(member.handover === undefined || ["busy", "idle", "input"].includes(String(member.handover)), "Invalid member handover state");
     requireValue(member.promotion === undefined || (object(member.promotion) && ["stopped", "moved", "role", "entry"].includes(String(member.promotion.step)) && text(member.promotion.sessionFile)), "Invalid member promotion");
     requireValue(member.waiting === undefined || (object(member.waiting) && Array.isArray(member.waiting.tasks) && member.waiting.tasks.every(task => typeof task === "string" && Object.hasOwn(state.tasks as object, task))), "Invalid member wait");
-    requireValue(member.watches === undefined || (Array.isArray(member.watches) && member.watches.length <= 100 && member.watches.every(watch => object(watch) && typeof watch.task === "string" && Object.hasOwn(state.tasks as object, watch.task) && ["message", "completed"].includes(String(watch.event)) && (watch.seq === undefined || integer(watch.seq, 1)))), "Invalid task watches");
+    requireValue(member.watches === undefined || (Array.isArray(member.watches) && member.watches.length <= 100 && member.watches.every(watch => object(watch) && typeof watch.task === "string" && Object.hasOwn(state.tasks as object, watch.task) && ["message", "completed", "edited"].includes(String(watch.event)) && (watch.seq === undefined || (watch.event !== "edited" && integer(watch.seq, 1))))), "Invalid task watches");
     requireValue(member.analysis === undefined || member.analysis === "auto" || member.analysis === "separate", "Invalid member analysis preference");
     requireValue(member.extensions === undefined || validExtensionSelection(member.extensions), "Invalid member extension selection");
     requireValue(member.terminal === undefined || typeof member.terminal === "boolean", "Invalid member terminal flag");
@@ -117,7 +117,7 @@ export function validate(state: unknown): asserts state is TeamState {
     requireValue([task.creator, task.delegator].every(member => member === undefined || (typeof member === "string" && Object.hasOwn(members, member))), "Invalid task creator or delegator");
     requireValue(task.outcome === undefined || (task.status === "done" && state.messages.some(message => object(message) && message.id === task.outcome && message.task === key)), "Invalid task outcome");
     requireValue(task.status !== "in_progress" || task.owner !== undefined, "In-progress task requires an owner");
-    requireValue(task.status === "todo" || task.dependencies.every(dep => (tasks[dep] as Record<string, unknown>).status === "done"), "Active or done task has unfinished dependencies");
+    requireValue(task.status !== "done" || task.dependencies.every(dep => (tasks[dep] as Record<string, unknown>).status === "done"), "Done task has unfinished dependencies");
     requireValue(task.status !== "done" || completionDependencies.every(dep => (tasks[dep] as Record<string, unknown>).status === "done"), "Done task has unfinished completion dependencies");
     edges[key] = dependencies;
   }
@@ -135,7 +135,7 @@ export function validate(state: unknown): asserts state is TeamState {
   const messageIds = new Set<string>();
   for (const message of state.messages) {
     requireValue(object(message) && integer(message.seq, last + 1) && text(message.id) && !messageIds.has(message.id) && typeof message.from === "string" && Object.hasOwn(members, message.from) && Array.isArray(message.recipients) && message.recipients.every(recipient => typeof recipient === "string" && Object.hasOwn(members, recipient)) && new Set(message.recipients).size === message.recipients.length && text(message.summary, maxMessageText) && typeof message.time === "string" && Number.isFinite(Date.parse(message.time)), "Invalid state message");
-    requireValue((message.detail === undefined || text(message.detail)) && (message.task === undefined || (typeof message.task === "string" && Object.hasOwn(tasks, message.task))) && (message.replyTo === undefined || (typeof message.replyTo === "string" && messageIds.has(message.replyTo))) && (message.kind === undefined || (message.kind === "outcome" && message.task !== undefined)), "Invalid message detail or link");
+    requireValue((message.detail === undefined || text(message.detail)) && (message.task === undefined || (typeof message.task === "string" && Object.hasOwn(tasks, message.task))) && (message.replyTo === undefined || (typeof message.replyTo === "string" && messageIds.has(message.replyTo))) && (message.kind === undefined || (["outcome", "edited"].includes(String(message.kind)) && message.task !== undefined)), "Invalid message detail or link");
     last = message.seq; messageIds.add(message.id);
   }
 }

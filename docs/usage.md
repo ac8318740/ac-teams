@@ -199,7 +199,23 @@ Use the returned task ID with these actions:
 
 Starting never steals another owner's work. Only the owner can complete or release its work. An ancestor may explicitly release a stopped or interrupted descendant's ownership. The owner or root can reopen an owned task; any member can reopen an unowned one. Done tasks cannot be claimed until reopened.
 
-Include `dependencies` and/or `completionDependencies` on creation or `edit`. Any member can edit unowned to-do work; only the owner can edit reserved to-do work. In-progress and done tasks cannot be edited. The coordinator rejects unknown IDs, self-references, duplicate edges within or across fields, and cycles across both edge kinds atomically. An optional `revision` rejects stale mutations.
+Include `dependencies` and/or `completionDependencies` on creation or `edit`. Any member can edit unowned to-do metadata or add prerequisites. Only the owner can edit owned to-do or active work, including title, label, description, and either dependency field. Done tasks require explicit `reopen` before editing.
+
+The coordinator rejects unknown IDs, self-references, duplicate edges within or across fields, and cycles across both edge kinds atomically. An optional `revision` rejects stale mutations.
+
+Every effective dependency change returns a warning. Removing or replacing prerequisites on either to-do or active work requires the task owner to confirm the exact supplied edge lists with `confirmDependencyRemoval: true` and the current `revision`. Claim unowned work first.
+
+This is the agent owner's confirmation, not routine human approval. Read the task, reassess the change, and submit its exact lists and revision; never blindly retry a stale request. Pure additions need no confirmation.
+
+```json
+{"action":"edit","id":"<task-id>","revision":4,"completionDependencies":["<remaining-prerequisite-id>"],"confirmDependencyRemoval":true}
+```
+
+Adding unfinished prerequisites to active work blocks completion without changing its progress or stopping its process. Continue only useful grounded work; pause when continuing is unsound. Completed results stay protected, and existing reopen guards remain in force.
+
+Every effective edit posts a concise built-in diff to the task's normal recipients, owners of tasks depending on it through either edge kind, and edit subscribers. Recipients are deduplicated and exclude the editor.
+
+Owners of newly added or removed prerequisites are not dependent-task owners merely because an edge changed. No broadcast or duplicate manual board post is needed. Unchanged metadata and reordered prerequisite sets produce no notice or revision increment.
 
 `acceptance: true` asserts that the agent checked the acceptance criteria; it is not an independent test runner. Stop/crash retains ownership and progress. There is no automatic reassignment.
 
@@ -238,7 +254,15 @@ Completion already notifies the task's delegator. For additional notifications, 
 
 `completed` is the default. Progress posts do not consume it. Use `event: "message"` for the next task-linked post instead. Registration checks for missed events atomically; a completion watch on an already-completed task returns its outcome immediately. Repeating an active watch does not duplicate it. Each member can have up to 100 task/event watches.
 
-Watches live in team state, survive unrelated messages and work, and trigger once per task/event. After triggering, they remain pending until the notification is persisted and acknowledged. A single post reaches each recipient once even when both direct routing and a watch match.
+Watches live in team state and survive unrelated messages, work, and coordinator restarts. `message` and `completed` trigger once per task/event; after triggering, they remain pending until the notification is persisted and acknowledged. A single post reaches each recipient once even when direct routing and multiple watches match.
+
+Use `event: "edited"` to subscribe to every effective edit until explicitly cancelled:
+
+```json
+{"action":"watch","tasks":["<task-id>"],"event":"edited"}
+```
+
+Edit subscriptions persist across deliveries and acknowledgements. They share the 100 task/event limit, deduplicate repeated registration, and support missed-event catchup with `after`. An edit is also a task-linked post, so it can consume a next-message watch, but it never consumes a completion watch. `wait` rejects `event: "edited"`; register `watch` first, then `wait`.
 
 ```json
 {"action":"unwatch","tasks":["<task-id>"]}
@@ -247,7 +271,7 @@ Watches live in team state, survive unrelated messages and work, and trigger onc
 
 `unwatch` cancels the named tasks (omit `tasks` to cancel all; optionally specify `event`). `wait` pauses the agent without changing its watches. If unseen posts are already available, it returns them instead of pausing. Otherwise the turn ends without another model request; a new addressed post resumes it. There is no timeout or polling loop. The display says "Agent paused", not "Finished waiting".
 
-For compatibility, `wait` with `tasks` also registers one-shot next-message watches for those tasks. Prefer explicit `watch` when the desired trigger is completion. No need to re-register after an unrelated message. Task starts, edits, and releases do not themselves send notifications.
+For compatibility, `wait` with `tasks` also registers one-shot next-message watches for those tasks. Prefer explicit `watch` when the desired trigger is completion. No need to re-register after an unrelated message. Task starts and releases do not themselves send notifications. Effective edits send built-in change notices.
 
 Messages survive crashes; exactly-once delivery or model execution does not. Avoid acknowledgement-only replies.
 
