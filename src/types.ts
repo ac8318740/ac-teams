@@ -56,7 +56,7 @@ export interface Member {
   handover?: "busy" | "idle" | "input";
   /** Legacy yield registration, retained for existing snapshots. */
   waiting?: { tasks: string[] };
-  /** One-shot notifications survive unrelated turns; seq is retained until delivery is acknowledged. */
+  /** Notifications survive unrelated turns; edited subscriptions persist until cancelled. */
   watches?: TaskWatch[];
   /** Promotion in progress: the last completed step and what a rollback restores. */
   promotion?: { step: "stopped" | "moved" | "role" | "entry"; sessionFile: string; parent?: string; access?: Access; provider?: string };
@@ -98,6 +98,8 @@ export interface TaskView extends Task {
   completionDependencies: string[];
   blockedBy: string[];
   completionBlockedBy: string[];
+  /** Effective dependency edit warnings; returned only by that mutation. */
+  warnings?: string[];
 }
 export interface Message {
   seq: number;
@@ -110,8 +112,8 @@ export interface Message {
   detail?: string;
   task?: string;
   replyTo?: string;
-  /** "outcome": the post that completed its task. */
-  kind?: "outcome";
+  /** Built-in completion or effective task edit notice. */
+  kind?: "outcome" | "edited";
   time: string;
 }
 export interface TeamState {
@@ -138,6 +140,8 @@ export interface TaskArgs {
   action: "create" | "list" | "read" | "edit" | "claim" | "start" | "release" | "complete" | "reopen";
   revision?: number;
   acceptance?: boolean;
+  /** Edit: owner confirms the exact dependency removals at the supplied revision. */
+  confirmDependencyRemoval?: boolean;
   offset?: number;
   limit?: number;
   id?: string;
@@ -152,13 +156,13 @@ export interface TaskArgs {
 }
 export interface TaskWatch {
   task: string;
-  event: "message" | "completed";
+  event: "message" | "completed" | "edited";
   seq?: number;
 }
 export interface WatchResult { watching: TaskWatch[]; updates: Message[] }
 export interface MessageArgs {
   action: "send" | "history" | "search" | "wait" | "watch" | "unwatch";
-  event?: "message" | "completed";
+  event?: "message" | "completed" | "edited";
   seq?: number;
   includeDetail?: boolean;
   /** Wait: also wake on posts linked to these tasks. */

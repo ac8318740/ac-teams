@@ -386,6 +386,29 @@ test("team tools guide solo planning and task-backed delegation without tracking
   } finally { await f.close(); }
 });
 
+test("task edit tool exposes owner confirmation, warnings and persistent edit subscriptions", async () => {
+  const f = fixture();
+  const task = (args: unknown) => f.tools.get("team_task")!.execute(randomUUID(), args, new AbortController().signal, undefined, f.ctx);
+  const message = (args: unknown) => f.tools.get("team_message")!.execute(randomUUID(), args, new AbortController().signal, undefined, f.ctx);
+  const text = (result: Awaited<ReturnType<typeof task>>) => result.content.filter(block => block.type === "text").map(block => block.text).join("\n");
+  try {
+    const upstream = JSON.parse(text(await task({ action: "create", title: "Producer" })));
+    const active = JSON.parse(text(await task({ action: "create", title: "Consumer" })));
+    await task({ action: "start", id: active.id });
+    const edited = JSON.parse(text(await task({ action: "edit", id: active.id, dependencies: [upstream.id] })));
+    assert.match(edited.warnings.join(" "), /grounded.*pause.*unsound/);
+    assert.deepEqual(edited.completionBlockedBy, [upstream.id]);
+    await assert.rejects(task({ action: "edit", id: active.id, dependencies: [] }), /confirmDependencyRemoval/);
+    await task({ action: "edit", id: active.id, dependencies: [], revision: edited.revision, confirmDependencyRemoval: true });
+    const watched = await message({ action: "watch", tasks: [active.id], event: "edited" });
+    assert.match(text(watched), /edited/);
+    await assert.rejects(message({ action: "wait", tasks: [active.id], event: "edited" }), /watch/);
+    await message({ action: "unwatch", tasks: [active.id], event: "edited" });
+    assert.match(JSON.stringify(f.tools.get("team_task")!.parameters), /TASK OWNER.*exact supplied/);
+    assert.match(f.tools.get("team_task")!.promptGuidelines!.join(" "), /Done edits remain rejected/);
+  } finally { await f.close(); }
+});
+
 test("task batches and lists keep model output compact while read and details retain full records", async () => {
   const f = fixture();
   const call = (args: unknown) => f.tools.get("team_task")!.execute(randomUUID(), args, new AbortController().signal, undefined, f.ctx);

@@ -22,6 +22,8 @@ test("pause and watch displays distinguish registration from updates", () => {
   const watching = teamToolPresentation("team_message", { action: "watch", tasks: ["a", "b"] }, { content: [], details: { watching: [{ task: "a", event: "completed" }, { task: "b", event: "message" }], updates: [] } }, labels);
   assert.equal(watching.title, "Task notifications · 2 active");
   assert.deepEqual(watching.body, ["Parser: notify on completion", "Storage: notify on next message"]);
+  const edits = teamToolPresentation("team_message", { action: "watch", tasks: ["a"], event: "edited" }, { content: [], details: { watching: [{ task: "a", event: "edited" }], updates: [] } }, labels);
+  assert.deepEqual(edits.body, ["Parser: notify on every edit until cancelled"]);
 });
 
 initTheme("dark", false);

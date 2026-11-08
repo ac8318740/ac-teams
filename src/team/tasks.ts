@@ -73,16 +73,43 @@ export function task(state: TeamState, actor: string, args: TaskArgs): TaskView 
   }
   requireValue(args.revision === undefined || (integer(args.revision) && args.revision === task.revision), "Stale or invalid task revision; read the task before retrying");
   if (args.action === "edit") {
-    requireValue(task.status === "todo", "Only to-do tasks can be edited");
-    requireValue(!task.owner || task.owner === actor, "Only the owner can edit a reserved task");
-    if (args.title !== undefined) task.title = args.title;
-    if (args.label !== undefined) task.label = args.label;
-    if (args.description !== undefined) task.description = args.description;
-    for (const field of ["dependencies", "completionDependencies"] as const) {
-      if (args[field] === undefined) continue;
-      requireValue(Array.isArray(args[field]) && args[field].length <= 100, "Invalid task dependencies (max 100)");
-      task[field] = structuredClone(args[field]);
+    requireValue(task.status !== "done", "Done tasks cannot be edited; explicitly reopen first");
+    requireValue(!task.owner || task.owner === actor, "Only the owner can edit an owned task");
+    const changes: string[] = [], warnings: string[] = [];
+    const preview = (value: string) => JSON.stringify(value.length > 100 ? `${value.slice(0, 100)}...` : value);
+    const references = (ids: string[]) => ids.length ? ` (${ids.slice(0, 10).map(id => `#${state.tasks[id]?.number ?? "?"}`).join(", ")}${ids.length > 10 ? `, +${ids.length - 10} more` : ""})` : "";
+    for (const field of ["title", "label", "description"] as const) {
+      if (args[field] === undefined || args[field] === task[field]) continue;
+      requireValue(field === "description" ? typeof args[field] === "string" && args[field].length <= 16000 : text(args[field], field === "title" ? 500 : taskLabelMaxLength), `Invalid task ${field}`);
+      changes.push(`${field}: ${preview(task[field])} -> ${preview(args[field])}`);
+      task[field] = args[field];
     }
+    for (const field of ["dependencies", "completionDependencies"] as const) {
+      const next = args[field];
+      if (next === undefined) continue;
+      requireValue(Array.isArray(next) && next.length <= 100, "Invalid task dependencies (max 100)");
+      const previous = task[field] ?? [];
+      const added = next.filter(id => !previous.includes(id)), removed = previous.filter(id => !next.includes(id));
+      // Validate even set-equivalent requests so duplicate edges cannot hide in a no-op.
+      requireValue(new Set(next).size === next.length, "Invalid task dependencies: duplicate edges");
+      if (!added.length && !removed.length) continue;
+      if (removed.length) {
+        requireValue(task.owner === actor, "Dependency removal requires the task owner; claim unowned work first");
+        requireValue(args.confirmDependencyRemoval === true && args.revision === task.revision, "Dependency removal/replacement requires owner confirmDependencyRemoval=true and the current revision, confirming the exact supplied edge lists; read before retrying");
+      }
+      const change = `${field}: added ${added.length}${references(added)}, removed ${removed.length}${references(removed)}`;
+      changes.push(change);
+      warnings.push(`Dependency change (${change}). Check affected work and acceptance criteria.`);
+      task[field] = structuredClone(next);
+    }
+    if (!changes.length) return taskView(state, task);
+    const blocked = taskView(state, task).completionBlockedBy;
+    const guidance = "Continue only useful grounded work; pause when continuing is unsound.";
+    if (warnings.length) warnings.push(`${blocked.length ? `Task completion blocked by ${blocked.length} unfinished prerequisite(s). ` : ""}${guidance}`);
+    const dependents = Object.values(state.tasks).filter(other => other.dependencies.includes(task.id) || (other.completionDependencies ?? []).includes(task.id));
+    post(state, actor, { task: task.id, kind: "edited", recipients: [...new Set(dependents.flatMap(other => other.owner ? [other.owner] : []))], summary: `Task #${task.number} edited: ${changes.join("; ")}.${warnings.length ? ` Warning: dependency change; ${blocked.length ? `completion blocked by ${blocked.length} unfinished prerequisite(s). ` : ""}${guidance}` : ""}` });
+    task.revision++;
+    return { ...taskView(state, task), ...(warnings.length ? { warnings } : {}) };
   } else if (args.action === "claim") {
     requireValue(task.status !== "done", "Task is done; explicitly reopen it before claiming");
     requireValue(!task.owner, `Task is already owned by ${task.owner}`);
