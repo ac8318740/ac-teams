@@ -10,7 +10,7 @@
   "pi": { "extensions": ["./src/index.ts"] },
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test test/*.test.ts"
+    "test": "sh scripts/test.sh"
   },
   "engines": { "node": ">=22.19.0" },
   "peerDependencies": {
