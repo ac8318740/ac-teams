@@ -1,6 +1,6 @@
 {
   "name": "ac-teams",
-  "version": "0.0.36",
+  "version": "0.0.37",
   "description": "Small, persistent teams for Pi",
   "type": "module",
   "license": "MIT",
@@ -10,7 +10,7 @@
   "pi": { "extensions": ["./src/index.ts"] },
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test test/*.test.ts"
+    "test": "sh scripts/test.sh"
   },
   "engines": { "node": ">=22.19.0" },
   "peerDependencies": {

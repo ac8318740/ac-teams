@@ -21,19 +21,17 @@ node --test eval/run.test.mjs eval/record.test.mjs
 npm pack --dry-run
 ```
 
-Run the full application suite with an empty temporary home and no fixed Pi agent directory:
+Run the full application suite:
 
 ```sh
-(
-    test_home=$(mktemp -d)
-    trap 'rm -rf -- "$test_home"' EXIT
-    env -u PI_CODING_AGENT_DIR HOME="$test_home" npm test
-)
+npm test
 ```
 
-Isolation prevents installed user policy and extension settings from changing fixture behavior. Leave `PI_CODING_AGENT_DIR` unset: Docker credential fixtures select their own agent directories, and a fixed override breaks those checks. Enforced-access tests need a usable Docker daemon and the matching [member image](access.md#set-up-docker); unavailable Docker coverage must be reported as skipped. These containers use no host networking or published ports.
+The runner uses an empty temporary home, unsets `PI_CODING_AGENT_DIR`, and removes the home on exit. Isolation prevents installed user policy and extension settings from changing fixture behavior. Docker credential fixtures select their own agent directories; a fixed override breaks those checks.
 
-For a focused check, replace `npm test` in that block with, for example, `node --experimental-strip-types --test test/store.test.ts test/task-state.test.ts`. Tests are organized by behavior under `test/`, without a line cap; source files use the [soft 300-line target](architecture.md#use-file-size-as-a-review-prompt).
+Enforced-access tests need a usable Docker daemon and the matching [member image](access.md#set-up-docker); unavailable Docker coverage must be reported as skipped. These containers use no host networking or published ports.
+
+For a focused check, run `npm test -- test/store.test.ts test/task-state.test.ts`. Arguments replace the default file list, so include files when passing Node test options (for example, `npm test -- --test-name-pattern="task" test/task-state.test.ts`). Tests are organized by behavior under `test/`, without a line cap; source files use the [soft 300-line target](architecture.md#use-file-size-as-a-review-prompt).
 
 The deterministic suite makes no model calls. The evaluation-tool tests check the runner and recorder without rerunning benchmarks. Application coverage includes:
 
