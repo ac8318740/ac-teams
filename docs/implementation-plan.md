@@ -57,7 +57,7 @@ Proposed names and actions:
 | --- | --- | --- |
 | `team_agent` | Launch, list/status, stop, explicit resume, root limit update | Brief, cwd, optional worktree, model, and thinking level; return member and native session identifiers |
 | `team_message` | Send, history, search | Notify all teammates or a nonempty explicit recipient set; all members can read all messages |
-| `team_task` | Create, list/read, edit to-do work, claim, start, release, complete, reopen | Separate progress, ownership, and dependencies; blocked checkout is allowed, starting is gated |
+| `team_task` | Create, list/read, edit owned to-do/active work, claim, start, release, complete, reopen | Separate progress, ownership, and dependencies; blocked checkout is allowed, starting is gated |
 
 Children receive their launch brief and normal project instructions, not the parent's conversation. Startup guidance explains how to pull shared messages and tasks. It asks agents to use the fewest useful teammates, consider thinking level, state edit ownership, and notify their parent before an in-scope split. Scope expansion or changed shared commitments requires approval. There are no fixed manager roles or file locks.
 
@@ -93,7 +93,15 @@ Store coordination data at `~/.acstack/ac-teams/teams/<team-id>/` regardless of 
 
 Only the root coordinator writes. Serialize mutations in one request queue. Validate and commit each reservation in the same critical section: the task is to-do and unowned. Checkout does not start work and can reserve a blocked task. Starting claims unowned work atomically or requires existing ownership, and requires completed `dependencies`. Member launch may reserve blocked work but does not start it; `completionDependencies` allows useful grounded initial work and gates only acceptance. Atomic snapshot replacement uses a same-directory temporary file, flush, rename, and directory flush. Append and flush a message before notifying recipients. A successful mutation response follows durable persistence; use request IDs to make retries idempotent.
 
-Validate both dependency fields together and reject unknown IDs, duplicate edges, self-references, and mixed cycles. Freeze both fields while a task is in progress or done; a reserved to-do task remains editable by its owner. Return unfinished start prerequisites as derived `blockedBy` and all unfinished acceptance prerequisites as `completionBlockedBy`; neither is stored progress. Old snapshots without `completionDependencies` remain valid. Completion checks both fields before posting an outcome or firing watches. Release clears ownership, returns in-progress work to to-do, and leaves done work done. Reopening cannot invalidate active/done hard dependents or done completion-only dependents; active completion-only dependents may keep working. A process crash marks the member interrupted but retains task progress and ownership visibly.
+Validate both dependency fields together and reject unknown IDs, duplicate edges, self-references, and mixed cycles.
+
+Owners may edit both fields and metadata while a task is to-do or in progress; done tasks remain immutable until explicit reopen. Every effective dependency change warns. Removing or replacing edges requires the task owner's confirmation of the exact supplied lists at the current revision, including to-do work; unowned removals require a claim first. Pure additions require no confirmation.
+
+New unfinished prerequisites on active work block completion without stopping the process: continue useful grounded work and pause when continuing is unsound. Snapshot validation permits unfinished start prerequisites on active work while preserving completed-result integrity.
+
+Effective edits atomically post a bounded diff through the existing board, notifying normal task recipients, current dependent-task owners (both edge kinds), and persistent edited subscriptions. Set-equivalent edits do not notify or increment revision. Existing message/completed watches remain one-shot; edited subscriptions survive acknowledgement until cancellation and share the existing 100-watch bound.
+
+Return unfinished start prerequisites as derived `blockedBy` and all unfinished acceptance prerequisites as `completionBlockedBy`; neither is stored progress. Old snapshots without `completionDependencies` remain valid. Completion checks both fields before posting an outcome or firing watches. Release clears ownership, returns in-progress work to to-do, and leaves done work done. Reopening cannot invalidate active/done hard dependents or done completion-only dependents; active completion-only dependents may keep working. A process crash marks the member interrupted but retains task progress and ownership visibly.
 
 An exclusive team lock prevents simultaneous roots writing the same state. Check process identity, not PID alone, before deciding a lock is stale. If identity or liveness is uncertain, refuse takeover and report recovery steps rather than killing processes or breaking the lock automatically. Test these filesystem assumptions on supported local Linux filesystems; do not promise network-filesystem locking guarantees.
 

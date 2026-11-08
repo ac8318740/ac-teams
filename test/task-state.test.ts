@@ -206,7 +206,7 @@ test("release clears reservations, resets active work, and never reopens done wo
   assert.equal(store.state.tasks[task.id].status, "todo");
 });
 
-test("owners can edit reserved to-do tasks, but active dependencies stay frozen", t => {
+test("owners can edit reserved and active dependencies with confirmed removal", t => {
   const { store, create } = fixture(t);
   const prerequisite = create();
   const task = create();
@@ -214,9 +214,11 @@ test("owners can edit reserved to-do tasks, but active dependencies stay frozen"
   assert.throws(() => store.task("b", { action: "edit", id: task.id, title: "Steal" }), /owner/i);
   store.task("a", { action: "edit", id: task.id, dependencies: [prerequisite.id] });
   assert.throws(() => store.task("root", { action: "edit", id: prerequisite.id, dependencies: [task.id] }), /cyclic/i);
-  store.task("a", { action: "edit", id: task.id, dependencies: [] });
+  store.task("a", { action: "edit", id: task.id, dependencies: [], revision: store.state.tasks[task.id].revision, confirmDependencyRemoval: true });
   store.task("a", { action: "start", id: task.id });
-  assert.throws(() => store.task("a", { action: "edit", id: task.id, dependencies: [prerequisite.id] }), /to.do/i);
+  const edited = store.task("a", { action: "edit", id: task.id, dependencies: [prerequisite.id] }) as TaskView;
+  assert.deepEqual(edited.completionBlockedBy, [prerequisite.id]);
+  assert.equal(edited.status, "in_progress");
 });
 
 test("reopening is explicit and cannot invalidate active or completed dependents", t => {
@@ -360,7 +362,7 @@ test("completion edges preserve reservations, revisions, release and reopen inva
   assert.throws(() => store.task("a", { action: "edit", id: task.id, revision: reserved.revision, completionDependencies: [] }), /revision/i);
   assert.throws(() => store.task("root", { action: "edit", id: upstream.id, dependencies: [task.id] }), /cyclic/i);
   store.task("a", { action: "start", id: task.id });
-  assert.throws(() => store.task("a", { action: "edit", id: task.id, completionDependencies: [] }), /to.do/i);
+  assert.throws(() => store.task("a", { action: "edit", id: task.id, completionDependencies: [] }), /confirmDependencyRemoval/i);
   store.task("a", { action: "release", id: task.id });
   store.task("a", { action: "start", id: task.id });
   store.task("b", { action: "start", id: upstream.id });

@@ -6,7 +6,7 @@ import { integer, maxMessageText, requireValue, text } from "./snapshot.ts";
  * Appends a post. Attention goes to explicit recipients, the linked task's owner and delegator (else creator),
  * and the replied-to post's author; never the sender, and never an implicit broadcast.
  */
-export function post(state: TeamState, actor: string, args: Pick<MessageArgs, "recipients" | "summary" | "detail" | "task" | "replyTo"> & { kind?: "outcome" }, user = false): Message {
+export function post(state: TeamState, actor: string, args: Pick<MessageArgs, "recipients" | "summary" | "detail" | "task" | "replyTo"> & { kind?: "outcome" | "edited" }, user = false): Message {
   // A user's request is authored in a session but addressed to that session's own model.
   const limit = user ? maxMessageText : 16000;
   requireValue(text(args.summary, limit), `A post needs a nonempty summary of at most ${limit} characters`);
@@ -26,8 +26,8 @@ export function post(state: TeamState, actor: string, args: Pick<MessageArgs, "r
   const seq = (state.messages.at(-1)?.seq ?? 0) + 1;
   const waiters = taskId === undefined ? [] : Object.values(state.members).filter(member => {
     if (member.id === actor) return false;
-    const matching = member.watches?.filter(watch => watch.task === taskId && watch.seq === undefined && (watch.event === "message" || args.kind === "outcome")) ?? [];
-    for (const watch of matching) watch.seq = seq;
+    const matching = member.watches?.filter(watch => watch.task === taskId && watch.seq === undefined && (watch.event === "message" || (watch.event === "completed" && args.kind === "outcome") || (watch.event === "edited" && args.kind === "edited"))) ?? [];
+    for (const watch of matching) if (watch.event !== "edited") watch.seq = seq;
     const legacy = member.waiting?.tasks.includes(taskId);
     if (legacy) member.waiting!.tasks = member.waiting!.tasks.filter(task => task !== taskId);
     return matching.length > 0 || legacy;
@@ -49,7 +49,8 @@ export function message(state: TeamState, actor: string, args: MessageArgs, enve
     const tasks = args.tasks ?? [];
     requireValue(Array.isArray(tasks) && tasks.length <= 100 && tasks.every(task => typeof task === "string" && Object.hasOwn(state.tasks, task)), "Watch tasks must be existing task IDs");
     requireValue(args.action !== "watch" || tasks.length > 0, "Watch requires 1-100 tasks");
-    requireValue(args.event === undefined || args.event === "message" || args.event === "completed", "Invalid watch event");
+    requireValue(args.event === undefined || args.event === "message" || args.event === "completed" || args.event === "edited", "Invalid watch event");
+    requireValue(args.action !== "wait" || args.event !== "edited", "Use watch event=edited for persistent edit subscriptions; wait does not register them");
     const member = state.members[actor];
     const watches = member.watches ??= [];
     if (args.action === "unwatch") {
@@ -64,9 +65,9 @@ export function message(state: TeamState, actor: string, args: MessageArgs, enve
     const after = args.after ?? member.notified;
     requireValue(integer(after), "Invalid notification cursor");
     // Check and register atomically; completion watches also catch tasks already done.
-    const ready = state.messages.filter(message => (args.action === "wait" && message.seq > after && message.recipients.includes(actor)) || (message.task !== undefined && tasks.includes(message.task) && (event === "message" ? message.from !== actor && message.seq > after : message.id === state.tasks[message.task].outcome)));
+    const ready = state.messages.filter(message => (args.action === "wait" && message.seq > after && message.recipients.includes(actor)) || (message.task !== undefined && tasks.includes(message.task) && (event === "completed" ? message.id === state.tasks[message.task].outcome : message.from !== actor && message.seq > after && (event !== "edited" || message.kind === "edited"))));
     for (const task of new Set(tasks)) {
-      if (!ready.some(message => message.task === task && (event === "message" || message.id === state.tasks[task].outcome)) && !watches.some(watch => watch.task === task && watch.event === event)) watches.push({ task, event });
+      if ((event === "edited" || !ready.some(message => message.task === task && (event === "message" || message.id === state.tasks[task].outcome))) && !watches.some(watch => watch.task === task && watch.event === event)) watches.push({ task, event });
     }
     requireValue(watches.length <= 100, "At most 100 task watches per member");
     return args.action === "wait" ? structuredClone(ready) : { watching: structuredClone(watches), updates: structuredClone(ready) };

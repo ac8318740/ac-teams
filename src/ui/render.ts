@@ -135,7 +135,7 @@ export function teamToolPresentation(tool: string, args: unknown, result: Result
   if (tool === "team_message" && (action === "watch" || action === "unwatch")) {
     const watches = Array.isArray(value.watching) ? value.watching : [];
     const updates = Array.isArray(value.updates) ? value.updates : [];
-    const body = watches.map(watch => { const item = object(watch); return `${inline(labels[String(item.task)] ?? item.task)}: ${item.seq ? "triggered; delivery pending" : item.event === "completed" ? "notify on completion" : "notify on next message"}`; });
+    const body = watches.map(watch => { const item = object(watch); return `${inline(labels[String(item.task)] ?? item.task)}: ${item.seq ? "triggered; delivery pending" : item.event === "edited" ? "notify on every edit until cancelled" : item.event === "completed" ? "notify on completion" : "notify on next message"}`; });
     for (const post of updates) { const item = messagePresentation(post, labels, self); body.push(item.title, ...item.body); }
     return { title: pending ? action === "watch" ? "Setting task notifications" : "Cancelling task notifications" : `Task notifications · ${watches.length} active${updates.length ? ` · ${updates.length} updates available` : ""}`, body, category: "task notifications", activity: action === "watch" ? "Set task notifications" : "Cancelled task notifications", problem: failed };
   }

@@ -397,6 +397,32 @@ test("task watches survive unrelated turns and restart, then clear only on match
   } finally { await f.close(); }
 });
 
+test("persistent edit subscriptions deliver built-in notices and survive acknowledgement and restart", async () => {
+  const f = await setup();
+  try {
+    const member = await f.team.handle("root", "agent", launch) as { id: string };
+    const task = await f.team.handle(member.id, "task", { action: "create", title: "Original" }) as { id: string };
+    await f.team.handle("root", "message", { action: "watch", tasks: [task.id], event: "edited" });
+    await f.team.handle(member.id, "task", { action: "start", id: task.id });
+    await f.team.handle(member.id, "task", { action: "edit", id: task.id, title: "Updated" });
+    const first = f.team.store.state.messages.at(-1)!;
+    await until(() => f.notices.includes(first.seq));
+    f.team.ack("root", first.seq);
+    assert.deepEqual(f.team.store.state.members.root.watches, [{ task: task.id, event: "edited" }]);
+    await f.team.close();
+    const reopened = await Coordinator.open(f.options);
+    try {
+      await reopened.handle(member.id, "task", { action: "edit", id: task.id, description: "Updated criteria" });
+      const second = reopened.store.state.messages.at(-1)!;
+      await until(() => f.notices.includes(second.seq));
+      reopened.ack("root", second.seq);
+      assert.deepEqual(reopened.store.state.members.root.watches, [{ task: task.id, event: "edited" }]);
+      await reopened.handle("root", "message", { action: "unwatch", tasks: [task.id], event: "edited" });
+      assert.deepEqual(reopened.store.state.members.root.watches, []);
+    } finally { await reopened.close(); }
+  } finally { await f.close(); }
+});
+
 test("teammates require unique descriptive names; legacy fallbacks remain stable", async () => {
   const f = await setup();
   try {
