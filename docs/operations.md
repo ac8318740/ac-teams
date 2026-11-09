@@ -51,7 +51,7 @@ Starting members reserve count slots synchronously, but may not yet consume thei
 
 Choose concurrency using resource readings and observed progress. These advisories never block a launch, change the configured ceiling, reserve RAM, or stop a member. Host figures do not account for a tighter container/cgroup limit or guarantee future capacity; other teams and non-team processes also consume resources.
 
-Idle members keep Pi and its extensions alive. Stop unneeded members to release their owned processes, then resume their saved sessions when needed.
+Idle members keep Pi and its extensions alive. The team_agent guidance tells agents to stop an idle member unless it will get more work within a couple of minutes. Resume its saved session when needed.
 
 This preserves transcripts, tasks, messages, and worktrees. Extension-owned language servers and scanners can dominate memory. Choose smaller worker extension presets before startup; ac-teams does not manage an extension's own processes or share its indexes.
 
