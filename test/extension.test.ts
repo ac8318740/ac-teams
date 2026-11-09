@@ -354,7 +354,7 @@ test("team tools guide solo planning and task-backed delegation without tracking
     const agentGuidance = f.tools.get("team_agent")!.promptGuidelines!.join(" ");
     assert.match(agentGuidance, /Check team_agent list resources before adding concurrency/);
     assert.match(agentGuidance, /advisory, not a memory reservation or capacity guarantee/);
-    assert.match(agentGuidance, /If contention slows progress, stop unneeded idle members and resume their saved sessions/);
+    assert.match(agentGuidance, /Stop each member once it goes idle unless you will send it more work within a couple of minutes/);
     assert.doesNotMatch(agentGuidance, /Sequence launches/);
     assert.match(agentGuidance, /Analysis defaults to auto/);
     assert.match(agentGuidance, /Choose analysis: separate.*uncertain compatibility/);
