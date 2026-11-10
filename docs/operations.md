@@ -51,7 +51,7 @@ Starting members reserve count slots synchronously, but may not yet consume thei
 
 Choose concurrency using resource readings and observed progress. These advisories never block a launch, change the configured ceiling, reserve RAM, or stop a member. Host figures do not account for a tighter container/cgroup limit or guarantee future capacity; other teams and non-team processes also consume resources.
 
-Idle members keep Pi and its extensions alive. The team_agent guidance tells agents to stop an idle member unless it will get more work within a couple of minutes. Resume its saved session when needed.
+Idle members keep Pi and its extensions alive. When a member without live children goes idle, its parent gets a post saying whether it is waiting on a watched task and asking it to stop the member unless more work is due within a couple of minutes. As a failsafe, the coordinator stops members that stay idle for five minutes without live children.
 
 This preserves transcripts, tasks, messages, and worktrees. Extension-owned language servers and scanners can dominate memory. Choose smaller worker extension presets before startup; ac-teams does not manage an extension's own processes or share its indexes.
 
@@ -158,6 +158,8 @@ This is snapshot-based cleanup, not OS containment. Detached or uncaptured desce
 `resume` needs a stopped descendant ID and a new brief. It keeps the member's descriptive name; renaming during resume is rejected. It starts a new process against the same native Pi session file. It does not reconstruct a transcript, reconnect to old stdio, or replay the previous assignment automatically. The coordinator refuses tool-driven resume if the old process is live or its identity is uncertain.
 
 The interactive panel can instead quietly resume a saved member session without inventing a new brief. Feedback then arrives through the durable team mailbox.
+
+A stopped member also resumes quietly when a teammate sends it a direct message, replies to its post, or posts on a task it watches. Other posts, such as task-routed posts it does not watch, wait until it resumes. If the resume fails (for example, the live-member ceiling is full), the sender gets a post saying so.
 
 Stopping a main session ends its Pi process; an exiting coordinator hands over first. Resuming another main session relaunches it in its own terminal.
 
