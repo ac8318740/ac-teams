@@ -273,7 +273,7 @@ test("runtime mounts cannot sit inside another member's writable grant", { skip,
   } finally { await t.close(); execFileSync("docker", ["rm", "-f", other]); rmSync(root, { recursive: true, force: true }); }
 });
 
-test("a resumed enforced member gets a new container that passes the same gate", { skip, timeout: 180000 }, async () => {
+test("a resumed or woken enforced member gets a new container that passes the same gate", { skip, timeout: 180000 }, async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "sbm-")));
   mkdirSync(join(root, "work"));
   const t = await team(root, join(root, "work"));
@@ -286,6 +286,12 @@ test("a resumed enforced member gets a new container that passes the same gate",
     assert.notEqual(containers(t.store.dir), "");
     assert.notEqual(containers(t.store.dir), first);
     assert.deepEqual(resumed.access, { read: [join(root, "work")], write: [], network: {} });
+    await t.handle("root", "agent", { action: "stop", id: member.id });
+    await t.handle("root", "message", { action: "send", recipients: [member.id], summary: "Wake up" });
+    for (let i = 0; i < 600 && t.store.state.members[member.id].status === "stopped"; i++) await new Promise(resolve => setTimeout(resolve, 100));
+    assert.notEqual(t.store.state.members[member.id].status, "stopped", "a direct message wakes a sandboxed member");
+    for (let i = 0; i < 600 && !containers(t.store.dir); i++) await new Promise(resolve => setTimeout(resolve, 100));
+    assert.notEqual(containers(t.store.dir), "");
   } finally { await t.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
