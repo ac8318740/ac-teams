@@ -25,8 +25,10 @@ export class TeamActivity {
   private options: CoordinatorOptions;
   private protocol: TeamProtocol;
   private stopping: () => boolean;
+  private settled: (id: string) => void;
 
-  constructor(store: Store, self: string, options: CoordinatorOptions, protocol: TeamProtocol, stopping: () => boolean) {
+  constructor(store: Store, self: string, options: CoordinatorOptions, protocol: TeamProtocol, stopping: () => boolean, settled: (id: string) => void) {
+    this.settled = settled;
     this.store = store;
     this.self = self;
     this.options = options;
@@ -73,6 +75,7 @@ export class TeamActivity {
     if (!isDeepStrictEqual(member, current)) {
       this.store.update(next => { next.members[actor] = structuredClone(current); });
       this.publish();
+      if (!isMain(member) && member.status === "busy" && current.status === "idle") this.settled(actor);
     }
     if (event.type === "model_error" && !isMain(member) && member.status !== "stopping") {
       const recipient = member.parent && isLive(this.store.state.members[member.parent]) ? member.parent : this.self;

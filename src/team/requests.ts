@@ -7,7 +7,7 @@ const text = Type.String({ minLength: 1, maxLength: 16000 });
 export const AgentSchema = Type.Object({
   action: Type.Union(["launch", "list", "status", "stop", "resume", "limits", "cleanup"].map(v => Type.Literal(v))),
   name: Type.Optional(Type.String({ minLength: 1, maxLength: memberNameMaxLength, pattern: memberNamePattern.source, description: "Required on launch: a unique descriptive one- or two-word lowercase name, e.g. parser or code-review. Retained on resume." })),
-  id: Type.Optional(id), brief: Type.Optional(text), cwd: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
+  id: Type.Optional(Type.String({ minLength: 1, maxLength: 128, description: "Member ID for status, stop, resume, and cleanup." })), brief: Type.Optional(text), cwd: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
   model: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
   thinking: Type.Optional(Type.Union(["off", "minimal", "low", "medium", "high", "xhigh"].map(v => Type.Literal(v)))),
   analysis: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("separate")], { description: "Launch/resume only: auto (default) requests existing pi-lens same-workspace reuse, possibly outside this team; explicit environment opt-outs win. Choose separate for different environments or rules, uncertain compatibility, or independent analyzer state. Does not disable checks or guarantee attachment. Resume keeps the saved preference unless overridden; restricted members always use separate analysis." })),
@@ -16,7 +16,7 @@ export const AgentSchema = Type.Object({
     include: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 4096 }), { maxItems: 512, uniqueItems: true })),
     exclude: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 4096 }), { maxItems: 512, uniqueItems: true })),
   }, { additionalProperties: false, description: "Launch only: choose a user-configured extension preset and optional ID additions/removals before imports. Required safety/auth and coordination cannot be excluded. Omit to use the configured default, or the actual parent-loaded set if unconfigured. Full and include cannot exceed that parent set. Resume keeps saved IDs and loads current installed versions. See /teams config for IDs and configuration; do not invent a preset or silently fall back to full." })),
-  worktree: Type.Optional(Type.Boolean()), base: Type.Optional(id), target: Type.Optional(id),
+  worktree: Type.Optional(Type.Boolean()), base: Type.Optional(id), target: Type.Optional(Type.String({ minLength: 1, maxLength: 128, description: "Launch with worktree only: the branch this worktree's work should merge into. Not a member ID." })),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
   depth: Type.Optional(Type.Integer({ minimum: 0, maximum: 10 })),
   task: Type.Optional(Type.String({ minLength: 1, maxLength: 128, description: "Launch only: an existing to-do task the new member owns, with you as its delegator. Its activity reaches you; include its goal in the brief." })),

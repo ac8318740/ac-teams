@@ -29,6 +29,8 @@ export interface CoordinatorOptions {
   resources?: () => HostResources;
   /** Test hook: provider token refresh interval (default one minute). */
   refreshMs?: number;
+  /** Test hook: how long a member may stay idle before the coordinator stops it (default five minutes). */
+  idleStopMs?: number;
   /** Test hook: runs after a member container passes all checks and before it starts. */
   beforeStart?: (member: string) => Promise<void>;
   /** Main's session directory; member transcripts live under <it>/ac-teams/<team>/<member>. */

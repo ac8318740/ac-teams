@@ -873,13 +873,14 @@ test("receipt cursors belong to one team/member across joins and session reloads
     await f.event("session_start");
     await f.execute("team_agent", { action: "launch", name: "new-worker", model: "test/model", brief: "ERROR" });
     await until(() => f.messages.some(message => (message as { content: string }).content.includes("Provider rejected this model")));
-    const notice = f.messages.at(-1) as { details: { team: string; member: string; through: number } };
+    const notice = f.messages.find(message => (message as { content: string }).content.includes("Provider rejected this model")) as { details: { team: string; member: string; through: number } };
     assert.equal(notice.details.team, target);
     assert.equal(notice.details.member, joined.details.member);
-    assert.equal(notice.details.through, 1, "old team's cursor must not suppress this team's first post");
+    // The idle notice may share the first batch.
+    assert.ok(notice.details.through <= 2, "old team's cursor must not suppress this team's first post");
     f.entries.push({ type: "custom_message", id: "new", customType: "ac-teams", details: notice.details } as never);
     await f.event("session_start");
-    assert.equal(readState(join(teamsHome(), target)).members[joined.details.member].notified, 1);
+    assert.equal(readState(join(teamsHome(), target)).members[joined.details.member].notified, notice.details.through);
     assert.ok(!f.warnings.some(warning => warning.includes("Invalid notification cursor")));
   } finally { await f.close(); }
 });
@@ -938,17 +939,18 @@ test("notices steer in summaries once, are acknowledged only after persistence, 
     const task = await f.execute("team_task", { action: "create", title: "Review", description: "Review" }) as { id: string };
     const member = await f.execute("team_agent", { action: "launch", name: "worker", model: "test/model", brief: "REPORT:Found the bug", task: task.id }) as { id: string };
     const notices = () => f.messages.filter(message => (message as { customType?: string }).customType === "ac-teams") as { content: string; details: { through: number } }[];
-    await until(() => notices().length === 1);
-    assert.match(notices()[0].content, /Found the bug/);
+    // The completion post and the idle notice may arrive in one batch or two.
+    await until(() => notices().some(notice => /Found the bug/.test(notice.content)) && notices().some(notice => /is idle and/.test(notice.content)));
+    const shown = notices().length;
     const wait = await f.tools.get("team_message")!.execute(randomUUID(), { action: "wait", tasks: [task.id] }, new AbortController().signal, undefined, f.ctx) as { terminate?: boolean; details: unknown[] };
     assert.deepEqual([wait.details, wait.terminate], [[], true], "a post already shown in a notice does not end the wait again");
     const missed = await f.tools.get("team_message")!.execute(randomUUID(), { action: "wait", tasks: [task.id], after: 0 }, new AbortController().signal, undefined, f.ctx) as { terminate?: boolean; details: unknown[] };
-    assert.deepEqual([missed.details.length, missed.terminate], [1, false], "a post after the caller's cursor returns at once instead of sleeping");
-    f.entries.push({ type: "custom_message", id: randomUUID(), customType: "ac-teams", data: undefined, details: notices()[0].details } as never);
+    assert.deepEqual([missed.details.length, missed.terminate], [2, false], "a post after the caller's cursor returns at once instead of sleeping");
+    f.entries.push({ type: "custom_message", id: randomUUID(), customType: "ac-teams", data: undefined, details: notices().at(-1)!.details } as never);
     await f.event("turn_end");
     const idle = await f.tools.get("team_message")!.execute(randomUUID(), { action: "wait", tasks: [task.id] }, new AbortController().signal, undefined, f.ctx) as { terminate?: boolean; details: unknown[] };
     assert.deepEqual([idle.details, idle.terminate], [[], true]);
     await f.execute("team_message", { action: "send", recipients: [member.id], summary: "Thanks" });
-    assert.equal(notices().length, 1, "the sender's own post does not notify it");
+    assert.equal(notices().length, shown, "the sender's own post does not notify it");
   } finally { await f.close(); }
 });
