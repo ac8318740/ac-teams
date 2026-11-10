@@ -21,11 +21,11 @@ import { mkdirSync } from "node:fs";
 
 const fixture = fileURLToPath(new URL("./fixtures/pi-peer.mjs", import.meta.url));
 chmodSync(fixture, 0o755);
-async function setup(limit = 10, depth = 2, interactive = false) {
+async function setup(limit = 10, depth = 2, interactive = false, extra: Partial<CoordinatorOptions> = {}) {
   const home = mkdtempSync(join(tmpdir(), "at-"));
   const notices: number[] = [], warnings: string[] = [];
   const states: { kind: "busy" | "blocked"; active: boolean }[] = [];
-  const options: CoordinatorOptions = { extensions: () => extensionInventory(home), resources: () => ({ scope: "host", memory: { totalBytes: 10000, availableBytes: 5000, swapUsedBytes: 0 }, memoryPressure: { someAvg10: 0, fullAvg10: 0, fullAvg60: 0 }, warnings: [] }), status: (kind, active) => { states.push({ kind, active }); }, id: randomUUID(), cwd: home, limit, depth, interactive, extension: "unused", command: fixture, home, notice: (through: number) => { notices.push(through); }, warning: (message: string) => { warnings.push(message); } };
+  const options: CoordinatorOptions = { extensions: () => extensionInventory(home), resources: () => ({ scope: "host", memory: { totalBytes: 10000, availableBytes: 5000, swapUsedBytes: 0 }, memoryPressure: { someAvg10: 0, fullAvg10: 0, fullAvg60: 0 }, warnings: [] }), status: (kind, active) => { states.push({ kind, active }); }, id: randomUUID(), cwd: home, limit, depth, interactive, extension: "unused", command: fixture, home, notice: (through: number) => { notices.push(through); }, warning: (message: string) => { warnings.push(message); }, ...extra };
   const team = await Coordinator.open(options);
   return { team, home, options, notices, warnings, states, async close() { await team.close(); rmSync(home, { recursive: true, force: true }); } };
 }
@@ -406,16 +406,17 @@ test("persistent edit subscriptions deliver built-in notices and survive acknowl
     await f.team.handle(member.id, "task", { action: "start", id: task.id });
     await f.team.handle(member.id, "task", { action: "edit", id: task.id, title: "Updated" });
     const first = f.team.store.state.messages.at(-1)!;
-    await until(() => f.notices.includes(first.seq));
-    f.team.ack("root", first.seq);
+    // An idle notice from the member can share the batch.
+    await until(() => f.notices.some(seq => seq >= first.seq));
+    f.team.ack("root", Math.max(...f.notices));
     assert.deepEqual(f.team.store.state.members.root.watches, [{ task: task.id, event: "edited" }]);
     await f.team.close();
     const reopened = await Coordinator.open(f.options);
     try {
       await reopened.handle(member.id, "task", { action: "edit", id: task.id, description: "Updated criteria" });
       const second = reopened.store.state.messages.at(-1)!;
-      await until(() => f.notices.includes(second.seq));
-      reopened.ack("root", second.seq);
+      await until(() => f.notices.some(seq => seq >= second.seq));
+      reopened.ack("root", Math.max(...f.notices));
       assert.deepEqual(reopened.store.state.members.root.watches, [{ task: task.id, event: "edited" }]);
       await reopened.handle("root", "message", { action: "unwatch", tasks: [task.id], event: "edited" });
       assert.deepEqual(reopened.store.state.members.root.watches, []);
@@ -555,7 +556,7 @@ test("forged tokens, extra fields, and unauthenticated connections cannot mutate
     bad.close();
     await assert.rejects(f.team.handle("root", "message", { action: "send", summary: "test", injected: true }), /Invalid/);
     await assert.rejects(f.team.handle(member.id, "agent", { action: "limits", limit: 1 }), /main session/);
-    assert.equal(f.team.store.state.messages.length, 0);
+    assert.equal(f.team.store.state.messages.filter(message => !/is idle and/.test(message.summary)).length, 0);
     const status = JSON.stringify(await f.team.handle("root", "agent", { action: "list" }));
     assert.equal(status.includes(member.token), false);
   } finally { await f.close(); }
@@ -593,8 +594,8 @@ test("provider errors remain visible and notify the requesting ancestor", async 
     const member = f.team.live()[0];
     assert.equal(member.status, "idle");
     assert.equal(member.error, "Provider rejected this model");
-    assert.match(f.team.store.state.messages.at(-1)!.summary, /Provider rejected this model/);
-    assert.deepEqual(f.team.store.state.messages.at(-1)!.recipients, ["root"]);
+    const failure = f.team.store.state.messages.find(message => /Provider rejected this model/.test(message.summary));
+    assert.deepEqual(failure?.recipients, ["root"]);
   } finally { await f.close(); }
 });
 
@@ -761,14 +762,64 @@ test("Pi abort errors are cancellation, not model failures that wake the lead du
       const event = assistantEvent({ role: "assistant", stopReason, errorMessage: "This operation was aborted", content: [] })!;
       assert.deepEqual(event, { type: "cancelled", text: "" });
       await f.team.handle(member.id, "event", event);
-      assert.equal(f.team.store.state.messages.length, 0, "a deliberate pause must not trigger a new lead turn");
+      assert.equal(f.team.store.state.messages.filter(message => !/is idle and/.test(message.summary)).length, 0, "a deliberate pause must not trigger a new lead turn");
       assert.equal(f.team.store.state.members[member.id].error, undefined);
     }
     const failure = assistantEvent({ role: "assistant", stopReason: "error", errorMessage: "503 Service unavailable", content: [] })!;
     assert.deepEqual(failure, { type: "model_error", text: "503 Service unavailable" });
     await f.team.handle(member.id, "event", failure);
-    assert.equal(f.team.store.state.messages.length, 1, "genuine failures still notify the lead");
-    assert.match(f.team.store.state.messages[0].summary, /model error: 503 Service unavailable/);
+    assert.equal(f.team.store.state.messages.filter(message => !/is idle and/.test(message.summary)).length, 1, "genuine failures still notify the lead");
+    assert.match(f.team.store.state.messages.at(-1)!.summary, /model error: 503 Service unavailable/);
+  } finally { await f.close(); }
+});
+
+test("idle members nudge their parent, and only direct or watched posts wake a stopped member", async () => {
+  const f = await setup();
+  try {
+    await assert.rejects(f.team.handle("root", "agent", { action: "stop", target: "worker" }), /requires id/);
+    const member = await f.team.handle("root", "agent", launch) as { id: string };
+    const idleNotice = () => f.team.store.state.messages.filter(message => message.from === member.id && /is idle and/.test(message.summary));
+    await until(() => f.team.store.state.members[member.id].status === "idle");
+    await until(() => idleNotice().length === 1);
+    assert.deepEqual(idleNotice()[0].recipients, ["root"]);
+    assert.match(idleNotice()[0].summary, /not waiting on any task\. Stop it with team_agent stop id=/);
+    const watched = await f.team.handle("root", "task", { action: "create", title: "Watched" }) as { id: string };
+    const owned = await f.team.handle(member.id, "task", { action: "create", title: "Owned" }) as { id: string };
+    await f.team.handle(member.id, "message", { action: "watch", event: "message", tasks: [watched.id] });
+    await f.team.handle(member.id, "event", { type: "agent_start" });
+    await f.team.handle(member.id, "event", { type: "agent_settled" });
+    assert.match(idleNotice()[1].summary, /waiting on task #\d+ Watched/);
+
+    const stopped = async () => {
+      await f.team.handle("root", "agent", { action: "stop", id: member.id });
+      assert.equal(f.team.store.state.members[member.id].status, "stopped");
+    };
+    const woken = () => until(() => ["starting", "busy", "idle"].includes(f.team.store.state.members[member.id].status));
+    await stopped();
+    await f.team.handle("root", "message", { action: "send", task: owned.id, summary: "Routed to its task, unwatched" });
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.equal(f.team.store.state.members[member.id].status, "stopped", "an unwatched task post waits in the mailbox");
+    await f.team.handle("root", "message", { action: "send", task: watched.id, summary: "Watched update" });
+    await woken();
+    await stopped();
+    await f.team.handle("root", "message", { action: "send", recipients: ["worker"], summary: "Direct question" });
+    await woken();
+  } finally { await f.close(); }
+});
+
+test("the coordinator stops members left idle, but not members with live children", async () => {
+  const f = await setup(10, 2, false, { idleStopMs: 100 });
+  try {
+    const member = await f.team.handle("root", "agent", launch) as { id: string };
+    await until(() => f.team.store.state.members[member.id].status === "stopped");
+    const parent = await f.team.handle("root", "agent", { ...launch, name: "parent", brief: "WAIT" }) as { id: string };
+    await f.team.handle(parent.id, "agent", { ...launch, name: "child", brief: "WAIT" });
+    await f.team.handle(parent.id, "event", { type: "agent_start" });
+    await f.team.handle(parent.id, "event", { type: "agent_settled" });
+    assert.equal(f.team.store.state.members[parent.id].status, "idle");
+    await new Promise(resolve => setTimeout(resolve, 500));
+    assert.equal(f.team.store.state.members[parent.id].status, "idle", "a member with live children is not stopped");
+    assert.ok(!f.team.store.state.messages.some(message => message.from === parent.id && /is idle and/.test(message.summary)), "nor nudged");
   } finally { await f.close(); }
 });
 
@@ -1198,8 +1249,8 @@ test("launch hands an existing task to the new member; its outcome reaches the d
     assert.match(f.team.store.state.messages.find(message => message.from === member.id)!.summary, /Start it only when its start prerequisites \(dependencies\) are done/);
     await f.team.handle(member.id, "task", { action: "start", id: task.id });
     await f.team.handle(member.id, "task", { action: "complete", id: task.id, acceptance: true, summary: "Parsed all inputs" });
-    const outcome = f.team.store.state.messages.at(-1)!;
+    const outcome = f.team.store.state.messages.find(message => message.summary === "Parsed all inputs")!;
     assert.deepEqual([outcome.summary, outcome.recipients], ["Parsed all inputs", ["root"]]);
-    await until(() => f.notices.includes(outcome.seq));
+    await until(() => f.notices.some(seq => seq >= outcome.seq));
   } finally { await f.close(); }
 });

@@ -48,6 +48,8 @@ export class Coordinator {
   private reloadExits = new Set<string>();
   private sandboxRuntime: SandboxRuntime;
   private releasing = new Map<string, Promise<void>>();
+  private idleSince = new Map<string, number>();
+  private idleSweep?: NodeJS.Timeout;
 
   private options: CoordinatorOptions;
   /** The main session hosting this coordinator. */
@@ -68,7 +70,7 @@ export class Coordinator {
       publicMember: member => this.launcher.view(member),
       handle: (actor, operation, args) => this.handle(actor, operation, args),
     });
-    this.activity = new TeamActivity(this.store, this.self, options, this.protocol, () => this.closed);
+    this.activity = new TeamActivity(this.store, this.self, options, this.protocol, () => this.closed, id => this.settled(id));
     this.sessions = new TeamSessions(this.store, this.self, options, this.protocol, id => this.stopOne(id), () => this.live());
     this.launcher = new MemberLaunch(this.store, this.self, options, this.protocol, this.sandboxRuntime, {
       closed: () => this.closed,
@@ -123,6 +125,9 @@ export class Coordinator {
       coordinator.server.on("error", error => options.warning(error.message));
       coordinator.activity.publish();
       coordinator.protocol.notify(coordinator.self);
+      const idleStopMs = options.idleStopMs ?? 5 * 60_000;
+      coordinator.idleSweep = setInterval(() => coordinator.sweepIdle(idleStopMs), Math.min(30_000, idleStopMs));
+      coordinator.idleSweep.unref();
       const pass = coordinator.resumePass();
       coordinator.operations.add(pass);
       void pass.finally(() => coordinator.operations.delete(pass));
@@ -188,12 +193,20 @@ export class Coordinator {
     }
     if (operation === "task" || operation === "message") {
       const last = this.store.state.messages.at(-1)?.seq ?? 0;
+      const direct = operation === "message" && (args as MessageArgs).action === "send" ? (args as MessageArgs).recipients ?? [] : [];
       const result = operation === "task" ? this.store.task(actor, args as TaskArgs) : this.store.message(actor, args as MessageArgs);
       if (operation === "message" && (args as MessageArgs).action === "wait" && Array.isArray(result) && !result.length) {
         this.store.update(next => { next.members[actor].attention = "waiting"; });
         this.activity.publish();
       }
-      for (const message of this.store.state.messages.filter(message => message.seq > last)) for (const id of message.recipients) this.protocol.notify(id);
+      for (const message of this.store.state.messages.filter(message => message.seq > last)) for (const id of message.recipients) {
+        this.protocol.notify(id);
+        const member = this.store.state.members[id];
+        // Only direct messages, replies to its own post, and posts that trigger its watches wake a stopped member.
+        const replied = message.replyTo !== undefined && this.store.state.messages.find(original => original.id === message.replyTo)?.from === id;
+        const watched = member?.watches?.some(watch => watch.task === message.task && (watch.seq === message.seq || (watch.event === "edited" && message.kind === "edited")));
+        if (member && !isMain(member) && member.status === "stopped" && (direct.includes(id) || direct.includes(member.name ?? "") || replied || watched)) this.wake(id, actor);
+      }
       return result;
     }
     return this.agent(actor, args as AgentArgs, authorizedLimit);
@@ -213,7 +226,8 @@ export class Coordinator {
       this.operations.add(launch);
       try { return await launch; } finally { this.operations.delete(launch); }
     }
-    const member = args.id ? state.members[args.id] : undefined;
+    if (!args.id) throw new Error(`team_agent ${args.action} requires id, the member ID`);
+    const member = state.members[args.id];
     if (!member) throw new Error("Unknown member ID");
     if (args.action === "status") return this.launcher.view(member);
     if (!canControl(state, actor, member.id)) throw new Error("Only a main session or a member's ancestor can stop or clean it up");
@@ -268,6 +282,46 @@ export class Coordinator {
         // A promoted member keeps its descendants.
         if (!this.store.state.members[id].promotion) void this.stopDescendants(id).catch(error => this.options.warning(String(error)));
       });
+  }
+  /** Tells the parent a member went idle; it may stop it, and a direct message or watched-task post wakes it. */
+  private settled(id: string): void {
+    this.idleSince.set(id, Date.now());
+    const state = this.store.state, member = state.members[id];
+    // Stopping a member stops its descendants, so a member with live children is not done.
+    if (this.live().some(other => other.parent === id)) return;
+    const parent = member.parent && state.members[member.parent];
+    const recipient = parent && isLive(parent) && parent.status !== "stopping" ? parent.id : this.self;
+    const watched = [...new Set((member.watches ?? []).filter(watch => watch.seq === undefined && watch.event !== "edited").map(watch => watch.task))].filter(task => state.tasks[task]);
+    const waiting = watched.length ? `waiting on task ${watched.map(task => taskName(state.tasks[task])).join(", ")}` : "not waiting on any task";
+    this.store.message(id, { action: "send", recipients: [recipient], summary: `${memberName(member)} (${id}) is idle and ${waiting}. Stop it with team_agent stop id=${id} unless you will send it more work within a couple of minutes. A direct message, or a post on a task it watches, resumes it.` });
+    this.protocol.notify(recipient);
+  }
+  /** Failsafe for idle members nobody stopped; a direct message or watched-task post resumes them. */
+  private sweepIdle(idleStopMs: number): void {
+    if (this.closed || this.reloading) return;
+    const now = Date.now(), live = this.live();
+    for (const id of this.idleSince.keys()) if (!live.some(member => member.id === id)) this.idleSince.delete(id);
+    for (const member of live) {
+      if (member.status !== "idle" || live.some(other => other.parent === member.id)) { this.idleSince.delete(member.id); continue; }
+      const since = this.idleSince.get(member.id) ?? now;
+      this.idleSince.set(member.id, since);
+      if (now - since < idleStopMs) continue;
+      this.idleSince.delete(member.id);
+      const stop = this.stopOne(member.id).catch(error => this.options.warning(`Could not stop idle ${memberName(member)}: ${String(error)}`));
+      this.operations.add(stop);
+      void stop.finally(() => this.operations.delete(stop));
+    }
+  }
+  private wake(id: string, sender: string): void {
+    const member = this.store.state.members[id];
+    if (this.closed || this.reloading || !member.model || !member.sessionFile) return;
+    const run = this.launcher.run(this.self, { action: "resume", id, brief: "Resume the native session without replaying work.", model: member.model, thinking: member.thinking }, false).catch(error => {
+      if (this.closed || sender === id) return;
+      this.store.message(id, { action: "send", recipients: [sender], summary: `${memberName(member)} (${id}) is stopped and could not resume (${error instanceof Error ? error.message : String(error)}). Your post waits until it is resumed.` });
+      this.protocol.notify(sender);
+    });
+    this.operations.add(run);
+    void run.finally(() => this.operations.delete(run));
   }
   /** Restores members a previous owner stopped to the state it recorded. */
   private async resumePass(): Promise<void> {
@@ -363,6 +417,7 @@ export class Coordinator {
   close(): Promise<void> { this.closePromise ??= this.closeOnce(); return this.closePromise; }
   private async closeOnce(): Promise<void> {
     this.closed = true;
+    clearInterval(this.idleSweep);
     this.protocol.cancelNotices();
     // The next owner's resume pass restores each member to the state recorded here.
     this.store.update(state => {
