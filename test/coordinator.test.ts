@@ -807,11 +807,19 @@ test("idle members nudge their parent, and only direct or watched posts wake a s
   } finally { await f.close(); }
 });
 
-test("the coordinator stops members left idle", async () => {
+test("the coordinator stops members left idle, but not members with live children", async () => {
   const f = await setup(10, 2, false, { idleStopMs: 100 });
   try {
     const member = await f.team.handle("root", "agent", launch) as { id: string };
     await until(() => f.team.store.state.members[member.id].status === "stopped");
+    const parent = await f.team.handle("root", "agent", { ...launch, name: "parent", brief: "WAIT" }) as { id: string };
+    await f.team.handle(parent.id, "agent", { ...launch, name: "child", brief: "WAIT" });
+    await f.team.handle(parent.id, "event", { type: "agent_start" });
+    await f.team.handle(parent.id, "event", { type: "agent_settled" });
+    assert.equal(f.team.store.state.members[parent.id].status, "idle");
+    await new Promise(resolve => setTimeout(resolve, 500));
+    assert.equal(f.team.store.state.members[parent.id].status, "idle", "a member with live children is not stopped");
+    assert.ok(!f.team.store.state.messages.some(message => message.from === parent.id && /is idle and/.test(message.summary)), "nor nudged");
   } finally { await f.close(); }
 });
 
