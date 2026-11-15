@@ -77,7 +77,7 @@ export class MemberLaunch {
       return this.hooks.resumeMain(resumed.id);
     }
     if (resumed && this.hooks.cleaning(resumed.id)) throw new Error("Worktree cleanup is running; cannot resume this member");
-    if (resumed && (isLive(resumed) || (resumed.pid && processAlive(resumed.pid, resumed.identity)))) throw new Error("Cannot resume a live or uncertain member");
+    if (resumed && (isLive(resumed) || (resumed.pid && processAlive(resumed.pid, resumed.identity)))) throw new Error("Cannot resume a live or uncertain member; send it new instructions with team_message, or stop it with team_agent before resuming");
     const depth = resumed ? resumed.depth : parent.depth + 1;
     if (depth > state.depth || liveMembers(this.store).length >= state.limit) throw new Error("Team depth or live-member ceiling reached (idle members count)");
     if (!resumed && (args.name === "main" || args.name === "root" || Object.values(state.members).some(member => member.name === args.name || member.id === args.name))) throw new Error("Teammate name is already in use or reserved");
