@@ -141,13 +141,13 @@ export class MemberLaunch {
       const implicit = { defaultPreset: "parent", required: [], presets: { parent: { extensions: "all" as const } } };
       const selection = selectExtensions(inventory, config ?? (args.extensions ? undefined : implicit), args.extensions, resumed?.extensions, parent.extensions?.required)!;
       this.protocol.extensionInventories.set(id, { ...inventory, entries: inventory.entries.map(entry => ({ ...entry, enabled: entry.enabled && selection.ids.includes(entry.id) })) });
-      const nudge = !config || (inventory && config.reviewed?.[member.cwd] !== inventory.fingerprint);
-      const nudgeKey = `${member.cwd}:${inventory?.fingerprint ?? "legacy"}`;
+      const nudge = !config || config.reviewed?.[member.cwd] !== inventory.fingerprint;
+      const nudgeKey = `${member.cwd}:${inventory.fingerprint}`;
       if (nudge && !this.extensionNudges.has(nudgeKey)) {
         this.extensionNudges.add(nudgeKey);
         this.options.warning(config ? "Worker extension inventory changed or is unreviewed. Run /teams config; preset definitions are unchanged. 'all' includes newly enabled IDs. Launch results report selected/excluded IDs." : "Worker extension presets are not configured. Workers retain the actual parent extension set; run /teams config to configure lean workers.");
       }
-      for (const warning of selection?.warnings ?? []) this.options.warning(warning);
+      for (const warning of selection.warnings) this.options.warning(warning);
       member.extensions = selection;
       this.store.update(next => { next.members[id].extensions = selection; });
       if (this.hooks.closed() || this.store.state.members[id].status !== "starting") throw new Error("Launch was stopped before extension selection completed");

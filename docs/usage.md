@@ -8,7 +8,7 @@ ac-teams provides three tools for planning and tracking solo and delegated work.
 | `team_task` | `create`, `list`, `read`, `edit`, `claim`, `start`, `release`, `complete`, `reopen` | Claim reserves work; dependencies gate starting, not ownership |
 | `team_message` | `send`, `history`, `search`, `watch`, `unwatch`, `wait` | Routing selects who is notified, not who can read |
 
-In interactive Pi, `/teams` or `/teams panel` opens the team panel. `/teams teammate <name-or-id>` opens a live teammate directly; autocomplete suggests subcommands and teammate names. You can also enter an exact teammate ID. The older `/teams open <id>` form remains supported. Headless roots retain the status listing. `/teams stop` stops every member; main sessions keep running. `/teams join` and `/teams leave` change which team this session belongs to. See [operations](operations.md) for limits, recovery, and worktree cleanup.
+In interactive Pi, `/teams` or `/teams panel` opens the team panel. `/teams teammate <name-or-id>` opens a live teammate directly; autocomplete suggests subcommands and teammate names. You can also enter an exact teammate ID. Headless roots retain the status listing. `/teams stop` stops every member; main sessions keep running. `/teams join` and `/teams leave` change which team this session belongs to. See [operations](operations.md) for limits, recovery, and worktree cleanup.
 
 ## Navigate without stopping members
 

@@ -49,7 +49,6 @@ Additional local checks on 2026-10-24, using Pi 1.4.0 unless noted:
 
 - Native Pi busy follow-up, idle wake with the same PID, and resume with the same session ID/path and a new PID
 - Normal project-extension loading and a 10-call model smoke using the existing default model; Pi reported an estimated $0.0861
-- Actual ac-teams exit confirmation, cancel/retry, and child cleanup in a real terminal using patched Pi and a model-free RPC child fixture
 - Native child/grandchild cleanup after coordinator SIGTERM and SIGKILL, without model calls
 - Independent review and executable checks of stop/start, cleanup/resume, and shutdown/socket races
 
@@ -116,6 +115,6 @@ pi install npm:ac-teams@0.0.2
 
 ## License and prior art
 
-[MIT](../LICENSE). No third-party extension implementation was copied. Pi and TypeBox remain peer dependencies; `grok-mermaid` is a runtime dependency for terminal diagrams. The [implementation history](implementation-plan.md) records design decisions, exit-guard prior art, and license findings.
+[MIT](../LICENSE). No third-party extension implementation was copied. Pi and TypeBox remain peer dependencies; `grok-mermaid` is a runtime dependency for terminal diagrams.
 
 [Back to README](../README.md)

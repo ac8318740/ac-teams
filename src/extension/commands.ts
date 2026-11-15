@@ -6,7 +6,7 @@ import type { TeamSession } from "./session.ts";
 import type { TeamPresentation } from "./presentation.ts";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { memberName, type Member } from "../types.ts";
-import { cleanText } from "../ui/render.ts";
+import { cleanText } from "../text.ts";
 
 type NamedMember = Pick<Member, "id" | "name" | "status">;
 const actions = ["panel", "teammate", "config", "back", "stop", "status", "join", "leave", "reload"];
@@ -20,7 +20,7 @@ export function teamsCompletions(prefix: string, members: NamedMember[]): Autoco
   if (!prefix.includes(" ")) return actions.filter(action => action.startsWith(prefix)).map(action => ({ value: action, label: action }));
   const config = /^config\s+(\S*)$/.exec(prefix);
   if (config && "display".startsWith(config[1])) return [{ value: "config display", label: "display", description: "Toggle task summary and agent selector" }];
-  const match = /^(teammate|open)\s+(\S*)$/.exec(prefix);
+  const match = /^(teammate)\s+(\S*)$/.exec(prefix);
   if (!match) return null;
   return members.filter(member => (member.id === "root" ? "main" : memberName(member)).startsWith(match[2]) || member.id.startsWith(match[2])).map(member => {
     const name = member.id === "root" ? "main" : memberName(member);
@@ -87,8 +87,8 @@ export function registerCommands(pi: ExtensionAPI, session: CommandSession,
         if (!child) await link(ctx);
         const api = host(ctx);
         if (args.trim() === "back") await api.visit("root");
-        else if (/^(teammate|open)\s+/.test(args.trim())) {
-          const value = args.trim().replace(/^(teammate|open)\s+/, "");
+        else if (/^teammate\s+/.test(args.trim())) {
+          const value = args.trim().replace(/^teammate\s+/, "");
           const members = (await api.snapshot()).members;
           const id = resolveTeammate(members, value);
           if (id) await api.visit(id);

@@ -54,8 +54,6 @@ export interface Member {
   role?: "main" | "member";
   /** State recorded when the coordinator owner stopped this member; the next owner's resume pass consumes it. */
   handover?: "busy" | "idle" | "input";
-  /** Legacy yield registration, retained for existing snapshots. */
-  waiting?: { tasks: string[] };
   /** Notifications survive unrelated turns; edited subscriptions persist until cancelled. */
   watches?: TaskWatch[];
   /** Promotion in progress: the last completed step and what a rollback restores. */

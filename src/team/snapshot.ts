@@ -82,7 +82,6 @@ export function validate(state: unknown): asserts state is TeamState {
     requireValue(member.role !== "main" || member.parent === undefined, "A main session has no parent");
     requireValue(member.handover === undefined || ["busy", "idle", "input"].includes(String(member.handover)), "Invalid member handover state");
     requireValue(member.promotion === undefined || (object(member.promotion) && ["stopped", "moved", "role", "entry"].includes(String(member.promotion.step)) && text(member.promotion.sessionFile)), "Invalid member promotion");
-    requireValue(member.waiting === undefined || (object(member.waiting) && Array.isArray(member.waiting.tasks) && member.waiting.tasks.every(task => typeof task === "string" && Object.hasOwn(state.tasks as object, task))), "Invalid member wait");
     requireValue(member.watches === undefined || (Array.isArray(member.watches) && member.watches.length <= 100 && member.watches.every(watch => object(watch) && typeof watch.task === "string" && Object.hasOwn(state.tasks as object, watch.task) && ["message", "completed", "edited"].includes(String(watch.event)) && (watch.seq === undefined || (watch.event !== "edited" && integer(watch.seq, 1))))), "Invalid task watches");
     requireValue(member.analysis === undefined || member.analysis === "auto" || member.analysis === "separate", "Invalid member analysis preference");
     requireValue(member.extensions === undefined || validExtensionSelection(member.extensions), "Invalid member extension selection");

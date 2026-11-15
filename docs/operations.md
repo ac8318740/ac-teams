@@ -163,13 +163,7 @@ A stopped member also resumes quietly when a teammate sends it a direct message,
 
 Stopping a main session ends its Pi process; an exiting coordinator hands over first. Resuming another main session relaunches it in its own terminal.
 
-Root session switching, forking, and tree traversal are blocked while members are live. A member cannot switch away from its team binding. Stop members explicitly before replacing the root session.
-
-### Exit confirmation needs a Pi hook
-
-Exit confirmation requires Pi's `session_before_exit` hook. The prerequisite is implemented in the separate local Pi checkout described in [the implementation history](implementation-plan.md#exit-confirmation-supported-hook-versus-package-interception), not in installed Pi 1.4.0.
-
-With that hook, native exit asks before stopping live members; cancellation leaves them running. Without it, shutdown performs cleanup but cannot ask first. Signals bypass confirmation.
+Root session switching, forking, and tree traversal are blocked while members are live. A member cannot switch away from its team binding. Stop members explicitly before replacing the root session. Exiting Pi stops live members without asking first; tasks, sessions, and worktrees are kept.
 
 ### Coordinator handover
 
@@ -201,13 +195,13 @@ Each root session uses `~/.pi/ac-teams/teams/<session-id>/`:
 - Promoted members' transcripts move to `<session folder>/` beside other top-level sessions, and their `~/.pi/ac-teams/agents/<id>` folder is removed
 - Interactive teams also own `t.sock`, the private tmux socket, and per-member terminal environment files; shutdown removes those files
 
-New members also store their descriptive names and optional model/context reports. When an existing team opens, unnamed members receive stable, collision-free names such as `teammate-1`; their IDs and sessions do not change.
+New members also store their descriptive names and optional model/context reports. A member without a name (from very old teams, or a launch that failed before joining) is shown and addressed by its ID.
 
 State schema 3 adds stable task numbers and short labels. Opening a schema 1 or 2 team assigns numbers in stored task order and initial labels from up to three title words. Full titles, descriptions, UUIDs, owners, creators, dependencies, and revisions remain unchanged.
 
 Schema 1 also migrates progress: `pending` becomes `todo`, `claimed` becomes `in_progress`, and `completed` becomes `done`. Migration writes atomically and rejects invalid snapshots without replacement. Older ac-teams code cannot reopen schema 3; stop old sessions before updating.
 
-State schema 5 turns messages into board posts: each has a `summary`, optional `detail`, and an optional `task` or `replyTo`; tasks gain an optional `delegator` and `outcome` post reference, and records an optional `waiting` registration. Opening a schema 4 team keeps every message's text unchanged as its summary. Older done tasks have no outcome, and no delegation is inferred. Schema 5 state cannot be opened by older ac-teams versions.
+State schema 5 turns messages into board posts: each has a `summary`, optional `detail`, and an optional `task` or `replyTo`; tasks gain an optional `delegator` and `outcome` post reference. Opening a schema 4 team keeps every message's text unchanged as its summary. Older done tasks have no outcome, and no delegation is inferred. Schema 5 state cannot be opened by older ac-teams versions.
 
 Tasks may also store `completionDependencies` in schema 5. Its absence in existing snapshots means no additional completion prerequisites; views always return an array. `dependencies` still gates both start and finish. Both edge kinds are validated together for missing IDs, duplicate edges, self-references, and cycles. Active tasks may have unfinished completion-only prerequisites; done tasks may not. Stop older code before using completion-only edges: older versions do not enforce these gates.
 
