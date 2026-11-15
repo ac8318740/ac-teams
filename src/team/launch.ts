@@ -191,6 +191,8 @@ export class MemberLaunch {
       await this.sandboxRuntime.release(id);
       this.store.update(next => {
         next.members[id].status = "interrupted"; delete next.members[id].needsInput; next.members[id].error = error instanceof Error ? error.message : "Startup failed";
+        // Without a session file the record can never resume, so free its name for a retry; the record stays for references and worktree cleanup.
+        if (!resumed && !next.members[id].sessionFile) delete next.members[id].name;
         // A failed launch returns its untouched reservation.
         const task = assigned && next.tasks[assigned.id];
         if (task && task.owner === id && task.status === "todo") { delete task.owner; delete task.delegator; task.revision++; }
