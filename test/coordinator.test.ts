@@ -622,6 +622,9 @@ test("skipped project resources reject readiness before any assignment runs", as
   try {
     await assert.rejects(f.team.handle("root", "agent", launch), /skipped protected project resources/);
     assert.equal(f.team.live().length, 0);
+    // The child started but never joined, so it cannot resume; retrying after /trust reuses the name.
+    delete process.env.AC_TEAMS_TEST_UNTRUSTED;
+    await f.team.handle("root", "agent", launch);
   } finally {
     if (previous === undefined) delete process.env.AC_TEAMS_TEST_UNTRUSTED; else process.env.AC_TEAMS_TEST_UNTRUSTED = previous;
     await f.close();
@@ -1233,6 +1236,16 @@ test("launch reserves blocked work while start enforces only hard prerequisites"
     const child = await f.team.handle(member.id, "task", { action: "create", title: "Nested work", completionDependencies: [finish.id] }) as { id: string };
     await f.team.handle(member.id, "task", { action: "start", id: child.id });
     await assert.rejects(f.team.handle(member.id, "task", { action: "complete", id: child.id, acceptance: true, summary: "Premature" }), /completion.*blocked/);
+  } finally { await f.close(); }
+});
+
+test("a launch that fails before its process starts frees the name and keeps an unnamed record", async () => {
+  const f = await setup();
+  try {
+    await assert.rejects(f.team.handle("root", "agent", { ...launch, extensions: { preset: "missing" } }), /Unknown worker preset/);
+    const failed = Object.values(f.team.store.state.members).find(member => member.status === "interrupted")!;
+    assert.deepEqual([failed.name, failed.error], [undefined, "Unknown worker preset: missing"]);
+    await f.team.handle("root", "agent", launch);
   } finally { await f.close(); }
 });
 
