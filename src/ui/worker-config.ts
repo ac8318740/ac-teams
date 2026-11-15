@@ -6,7 +6,14 @@ import { saveWorkerConfiguration, validateWorkerConfiguration, workerConfigurati
 export const WorkerConfigSchema = Type.Object({
   action: Type.Union([Type.Literal("read"), Type.Literal("save")]),
   scope: Type.Optional(Type.Union([Type.Literal("user"), Type.Literal("project")])),
-  workers: Type.Optional(Type.Unknown({ description: "Complete worker policy for save: {defaultPreset?: string, required: string[], presets: {[name]: {extensions: string[] | 'all', heapMb?: integer (128..6144)}}}. Preserve existing presets and requirements unless the user requests changes. Read first for current policy and exact extension IDs. Inventory review metadata is managed automatically." })),
+  workers: Type.Optional(Type.Object({
+    defaultPreset: Type.Optional(Type.String()),
+    required: Type.Array(Type.String()),
+    presets: Type.Record(Type.String(), Type.Object({
+      extensions: Type.Union([Type.Array(Type.String()), Type.Literal("all")]),
+      heapMb: Type.Optional(Type.Integer({ minimum: 128, maximum: 6144 })),
+    })),
+  }, { description: "Complete worker policy for save. Preserve existing presets and requirements unless the user requests changes. Read first for current policy and exact extension IDs. Inventory review metadata is managed automatically." })),
 }, { additionalProperties: false });
 
 export const workerConfigPrompt = `Help me configure the team's worker extensions through a conversation.
