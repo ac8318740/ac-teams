@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { initTheme, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { foregroundAnsi, indexedColor, setKeybindings, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
-import { cleanText } from "../src/ui/render.ts";
+import { cleanText } from "../src/text.ts";
 import { showTeamsPanel } from "../src/ui/panel.ts";
 import { panelFormat } from "../src/ui/panel-format.ts";
 import { taskDetails } from "../src/ui/panel-details.ts";

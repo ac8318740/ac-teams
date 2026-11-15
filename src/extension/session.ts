@@ -13,7 +13,7 @@ import { Connection } from "../team/connection.ts";
 import { policy } from "../settings/config.ts";
 import { providerRoutes } from "../sandbox/egress.ts";
 import { readTelemetry } from "../ui/telemetry.ts";
-import { cleanText } from "../ui/render.ts";
+import { cleanText } from "../text.ts";
 import { createNotices } from "./notices.ts";
 import { createReloadPause } from "./reload.ts";
 import { setTimeout as delay } from "node:timers/promises";

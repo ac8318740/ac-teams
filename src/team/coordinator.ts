@@ -27,7 +27,6 @@ export type { CoordinatorOptions } from "./options.ts";
 import type { CoordinatorOptions } from "./options.ts";
 import { TeamProtocol } from "./protocol.ts";
 import { TeamActivity, assistantEvent } from "./activity.ts";
-export { assistantEvent } from "./activity.ts";
 import { MemberLaunch } from "./launch.ts";
 import { TeamSessions, addMain } from "./sessions.ts";
 
@@ -91,15 +90,9 @@ export class Coordinator {
       }
       coordinator.store.update(state => {
         state.limit = options.limit; state.depth = options.depth;
-        const names = new Set(Object.values(state.members).map(member => member.name));
-        let number = 0;
         if (options.join) addMain(state, coordinator.self, options.sessionId ?? options.id, options.sessionFile, options.cwd);
         const self = state.members[coordinator.self];
         if (!isMain(self)) throw new Error("This session is not a main session of the team");
-        for (const member of Object.values(state.members)) if (member.id !== "root" && !member.name) {
-          do { number++; } while (names.has(`teammate-${number}`) || Object.hasOwn(state.members, `teammate-${number}`));
-          member.name = `teammate-${number}`; names.add(member.name);
-        }
         self.status = "idle"; delete self.error;
         self.sessionFile = options.sessionFile ?? self.sessionFile;
         self.model = options.model;
