@@ -7,7 +7,7 @@ import { CustomEditor, initTheme, type Theme, type ExtensionAPI, type ExtensionC
 import { visibleWidth, type Component, type EditorComponent } from "@earendil-works/pi-tui";
 import { renderTaskSummary, summaryTasks } from "../src/ui/task-summary.ts";
 import { installTeamFooter, showDisplayConfig } from "../src/ui/terminal-ui.ts";
-import { cleanText } from "../src/ui/render.ts";
+import { cleanText } from "../src/text.ts";
 import { readDisplaySettings } from "../src/settings/config.ts";
 import type { TaskView } from "../src/types.ts";
 import type { PanelHost } from "../src/ui/types.ts";

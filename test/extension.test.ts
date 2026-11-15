@@ -9,7 +9,7 @@ import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
 import { DefaultResourceLoader, initTheme, type ExtensionAPI, type ExtensionContext, type ExtensionToolContext, type ToolDefinition, type ToolRenderers } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { cleanText } from "../src/ui/render.ts";
+import { cleanText } from "../src/text.ts";
 import { theme } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import teams from "../src/index.ts";
 import { Coordinator, taskRequestGuidance } from "../src/team/coordinator.ts";
@@ -272,21 +272,17 @@ test("Main's question marker follows balanced attention signals without counting
   } finally { await f.close(); }
 });
 
-test("extension coexistence warns, tools inherit model, and native pre-exit cancellation preserves live members", async () => {
+test("extension coexistence warns, tools inherit model, and session switches are blocked while members are live", async () => {
   const f = fixture();
   try {
     await f.event("session_start");
     assert.match(f.warnings[0], /do not cover/);
-    assert.equal(await f.event("session_before_exit"), undefined);
     assert.equal(f.confirmations, 0);
     const member = await f.execute("team_agent", { action: "launch", name: "parser", brief: "WAIT" }) as { id: string };
     assert.equal(typeof member.id, "string");
     assert.deepEqual(await f.event("session_before_switch"), { cancel: true });
     assert.deepEqual(await f.event("session_before_fork"), { cancel: true });
     assert.deepEqual(await f.event("session_before_tree"), { cancel: true });
-    assert.deepEqual(await f.event("session_before_exit"), { cancel: true });
-    f.approve(true);
-    assert.equal(await f.event("session_before_exit"), undefined);
     await f.execute("team_agent", { action: "stop", id: member.id });
     assert.equal(await f.event("session_before_switch"), undefined);
   } finally { await f.close(); }

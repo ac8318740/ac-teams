@@ -28,9 +28,7 @@ export function post(state: TeamState, actor: string, args: Pick<MessageArgs, "r
     if (member.id === actor) return false;
     const matching = member.watches?.filter(watch => watch.task === taskId && watch.seq === undefined && (watch.event === "message" || (watch.event === "completed" && args.kind === "outcome") || (watch.event === "edited" && args.kind === "edited"))) ?? [];
     for (const watch of matching) if (watch.event !== "edited") watch.seq = seq;
-    const legacy = member.waiting?.tasks.includes(taskId);
-    if (legacy) member.waiting!.tasks = member.waiting!.tasks.filter(task => task !== taskId);
-    return matching.length > 0 || legacy;
+    return matching.length > 0;
   }).map(member => member.id);
   const routed = [...explicit, task?.owner, task?.delegator ?? task?.creator, original?.from, ...waiters];
   const recipients = [...new Set(routed.filter((id): id is string => !!id && (id !== actor || (user && explicit.includes(id)))))];
@@ -55,10 +53,6 @@ export function message(state: TeamState, actor: string, args: MessageArgs, enve
     const watches = member.watches ??= [];
     if (args.action === "unwatch") {
       member.watches = watches.filter(watch => !((tasks.length === 0 || tasks.includes(watch.task)) && (args.event === undefined || watch.event === args.event)));
-      if (args.event === undefined || args.event === "message") {
-        if (tasks.length === 0) delete member.waiting;
-        else if (member.waiting) member.waiting.tasks = member.waiting.tasks.filter(task => !tasks.includes(task));
-      }
       return { watching: structuredClone(member.watches), updates: [] };
     }
     const event = args.event ?? (args.action === "wait" ? "message" : "completed");

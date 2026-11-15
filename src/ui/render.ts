@@ -1,5 +1,4 @@
 import { cleanText } from "../text.ts";
-export { cleanText } from "../text.ts";
 import { keyHint, type MessageRenderer, type Theme, type ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
@@ -234,4 +233,3 @@ export function teamMessageRenderer(getLabels: MemberLabels = defaultLabels, get
   };
 }
 
-export const renderTeamMessage = teamMessageRenderer();

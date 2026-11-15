@@ -98,6 +98,6 @@ Promoting an enforced member to a main session relaunches it outside the contain
 
 - Tools outside the mounted runtime, such as the ACStack CLI at `~/.claude/acstack/bin/acstack`, need explicit read grants for their directory and any symlink target. Grant those narrow directories, never `~/.claude`, which holds credentials.
 - Interactive members run in the team's tmux pane through `docker start --attach`, on the container's own terminal.
-- Linux only. [Development](development.md#enforced-access-verification) records what has been verified.
+- Linux only. [Development](https://github.com/ac8318740/ac-teams/blob/main/docs/development.md#enforced-access-verification) records what has been verified.
 
 [Back to README](../README.md)

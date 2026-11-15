@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { initTheme, type Theme, type ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { foregroundAnsi, setKeybindings, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
-import { cleanText, renderTeamMessage, teamMessageRenderer, teamToolPresentation, teamToolRenderers, styleRecordLine } from "../src/ui/render.ts";
+import { cleanText } from "../src/text.ts";
+import { teamMessageRenderer, teamToolPresentation, teamToolRenderers, styleRecordLine } from "../src/ui/render.ts";
 
 // SAFETY: these bounded Pi doubles implement only the documented methods the UI uses.
 const theme = {
@@ -93,7 +94,7 @@ test("tool renderers expand readable records without mutating payloads or exposi
   assert.match(plain(agentRenderers.renderResult!(agentResult, { expanded: false, isPartial: false }, theme, agentContext), 200), /parser-review · Ready/);
   assert.ok(!plain(agentRenderers.renderResult!(agentResult, { expanded: false, isPartial: false }, theme, agentContext)).includes("member-uuid"));
   assert.match(plain(agentRenderers.renderResult!(agentResult, { expanded: true, isPartial: false }, theme, agentContext)), /Agent: parser-review \[member-uuid\]/);
-  const message = renderTeamMessage({ role: "custom", customType: "team", content: "hello\x1b]0;bad\x07", display: true, timestamp: 0 }, { expanded: true, outputPad: 0 }, theme)!;
+  const message = teamMessageRenderer()({ role: "custom", customType: "team", content: "hello\x1b]0;bad\x07", display: true, timestamp: 0 }, { expanded: true, outputPad: 0 }, theme)!;
   assert.match(plain(message), /hello/);
   assert.equal(cleanText("x\x1b]0;title\x07\x1b[31my\x00\r\nz"), "xy\nz");
 });

@@ -1,11 +1,11 @@
 {
   "name": "ac-teams",
-  "version": "0.0.39",
+  "version": "0.0.40",
   "description": "Small, persistent teams for Pi",
   "type": "module",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/ac8318740/ac-teams.git" },
-  "files": ["src", "README.md", "LICENSE", "docs"],
+  "files": ["src", "README.md", "LICENSE", "docs/usage.md", "docs/operations.md", "docs/access.md"],
   "os": ["linux"],
   "pi": { "extensions": ["./src/index.ts"] },
   "scripts": {

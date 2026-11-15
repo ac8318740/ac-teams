@@ -1,8 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { bindNoticeGroups } from "../ui/notice-groups.ts";
-import { cleanText } from "../ui/render.ts";
+import { cleanText } from "../text.ts";
 import { isRecord } from "../team/connection.ts";
-import { assistantEvent } from "../team/coordinator.ts";
+import { assistantEvent } from "../team/activity.ts";
 import { readTelemetry } from "../ui/telemetry.ts";
 import type { TeamSession } from "./session.ts";
 import type { TeamPresentation } from "./presentation.ts";
@@ -95,14 +95,6 @@ export function createEvents(pi: ExtensionAPI, session: EventSession,
   pi.on("session_before_switch", switchGuard);
   pi.on("session_before_fork", switchGuard);
   pi.on("session_before_tree", switchGuard);
-  // Pi 1.4.0 has no supported veto hook. Pi builds with the upstream hook use this typed compatibility cast.
-  type BeforeExit = (event: { type: "session_before_exit" }, ctx: ExtensionContext) => Promise<{ cancel: true } | undefined>;
-  // SAFETY: Pi's runtime stores arbitrary event names; only patched Pi emits this hook with the standard event/context signature.
-  (pi.on as unknown as (event: "session_before_exit", handler: BeforeExit) => void)("session_before_exit", async (_event, ctx) => {
-    const count = session.liveCount;
-    if (!count) return;
-    if (!ctx.hasUI || !await ctx.ui.confirm("Stop active team and exit?", `${count} live member(s), including idle members, will be stopped. Worktrees and native sessions are retained.`)) return { cancel: true };
-  });
   return {
     startTelemetry,
     stopTelemetry() {

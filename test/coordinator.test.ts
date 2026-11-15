@@ -12,7 +12,8 @@ import { RpcAgent } from "../src/members/rpc-agent.ts";
 import { TerminalAgent } from "../src/members/terminal-agent.ts";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { Coordinator, assistantEvent, taskRequestGuidance, type CoordinatorOptions } from "../src/team/coordinator.ts";
+import { Coordinator, taskRequestGuidance, type CoordinatorOptions } from "../src/team/coordinator.ts";
+import { assistantEvent } from "../src/team/activity.ts";
 import { Connection } from "../src/team/connection.ts";
 import { TeamProtocol } from "../src/team/protocol.ts";
 import { saveWorkerConfiguration } from "../src/settings/config.ts";
@@ -424,7 +425,7 @@ test("persistent edit subscriptions deliver built-in notices and survive acknowl
   } finally { await f.close(); }
 });
 
-test("teammates require unique descriptive names; legacy fallbacks remain stable", async () => {
+test("teammates require unique descriptive names", async () => {
   const f = await setup();
   try {
     await assert.rejects(f.team.handle("root", "agent", { ...launch, name: undefined }), /name is required/);
@@ -435,14 +436,6 @@ test("teammates require unique descriptive names; legacy fallbacks remain stable
     await assert.rejects(f.team.handle("root", "agent", { ...launch, name: "code-review" }), /already in use/);
     await f.team.handle("root", "agent", { action: "stop", id: member.id });
     await assert.rejects(f.team.handle("root", "agent", { ...launch, name: "code-review" }), /already in use/);
-    f.team.store.update(state => { delete state.members[member.id].name; });
-    await f.team.close();
-    const recovered = await Coordinator.open(f.options);
-    try { assert.equal(recovered.store.state.members[member.id].name, "teammate-1"); }
-    finally { await recovered.close(); }
-    const again = await Coordinator.open(f.options);
-    try { assert.equal(again.store.state.members[member.id].name, "teammate-1"); }
-    finally { await again.close(); }
   } finally { await f.close(); }
 });
 

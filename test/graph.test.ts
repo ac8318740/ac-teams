@@ -4,7 +4,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { foregroundAnsi, sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
 import { buildTaskFocus, buildTaskGraph, moveTaskSelection, shortenTitle, taskStatus } from "../src/ui/graph.ts";
 import { GraphViewport } from "../src/ui/graph-viewport.ts";
-import { cleanText } from "../src/ui/render.ts";
+import { cleanText } from "../src/text.ts";
 import type { TaskView } from "../src/types.ts";
 
 const task = (id: string, overrides: Partial<TaskView> = {}): TaskView => ({
