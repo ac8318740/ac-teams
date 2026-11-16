@@ -41,6 +41,8 @@ The main session reloads, automatically rejoins, and resumes paused work in the 
 
 In a teammate, the command refreshes only that teammate. Ordinary `/reload` keeps Pi's existing behavior.
 
+Another extension that restarts the Pi process on the same session (for example to free memory) can emit `ac-teams:prepare-restart` on `pi.events` with `{ ctx }`. ac-teams sets `reply` on that object to a promise. It resolves once the team is paused like `/teams reload`, and rejects if preparation is cancelled or fails. The next process on that session then rejoins and resumes the team without asking.
+
 Defaults allow up to **10 live members** and **two levels of delegation**. Use the fewest useful agents.
 
 ## Know the boundaries

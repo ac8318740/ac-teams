@@ -10,7 +10,7 @@ import type { TeamPresentation } from "./presentation.ts";
 type EventSession = Pick<TeamSession,
   "child" | "link" | "teamId" | "report" | "warn" | "notices" | "stopping" | "connected" | "publish" |
   "blocked" | "clearBlocked" | "disabled" | "start" | "memberLabels" | "memberId" | "ownWarnings" |
-  "close" | "switchBlocked" | "liveCount" | "reloadStarted" | "reloadBoundary" | "reloadSettled">;
+  "close" | "switchBlocked" | "liveCount" | "reloadStarted" | "reloadBoundary" | "reloadSettled" | "prepareRestart">;
 
 export function createEvents(pi: ExtensionAPI, session: EventSession,
   presentation: Pick<TeamPresentation, "installUI">, observe: () => void) {
@@ -41,6 +41,10 @@ export function createEvents(pi: ExtensionAPI, session: EventSession,
     // Main already receives this signal locally; relay only across the team socket.
     if (!isRecord(data) || typeof data.active !== "boolean" || data.source === "ac-teams") return;
     session.blocked(data.active);
+  });
+  // Another extension restarting this process on the same session sets data.reply synchronously when ac-teams is loaded.
+  pi.events.on("ac-teams:prepare-restart", (data: unknown) => {
+    if (isRecord(data) && isRecord(data.ctx)) data.reply = session.prepareRestart(data.ctx as unknown as ExtensionContext);
   });
   pi.on("agent_start", (_event, ctx) => { session.reloadStarted(); report(ctx, { type: "agent_start" }); });
   pi.on("turn_end", (event, ctx) => { reconcile(ctx); session.reloadBoundary(ctx, event.toolResults.length > 0); });
