@@ -133,6 +133,31 @@ test("/teams reload consumes a one-shot automatic recovery marker; ordinary relo
   } finally { confirmations.mock.restore(); await f.close(); }
 });
 
+test("a restart request pauses the team so the next process on the session rejoins without asking", async t => {
+  const f = fixture();
+  Object.assign(f.ctx, { hasUI: false, isIdle: () => true, hasPendingMessages: () => false });
+  try {
+    await f.event("session_start");
+    const member = await f.execute("team_agent", { action: "launch", name: "peer", brief: "hello" }) as { id: string };
+    const request: { ctx: unknown; reply?: Promise<void> } = { ctx: f.ctx };
+    f.events.emit("ac-teams:prepare-restart", request);
+    assert.ok(request.reply, "ac-teams answers synchronously");
+    await request.reply;
+    assert.ok(f.entries.some(entry => entry.customType === "ac-teams-reload" && (entry.data as { rejoin?: boolean }).rejoin));
+    assert.equal(readState(join(teamsHome(), f.id))!.members[member.id].status, "stopped");
+    await f.event("session_shutdown");
+    const restarted = fixture(f.entries);
+    const confirmations = t.mock.method(restarted.ctx.ui, "confirm", async () => { assert.fail("A restart must not ask to rejoin"); });
+    try {
+      Object.assign(restarted.ctx, { hasUI: false });
+      Object.assign(restarted.ctx.sessionManager, { getSessionId: () => f.id });
+      process.env.HOME = f.home;
+      await restarted.event("session_start");
+      assert.notEqual(readState(join(teamsHome(), f.id))!.members[member.id].status, "stopped");
+    } finally { confirmations.mock.restore(); await restarted.close(); process.env.HOME = f.home; }
+  } finally { await f.close(); }
+});
+
 test("/teams reload cancels before interrupting a running tool", async () => {
   const f = fixture();
   let aborted = false, reloaded = false;

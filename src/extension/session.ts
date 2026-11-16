@@ -329,13 +329,25 @@ export function createSession(pi: ExtensionAPI, extension: string, loadedPaths: 
   }
   /** Explicitly requested refresh; ordinary /reload retains its normal recovery prompt. */
   async function reload(ctx: ExtensionCommandContext) {
-    if (reloadCommand) throw new Error("Team reload is already preparing");
     if (!child && connection) throw new Error("Run /teams reload in the main session hosting the coordinator");
+    if (await handover(ctx, "reload")) await ctx.reload();
+  }
+  /**
+   * Answers another extension's request to restart this Pi process on the same session.
+   * Pauses the team as /teams reload does, so the next process on this session rejoins and resumes it without asking.
+   */
+  async function prepareRestart(ctx: ExtensionContext): Promise<void> {
+    if (child) throw new Error("A teammate cannot restart itself; its parent owns its process");
+    if (!await handover(ctx, "restart")) throw new Error("Team restart preparation was cancelled or failed");
+  }
+  /** Pauses members and this session at a turn boundary and records the rejoin intent; false after notifying a cancel or failure. */
+  async function handover(ctx: ExtensionContext, action: "reload" | "restart"): Promise<boolean> {
+    if (reloadCommand) throw new Error("Team reload is already preparing");
     reloadCommand = true;
     const cancel = new AbortController(), dialog = new AbortController();
     try {
       reloadPause.prepare(ctx);
-      if (ctx.hasUI) void ctx.ui.select("Waiting for running tools and queued input before reload", ["Cancel reload"], { signal: dialog.signal })
+      if (ctx.hasUI) void ctx.ui.select(`Waiting for running tools and queued input before ${action}`, [`Cancel ${action}`], { signal: dialog.signal })
         .then(() => { if (!dialog.signal.aborted) cancel.abort(); }, () => { if (!dialog.signal.aborted) cancel.abort(); });
       if (coordinator) await coordinator.prepareReload(cancel.signal, () => reloadPause.state(ctx).ready);
       else while (!reloadPause.state(ctx).ready) await delay(100, undefined, { signal: cancel.signal });
@@ -348,11 +360,11 @@ export function createSession(pi: ExtensionAPI, extension: string, loadedPaths: 
     } catch (error) {
       await coordinator?.cancelReload();
       reloadPause.cancel(ctx);
-      ctx.ui.notify(cancel.signal.aborted ? "Team reload cancelled" : `Team reload failed: ${String(error)}`, cancel.signal.aborted ? "info" : "error");
+      ctx.ui.notify(cancel.signal.aborted ? `Team ${action} cancelled` : `Team ${action} failed: ${String(error)}`, cancel.signal.aborted ? "info" : "error");
       reloadCommand = false;
-      return;
+      return false;
     } finally { dialog.abort(); }
-    await ctx.reload();
+    return true;
   }
   async function start(ctx: ExtensionContext) {
     if (!child && linkedSession && linkedSession !== ctx.sessionManager.getSessionId()) {
@@ -418,7 +430,7 @@ export function createSession(pi: ExtensionAPI, extension: string, loadedPaths: 
   }
   return {
     child, memberId, memberLabels, teamId, notices, warn, ownWarnings,
-    link, handle, userAction, start, close, joinTeam, leaveTeam, report, publish, blocked, reload,
+    link, handle, userAction, start, close, joinTeam, leaveTeam, report, publish, blocked, reload, prepareRestart,
     reloadStarted() { reloadPause.started(); },
     reloadBoundary(ctx: ExtensionContext, hasTools: boolean) { reloadPause.boundary(ctx, hasTools); },
     reloadSettled(ctx: ExtensionContext) { reloadPause.settled(ctx); },
